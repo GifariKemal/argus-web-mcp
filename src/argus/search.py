@@ -37,6 +37,13 @@ _SEM_WEIGHT = 0.6
 # rescued), but one with BOTH zero lexical overlap AND cosine < _SEM_FLOOR is clearly
 # irrelevant and dropped (subject to the _MIN_KEEP safety floor).
 _SEM_FLOOR = 0.3
+# Relative relevance gate (v3): after the zero-overlap / SEM_FLOOR drop, apply a gentle
+# relative floor: drop a kept result only if BOTH (a) its score < _REL_FLOOR * top_score
+# AND (b) keeping the drop still leaves at least _MIN_KEEP results. This trims "single
+# generic token in a long query" backfill (e.g. Docker Hub cert-manager surviving only
+# because of the token "manager" in a 5-token query) without touching legitimately
+# diverse result sets where all results have similar scores.
+_REL_FLOOR = 0.25
 
 
 class SearchError(Exception):
@@ -112,6 +119,34 @@ def _filter_domains(
         out = [r for r in out
                if not any(_host_matches(_host(r.get("url", "")), d) for d in exclude)]
     return out
+
+
+def _rel_floor(kept: list, *, key) -> list:
+    """Relative relevance gate (v3): drop backfill far below the best result.
+
+    Iterates kept (already sorted descending by key(item)) and drops an item
+    only when BOTH conditions hold:
+      (a) key(item) < _REL_FLOOR * top_score
+      (b) dropping it still leaves at least _MIN_KEEP items.
+
+    top_score is key(kept[0]).  A zero top_score (all items scored 0, which
+    only happens when no query tokens exist and the caller already returned early) is
+    treated as a no-op to avoid division-by-zero.  Never drops below _MIN_KEEP.
+    """
+    if len(kept) <= _MIN_KEEP:
+        return kept
+    top_score = key(kept[0])
+    if top_score <= 0:
+        return kept
+    floor = _REL_FLOOR * top_score
+    result = []
+    remaining = len(kept)
+    for item in kept:
+        if key(item) < floor and remaining - 1 >= _MIN_KEEP:
+            remaining -= 1
+        else:
+            result.append(item)
+    return result
 
 
 def rerank(
@@ -231,6 +266,8 @@ def rerank(
         # Re-rank the floored set so relevant ones still surface, stable on ties.
         kept = sorted(kept, key=_key)
 
+    # Relative relevance gate: trim backfill whose score is far below the best result.
+    kept = _rel_floor(kept, key=lambda s: s[0])
     return [s[4] for s in kept]
 
 
@@ -269,6 +306,8 @@ def _rerank_hybrid(
         kept = sorted(rows, key=lambda row: row[2])[: max(_MIN_KEEP, len(kept))]
         kept = sorted(kept, key=_key)
 
+    # Relative relevance gate: trim backfill whose blended score is far below the best.
+    kept = _rel_floor(kept, key=lambda row: row[0])
     return [row[4] for row in kept]
 
 

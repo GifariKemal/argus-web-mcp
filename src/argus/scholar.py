@@ -12,6 +12,7 @@ public fixed hosts -> they pass the guard):
 Both return one lean, mapped shape (never raw backend JSON). See docs/03-TOOL-SPECS.md.
 """
 
+import asyncio
 import os
 import re
 
@@ -27,10 +28,13 @@ _CROSSREF_UA = "ArgusBot/0.1 (+https://suriota.com; mailto:research@suriota.com)
 _S2_FIELDS = "title,authors,year,venue,citationCount,externalIds,abstract,url,openAccessPdf"
 _TIMEOUT = 20.0
 _MAX_LIMIT = 100
+_S2_MAX_RETRIES = 2  # retry budget for HTTP 429 from S2
 
 # Strip JATS / XML tags from CrossRef abstracts (e.g. <jats:p>, <jats:italic>).
 _TAG_RE = re.compile(r"<[^>]+>")
 
+# Tokenizer for relevance rerank: lowercase alphanum tokens >= 2 chars (same as argus.search).
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 class ScholarError(Exception):
     """Structured failure. ``code`` in {search_backend_down, no_results}."""
@@ -40,11 +44,9 @@ class ScholarError(Exception):
         self.code = code
         self.message = message
 
-
 def _s2_key() -> str | None:
     """The Semantic Scholar API key from env (ARGUS_S2_API_KEY preferred)."""
     return os.environ.get("ARGUS_S2_API_KEY") or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-
 
 def _headers(backend: str) -> dict:
     """Per-backend request headers. UA always; CrossRef UA carries a mailto; S2 adds
@@ -56,7 +58,6 @@ def _headers(backend: str) -> dict:
     if key:
         headers["x-api-key"] = key
     return headers
-
 
 def _map_s2(paper: dict) -> dict:
     pdf = paper.get("openAccessPdf") or {}
@@ -72,24 +73,19 @@ def _map_s2(paper: dict) -> dict:
         "open_access_pdf": pdf.get("url"),
     }
 
-
 def _cr_author(a: dict) -> str:
     return f"{a.get('given', '')} {a.get('family', '')}".strip()
-
 
 def _cr_year(work: dict) -> int | None:
     parts = ((work.get("published") or {}).get("date-parts") or [[]])[0]
     return parts[0] if parts else None
 
-
 def _cr_abstract(work: dict) -> str | None:
     raw = work.get("abstract")
     return _TAG_RE.sub("", raw).strip() if raw else None
 
-
 def _first(seq) -> str | None:
     return seq[0] if seq else None
-
 
 def _map_crossref(work: dict) -> dict:
     return {
@@ -104,7 +100,6 @@ def _map_crossref(work: dict) -> dict:
         "open_access_pdf": None,
     }
 
-
 def _apply_filters(results: list[dict], year_from: int | None, open_access: bool) -> list[dict]:
     if year_from is not None:
         results = [r for r in results if r["year"] is not None and r["year"] >= year_from]
@@ -112,22 +107,56 @@ def _apply_filters(results: list[dict], year_from: int | None, open_access: bool
         results = [r for r in results if r["open_access_pdf"]]
     return results
 
+def _tokens(text: str) -> set[str]:
+    """Lowercase alphanum tokens >= 2 chars (mirrors argus.search._tokens)."""
+    return {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2}
+
+def _rerank_results(query: str, results: list[dict]) -> list[dict]:
+    """Sort results by (descending query/title token-overlap fraction, descending citations).
+
+    Overlap fraction = |query_tokens & title_tokens| / |query_tokens| (0.0 when query empty).
+    Citations None is treated as -1 so it sorts below any paper with >=0 citations.
+    Original order is preserved on full ties (Python sort is stable).
+    """
+    qtokens = _tokens(query)
+    if not qtokens:
+        return results
+
+    def _key(r: dict) -> tuple[float, int]:
+        ttokens = _tokens(r.get("title") or "")
+        overlap = len(qtokens & ttokens) / len(qtokens)
+        citations = r["citations"] if r["citations"] is not None else -1
+        return (-overlap, -citations)
+
+    return sorted(results, key=_key)
 
 async def _try_s2(client, base, query, limit, year_from, open_access):
-    """Return mapped+filtered S2 results, or None on any failure (caller falls back)."""
-    params = {"query": query, "limit": limit, "fields": _S2_FIELDS}
-    try:
-        resp = await client.get(
-            f"{base}/graph/v1/paper/search", params=params, headers=_headers("s2")
-        )
-        if resp.status_code < 200 or resp.status_code >= 300:
-            return None
-        data = resp.json()
-    except (httpx.HTTPError, ValueError):
-        return None
-    papers = data.get("data") or []
-    return _apply_filters([_map_s2(p) for p in papers], year_from, open_access)
+    """Return mapped+filtered S2 results, or None on any failure (caller falls back).
 
+    On HTTP 429 specifically, retries up to _S2_MAX_RETRIES times with exponential
+    backoff (asyncio.sleep(0.5 * 2**attempt)).  All other non-2xx or transport errors
+    return None immediately without retrying.
+    """
+    params = {"query": query, "limit": limit, "fields": _S2_FIELDS}
+    attempt = 0
+    while True:
+        try:
+            resp = await client.get(
+                f"{base}/graph/v1/paper/search", params=params, headers=_headers("s2")
+            )
+            if resp.status_code == 429:
+                if attempt < _S2_MAX_RETRIES:
+                    await asyncio.sleep(0.5 * 2**attempt)
+                    attempt += 1
+                    continue
+                return None
+            if resp.status_code < 200 or resp.status_code >= 300:
+                return None
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        papers = data.get("data") or []
+        return _apply_filters([_map_s2(p) for p in papers], year_from, open_access)
 
 async def _try_crossref(client, base, query, limit, year_from, open_access):
     """Return mapped+filtered CrossRef results, or None on any failure."""
@@ -144,7 +173,6 @@ async def _try_crossref(client, base, query, limit, year_from, open_access):
     items = (data.get("message") or {}).get("items") or []
     return _apply_filters([_map_crossref(w) for w in items], year_from, open_access)
 
-
 async def scholar_search(
     query: str,
     limit: int = 10,
@@ -160,6 +188,10 @@ async def scholar_search(
     Tries Semantic Scholar first; on any S2 failure / 429 / empty result, falls back to
     CrossRef. ``year_from`` drops papers older than that year (client-side); ``open_access``
     keeps only items that carry an open-access PDF. ``limit`` is capped at 100.
+
+    S2 HTTP 429 is retried up to _S2_MAX_RETRIES times with exponential backoff before
+    falling back to CrossRef.  Results are relevance-reranked by query/title token-overlap
+    fraction (desc) then citations (desc) before returning.
 
     Returns ``{query, source, results, count}`` where ``source`` is
     ``'semantic_scholar'`` or ``'crossref'`` and each result is::
@@ -183,11 +215,16 @@ async def scholar_search(
     try:
         s2 = await _try_s2(client, s2_base, query, limit, year_from, open_access)
         if s2:
-            return {"query": query, "source": "semantic_scholar", "results": s2, "count": len(s2)}
+            ranked = _rerank_results(query, s2)
+            return {
+                "query": query, "source": "semantic_scholar",
+                "results": ranked, "count": len(ranked),
+            }
 
         cr = await _try_crossref(client, crossref_base, query, limit, year_from, open_access)
         if cr:
-            return {"query": query, "source": "crossref", "results": cr, "count": len(cr)}
+            ranked = _rerank_results(query, cr)
+            return {"query": query, "source": "crossref", "results": ranked, "count": len(ranked)}
     finally:
         if owns_client:
             await client.aclose()

@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 # Per-source content budget (chars) when building the answer-synthesis context, so a
 # handful of long articles still fit the model window. Truncation is LOGGED, never silent.
 ANSWER_SOURCE_BUDGET = 4000
+# Minimum extracted word count for a source to land in sources; below this
+# the page is treated as a low-quality stub (nav/footer noise) and moved to failed.
+MIN_CONTENT_WORDS = 30
 
 
 def _dedup_results(results: list[dict], limit: int) -> list[dict]:
@@ -60,8 +63,11 @@ async def _read_one(url, *, fetch_fn, client, browser, timeout, sem) -> dict:
             art = extract_article(res["html"], res["final_url"])
         except (SSRFError, FetchError) as exc:
             return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
-        if not art["content"]:
+        word_count = art["metadata"]["word_count"]
+        if not word_count:
             return {"url": url, "ok": False, "error": "empty_content"}
+        if word_count < MIN_CONTENT_WORDS:
+            return {"url": url, "ok": False, "error": "low_content"}
         return {
             "url": url,
             "ok": True,
