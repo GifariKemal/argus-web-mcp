@@ -1,0 +1,27 @@
+# SearXNG - Argus self-hosted search backend.
+# Bound to LOOPBACK ONLY (127.0.0.1) - never expose to the public internet.
+# Argus reaches it at http://127.0.0.1:8888 (JSON API).
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: argus-searxng
+    restart: unless-stopped
+    # host_loopback:container_internal_port - 127.0.0.1 prefix = loopback only.
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # Public-facing base URL of the instance (loopback for Argus).
+      - SEARXNG_BASE_URL=http://127.0.0.1:8888/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

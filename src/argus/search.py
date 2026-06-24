@@ -1,0 +1,428 @@
+"""The `search` MCP tool - self-hosted SearXNG JSON API client.
+
+Paginates SearXNG (`pageno=1,2,...`), dedups by URL, maps `content` -> `snippet`,
+and returns a lean result dict. See docs/03-TOOL-SPECS.md.
+"""
+
+import asyncio
+import re
+from urllib.parse import urlsplit
+
+import httpx
+
+import argus.semantic as semantic
+
+_VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
+_MAX_PAGES = 5
+_TIMEOUT = 15.0
+_BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
+# Spread `general` load across many free engines so DuckDuckGo isn't the sole source
+# (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
+_DEFAULT_ENGINES = ["duckduckgo", "bing", "brave", "mojeek", "startpage", "qwant"]
+_MIN_KEEP = 3  # safety floor: never drop below this many of the backend's results
+_TITLE_WEIGHT = 2.0  # title-token coverage counts double vs snippet coverage
+# Recency boost (rerank v2): a bounded ADDITIVE bump for results carrying a `published`
+# date when recency intent is on. Kept a fraction of _TITLE_WEIGHT so RELEVANCE still
+# dominates - a fully-irrelevant fresh result (score 0 + 0.5) can never outrank a
+# result with any title-token overlap (>= _TITLE_WEIGHT/len(qtokens) which, even for a
+# single token in a long query, plus possible snippet, is gated by the overlap floor:
+# zero-overlap results are dropped first, so the boost only reorders RELEVANT results).
+_RECENCY_BOOST = 0.5
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Hybrid semantic rerank (auto-enabled when argus.semantic.available()).
+# Blended score = _SEM_WEIGHT * cosine + (1 - _SEM_WEIGHT) * lexical_norm. Semantic-leaning
+# (0.6) so conceptual/paraphrase matches surface, but lexical (0.4) still anchors ranking.
+_SEM_WEIGHT = 0.6
+# A result with ZERO lexical overlap is NOT hard-dropped under semantic (a paraphrase can be
+# rescued), but one with BOTH zero lexical overlap AND cosine < _SEM_FLOOR is clearly
+# irrelevant and dropped (subject to the _MIN_KEEP safety floor).
+_SEM_FLOOR = 0.3
+
+
+class SearchError(Exception):
+    """Structured search failure. `code` in {search_backend_down, no_results}."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _map_result(raw: dict) -> dict:
+    out = {
+        "title": raw.get("title", ""),
+        "url": raw.get("url", ""),
+        "snippet": raw.get("content", ""),
+        "engine": raw.get("engine", ""),
+    }
+    published = raw.get("publishedDate")
+    if published:
+        out["published"] = published
+    return out
+
+
+def _tokens(text: str) -> set[str]:
+    """Lowercase, strip punctuation, split hyphens/whitespace; keep tokens >=2 chars."""
+    return {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2}
+
+
+def _norm_url(url: str) -> str:
+    """Normalize for dedup: drop scheme, query, fragment, and trailing slash."""
+    parts = urlsplit(url)
+    return f"{parts.netloc}{parts.path}".rstrip("/").lower()
+
+
+def _norm_title(title: str) -> str:
+    """Normalize for dedup: lowercase, collapse internal whitespace."""
+    return " ".join(title.lower().split())
+
+
+def _host(url: str) -> str:
+    """Lowercased network host (no port) for domain matching."""
+    return urlsplit(url).netloc.split("@")[-1].split(":")[0].lower()
+
+
+def _host_matches(host: str, domain: str) -> bool:
+    """Label-boundary suffix match: ``example.com`` matches ``www.example.com`` and
+    ``example.com`` itself, but NOT ``notexample.com`` nor ``github.io`` for
+    ``github.com``. Matches iff host == domain OR host ends with ``.`` + domain.
+    """
+    domain = domain.strip().lower().lstrip(".")
+    if not domain or not host:
+        return False
+    return host == domain or host.endswith("." + domain)
+
+
+def _filter_domains(
+    results: list[dict],
+    include: list[str] | None,
+    exclude: list[str] | None,
+) -> list[dict]:
+    """Post-filter mapped results by registrable host (suffix match on label boundary).
+
+    ``include`` keeps only results whose host matches one of the include domains;
+    ``exclude`` drops results whose host matches one of the exclude domains. Exclude
+    is applied after include. Applied BEFORE rerank/``[:count]``.
+    """
+    out = results
+    if include:
+        out = [r for r in out
+               if any(_host_matches(_host(r.get("url", "")), d) for d in include)]
+    if exclude:
+        out = [r for r in out
+               if not any(_host_matches(_host(r.get("url", "")), d) for d in exclude)]
+    return out
+
+
+def rerank(
+    query: str,
+    results: list[dict],
+    recency: bool = False,
+    semantic_rerank: bool | None = None,
+) -> list[dict]:
+    """Deterministic relevance rerank + dedup of mapped results.
+
+    Hybrid semantic rerank (``semantic_rerank``): ``None`` auto-enables it iff
+    ``semantic.available()`` is True; ``True``/``False`` force it on/off. When ON, each
+    kept result gets a cosine similarity ``sem`` (0..1) of the query vs ``title+snippet``;
+    the lexical score is min-max normalized to ``lex_norm`` (0..1, div0-guarded) and the
+    final blended score is ``_SEM_WEIGHT*sem + (1-_SEM_WEIGHT)*lex_norm`` (semantic 0.6 /
+    lexical 0.4). Zero-lexical-overlap results are NOT hard-dropped (a paraphrase can be
+    rescued by semantics) UNLESS their cosine is also below ``_SEM_FLOOR`` (clearly
+    irrelevant). If ``semantic.similarities`` raises, the failure is caught and the rerank
+    falls back to the pure-lexical behavior below (search never fails because of semantics).
+
+    Each result is ``{title, url, snippet, engine, ...}``.
+
+    Scoring: tokenize ``query`` into a distinct set of lowercased word tokens
+    (>=2 chars, punctuation stripped, hyphens split so ``esp-claw`` -> ``{esp, claw}``).
+    For every result, ``score = TITLE_WEIGHT * title_coverage + snippet_coverage``,
+    where ``*_coverage`` is the fraction of distinct query tokens present in that
+    field. Title matches therefore outweigh snippet matches.
+
+    Dedup: later duplicates are dropped by normalized URL (scheme/query/fragment/
+    trailing-slash stripped) and by normalized title (case + whitespace collapsed).
+
+    Filtering: results with ZERO query-token overlap in BOTH title and snippet are
+    dropped - UNLESS that would leave fewer than ``_MIN_KEEP`` results, in which
+    case the backend's original top results are kept (never empty given input).
+
+    Recency tiebreak (always on): among results with EQUAL score, one carrying a
+    ``published`` date sorts before one without. This is only a tiebreak.
+
+    Recency boost (v2, ``recency=True``): results carrying a ``published`` date get a
+    bounded ADDITIVE score bump of ``+_RECENCY_BOOST``. It is a *boost, not an override*:
+    the boost is applied to the score AFTER zero-overlap (irrelevant) results have been
+    dropped, so a fully-irrelevant fresh result is removed before any boost and can never
+    outrank a relevant stale one. Because ``_RECENCY_BOOST`` (0.5) is a fraction of
+    ``_TITLE_WEIGHT`` (2.0), relevance still dominates among kept results.
+    """
+    if not results:
+        return []
+
+    qtokens = _tokens(query)
+
+    # Dedup (belt-and-suspenders over search()'s url dedup) + score, preserving order.
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    # tuple: (score, fresh_rank, has_overlap, idx, result); fresh_rank 0=has published.
+    scored: list[tuple[float, int, bool, int, dict]] = []
+    for idx, r in enumerate(results):
+        nurl = _norm_url(r.get("url", ""))
+        ntitle = _norm_title(r.get("title", ""))
+        if (nurl and nurl in seen_urls) or (ntitle and ntitle in seen_titles):
+            continue
+        if nurl:
+            seen_urls.add(nurl)
+        if ntitle:
+            seen_titles.add(ntitle)
+
+        title_tok = _tokens(r.get("title", ""))
+        snip_tok = _tokens(r.get("snippet", ""))
+        if qtokens:
+            title_cov = len(qtokens & title_tok) / len(qtokens)
+            snip_cov = len(qtokens & snip_tok) / len(qtokens)
+        else:
+            title_cov = snip_cov = 0.0
+        score = _TITLE_WEIGHT * title_cov + snip_cov
+        has_overlap = bool(qtokens & title_tok) or bool(qtokens & snip_tok)
+        is_fresh = bool(r.get("published"))
+        # Recency boost is additive but applied ONLY to relevant (overlapping) results,
+        # so an irrelevant fresh page (dropped below) never benefits - relevance wins.
+        if recency and is_fresh and has_overlap:
+            score += _RECENCY_BOOST
+        fresh_rank = 0 if is_fresh else 1
+        scored.append((score, fresh_rank, has_overlap, idx, r))
+
+    # No usable query tokens (e.g. all <2 chars) -> nothing to rank against; return
+    # the deduped results untouched in original order.
+    if not qtokens:
+        return [s[4] for s in sorted(scored, key=lambda s: s[3])]
+
+    # Decide whether the hybrid semantic blend is active. None = auto (on iff the local
+    # model stack is importable); True/False force it. similarities() failing falls back
+    # to lexical, so semantics can never break search.
+    use_semantic = semantic.available() if semantic_rerank is None else semantic_rerank
+    sims: list[float] | None = None
+    if use_semantic:
+        try:
+            sims = semantic.similarities(
+                query,
+                [f"{s[4].get('title', '')} {s[4].get('snippet', '')}" for s in scored],
+            )
+        except Exception:  # noqa: BLE001 - any semantic failure -> lexical fallback
+            sims = None
+
+    if sims is not None:
+        return _rerank_hybrid(scored, sims)
+
+    # Sort by descending score; then recency tiebreak (published first); then original
+    # index. Score dominates, so relevance always wins - recency only breaks exact ties.
+    def _key(s: tuple) -> tuple:
+        return (-s[0], s[1], s[3])
+
+    ranked = sorted(scored, key=_key)
+
+    kept = [s for s in ranked if s[2]]
+    if len(kept) < _MIN_KEEP:
+        # Safety floor: keep the backend's original top deduped results (by orig order),
+        # so we never strip down below the floor or return empty when given results.
+        kept = sorted(scored, key=lambda s: s[3])[: max(_MIN_KEEP, len(kept))]
+        # Re-rank the floored set so relevant ones still surface, stable on ties.
+        kept = sorted(kept, key=_key)
+
+    return [s[4] for s in kept]
+
+
+def _rerank_hybrid(
+    scored: list[tuple[float, int, bool, int, dict]],
+    sims: list[float],
+) -> list[dict]:
+    """Blend lexical + semantic scores, drop only clearly-irrelevant results, sort.
+
+    ``scored`` rows are ``(lex, fresh_rank, has_overlap, idx, result)`` aligned to ``sims``.
+    Blended = ``_SEM_WEIGHT*sem + (1-_SEM_WEIGHT)*lex_norm`` where ``lex_norm = lex/max_lex``
+    (div0-guarded). Keep rule: drop a row only if it has NO lexical overlap AND ``sem``
+    < ``_SEM_FLOOR`` (otherwise a paraphrase is rescued). Dedup already happened in
+    ``scored``; ``_MIN_KEEP`` safety floor + recency tiebreak preserved.
+    """
+    max_lex = max((s[0] for s in scored), default=0.0)
+
+    # rows: (blended, fresh_rank, idx, keep, result)
+    rows: list[tuple[float, int, int, bool, dict]] = []
+    for s, sem in zip(scored, sims, strict=True):
+        lex, fresh_rank, has_overlap, idx, r = s
+        lex_norm = lex / max_lex if max_lex > 0 else 0.0
+        blended = _SEM_WEIGHT * sem + (1 - _SEM_WEIGHT) * lex_norm
+        keep = has_overlap or sem >= _SEM_FLOOR
+        rows.append((blended, fresh_rank, idx, keep, r))
+
+    # Blended score desc; recency tiebreak (published first); then original index (stable).
+    def _key(row: tuple) -> tuple:
+        return (-row[0], row[1], row[2])
+
+    ranked = sorted(rows, key=_key)
+    kept = [row for row in ranked if row[3]]
+    if len(kept) < _MIN_KEEP:
+        # Safety floor: backfill the backend's top deduped results so we never drop below
+        # the floor or return empty, then re-rank by blended score (stable on ties).
+        kept = sorted(rows, key=lambda row: row[2])[: max(_MIN_KEEP, len(kept))]
+        kept = sorted(kept, key=_key)
+
+    return [row[4] for row in kept]
+
+
+async def _search_once(
+    q: str,
+    count: int,
+    params: dict,
+    base_url: str,
+    client: "httpx.AsyncClient",
+) -> tuple[list[dict], list]:
+    """One full paginated pass. Returns (mapped_results, unresponsive_engines).
+
+    Raises ``SearchError('search_backend_down')`` only on transport/HTTP/JSON errors.
+    An empty list with a non-empty ``unresponsive`` signals a transient throttle the
+    caller may retry; an empty list with empty ``unresponsive`` is a genuine miss.
+    """
+    seen: set[str] = set()
+    results: list[dict] = []
+    unresponsive: list = []
+    for pageno in range(1, _MAX_PAGES + 1):
+        try:
+            resp = await client.get(
+                f"{base_url}/search", params={**params, "pageno": pageno}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            page = data.get("results", [])
+            unresponsive = data.get("unresponsive_engines", []) or unresponsive
+        except (httpx.HTTPError, ValueError) as exc:
+            raise SearchError(
+                "search_backend_down", f"SearXNG request failed: {exc}"
+            ) from exc
+
+        added = 0
+        for raw in page:
+            url = raw.get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            results.append(_map_result(raw))
+            added += 1
+
+        if len(results) >= count or added == 0:
+            break
+
+    return results, unresponsive
+
+
+async def search(
+    query: str | list[str],
+    count: int = 10,
+    category: str = "general",
+    time_range: str | None = None,
+    lang: str | None = None,
+    base_url: str = "http://127.0.0.1:8888",
+    client: "httpx.AsyncClient | None" = None,
+    retries: int = 2,
+    engines: list[str] | None = None,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    safesearch: int = 0,
+) -> dict:
+    """Query a self-hosted SearXNG instance and return deduped, mapped results.
+
+    Engine selection: an explicit ``engines`` list always wins (comma-joined into the
+    ``engines`` param). Otherwise, a ``general`` query fans out across
+    ``_DEFAULT_ENGINES`` to spread load so no single engine (DuckDuckGo) is the sole
+    source. Non-``general`` categories keep using ``categories`` with no forced engines.
+
+    Resilience: when an attempt yields ZERO results AND SearXNG reports
+    ``unresponsive_engines`` (a transient throttle), the whole search is retried up to
+    ``retries`` times with exponential backoff (``_BACKOFF_BASE * 2**attempt``) before
+    raising ``search_backend_down``. A genuinely empty result (no unresponsive engines)
+    raises ``no_results`` immediately and is never retried.
+
+    Domain filters: ``include_domains`` keeps only results whose host suffix-matches one
+    of the given domains (``example.com`` matches ``www.example.com``); ``exclude_domains``
+    drops matching hosts. Both are POST-FILTERS applied to the mapped results BEFORE
+    rerank/``[:count]``. If ``include_domains`` filtering leaves zero results, that is a
+    legitimate ``no_results`` (distinct from a transient throttle).
+
+    safesearch: passed through to SearXNG (``0`` off, ``1`` moderate, ``2`` strict);
+    omitted from the request when left at the default ``0``.
+
+    Recency: ``rerank`` is called with ``recency=True`` for recency-intent queries -
+    ``category == 'news'`` OR ``time_range`` set - giving ``published``-bearing results a
+    bounded additive boost. General queries keep ``recency=False`` (boost off; published
+    remains only a tiebreak).
+    """
+    q = " ".join(query) if isinstance(query, list) else query
+    categories = category if category in _VALID_CATEGORIES else "general"
+
+    params = {"q": q, "format": "json", "categories": categories}
+    if engines is not None:
+        params["engines"] = ",".join(engines)
+    elif categories == "general":
+        params["engines"] = ",".join(_DEFAULT_ENGINES)
+    if time_range:
+        params["time_range"] = time_range
+    if lang:
+        params["language"] = lang
+    if safesearch:
+        params["safesearch"] = str(safesearch)
+
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(timeout=_TIMEOUT)
+
+    results: list[dict] = []
+    unresponsive: list = []
+    try:
+        for attempt in range(retries + 1):
+            results, unresponsive = await _search_once(
+                q, count, params, base_url, client
+            )
+            if results or not unresponsive:
+                break  # got results, or a genuine no_results (don't retry)
+            if attempt < retries:
+                await asyncio.sleep(_BACKOFF_BASE * 2**attempt)
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    if not results:
+        # Distinguish a transient backend throttle (engines suspended / timing out)
+        # from a genuinely empty result, so callers don't treat rate-limiting as
+        # "nothing exists". Throttle reaches here only after retries are exhausted.
+        if unresponsive:
+            raise SearchError(
+                "search_backend_down",
+                f"all SearXNG engines unresponsive (rate-limited?): {unresponsive}",
+            )
+        raise SearchError("no_results", f"no results for query: {q!r}")
+
+    # Post-filter by domain BEFORE rerank/truncation. An include filter that removes
+    # everything is a legitimate no_results (the backend had hits; none on the allowlist).
+    if include_domains or exclude_domains:
+        results = _filter_domains(results, include_domains, exclude_domains)
+        if not results:
+            raise SearchError(
+                "no_results",
+                f"no results for query {q!r} within domain filters",
+            )
+
+    # Recency intent: news category or an explicit time_range -> boost fresh results.
+    recency = category == "news" or bool(time_range)
+
+    # Deterministic relevance rerank + dedup decides what makes the top-`count`.
+    # semantic_rerank=None -> auto: hybrid blend iff the local model stack is available.
+    results = rerank(q, results, recency=recency, semantic_rerank=None)[:count]
+    engines_used = sorted({r["engine"] for r in results if r["engine"]})
+    return {
+        "query": query,
+        "results": results,
+        "count": len(results),
+        "engines_used": engines_used,
+    }

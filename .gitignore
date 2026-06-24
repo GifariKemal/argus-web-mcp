@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Tooling caches / artifacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+.cache/
+.DS_Store
+node_modules/
+
+# Secrets & local config
+.env
+*.local
+*.bak
+deploy/searxng/settings.yml.bak
+
+# Argus runtime (content-addressed cache + blobs)
+.argus/
+*.sqlite
+
+# Benchmark run artifacts - REGENERABLE (harness + RESULTS.md/headtohead are tracked)
+benchmark/results/
+benchmark/*.json
+benchmark/codex_*/
+benchmark/*_report.md
+benchmark/report.md
+benchmark/qa_report.md

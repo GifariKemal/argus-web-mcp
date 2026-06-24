@@ -1,0 +1,97 @@
+"""SQLite-backed response cache with per-category TTL and disk-blob overflow.
+
+Stdlib only. Inline-JSON for small payloads, on-disk blob files for large ones.
+Store-good-only: ``put`` is invoked exclusively by callers on upstream success,
+so failures are never cached here. ``get_stale`` enables stale-serve fallback
+when an upstream is transiently down.
+"""
+
+import hashlib
+import json
+import sqlite3
+import time
+from pathlib import Path
+
+# Per-category TTL seconds. Categories come from tools: news, docs, trading, pdf, search, general.
+DEFAULT_TTLS = {
+    "news": 900,
+    "docs": 86400,
+    "trading": 300,
+    "pdf": 86400,
+    "search": 600,
+    "general": 3600,
+}
+
+_INLINE_LIMIT = 32768  # bytes; larger JSON payloads spill to a disk blob
+
+
+def ttl_for(category: str) -> int:
+    """Return TTL for a category, falling back to general's value (3600)."""
+    return DEFAULT_TTLS.get(category, DEFAULT_TTLS["general"])
+
+
+class Cache:
+    def __init__(
+        self, db_path: str = "~/.argus/cache.db", blob_dir: str = "~/.argus/blobs"
+    ):
+        self.db_path = Path(db_path).expanduser()
+        self.blob_dir = Path(blob_dir).expanduser()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.blob_dir.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS entries ("
+            "key TEXT PRIMARY KEY, payload TEXT NULL, blob_path TEXT NULL, "
+            "source TEXT, created REAL)"
+        )
+        self.conn.commit()
+
+    def key(self, url: str, opts: dict) -> str:
+        """sha256 hex of canonical(url) + json.dumps(opts, sort_keys=True)."""
+        canonical = url.strip().lower()
+        material = canonical + json.dumps(opts, sort_keys=True)
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _load(self, row: sqlite3.Row | tuple) -> dict:
+        payload, blob_path = row[0], row[1]
+        if blob_path is not None:
+            return json.loads(Path(blob_path).read_text(encoding="utf-8"))
+        return json.loads(payload)
+
+    def get(self, key: str, ttl_seconds: int) -> dict | None:
+        """Return stored payload if present AND fresh within ttl_seconds, else None."""
+        row = self.conn.execute(
+            "SELECT payload, blob_path, created FROM entries WHERE key=?", (key,)
+        ).fetchone()
+        if row is None or (time.time() - row[2]) >= ttl_seconds:
+            return None
+        return self._load(row)
+
+    def get_stale(self, key: str) -> dict | None:
+        """Return stored payload regardless of age, else None."""
+        row = self.conn.execute(
+            "SELECT payload, blob_path FROM entries WHERE key=?", (key,)
+        ).fetchone()
+        return self._load(row) if row is not None else None
+
+    def put(self, key: str, payload: dict, source: str) -> None:
+        """Store payload (inline if small, disk-blob if > 32768 bytes). Upsert on key."""
+        data = json.dumps(payload)
+        if len(data.encode("utf-8")) > _INLINE_LIMIT:
+            blob_path = self.blob_dir / key
+            blob_path.write_text(data, encoding="utf-8")
+            inline, blob = None, str(blob_path)
+        else:
+            inline, blob = data, None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO entries (key, payload, blob_path, source, created) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, inline, blob, source, time.time()),
+        )
+        self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+__all__ = ["DEFAULT_TTLS", "Cache", "ttl_for"]

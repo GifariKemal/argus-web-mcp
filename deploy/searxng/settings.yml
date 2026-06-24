@@ -1,0 +1,79 @@
+# SearXNG settings for Argus - minimal, JSON-API enabled, loopback-bound.
+# Full reference: https://docs.searxng.org/admin/settings/index.html
+use_default_settings: true
+
+general:
+  instance_name: "argus-search"
+  # No public stats/metrics surface.
+  enable_metrics: false
+
+search:
+  # CRITICAL: enable JSON so Argus can call ?format=json. html kept for debugging.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+
+server:
+  # Inside the container SearXNG listens on 0.0.0.0:8080; the compose port mapping
+  # (127.0.0.1:8888:8080) is what enforces loopback-only exposure on the host.
+  bind_address: "0.0.0.0"
+  port: 8080
+  # MUST be replaced before first run - provision.sh does this automatically:
+  #   sed -i "s/CHANGE_ME_GENERATE_RANDOM/$(openssl rand -hex 32)/" settings.yml
+  secret_key: "CHANGE_ME_GENERATE_RANDOM"
+  limiter: false           # no bot-limiter: only Argus (a trusted local client) hits it.
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+# Give flaky/free upstream engines a little more room before they're marked unresponsive.
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+  retries: 1
+  # PROXY POOL (owner-chosen reliability strategy). The big free engines (brave/google/ddg)
+  # rate-limit/CAPTCHA per source IP; routing SearXNG's OUTBOUND engine requests through a
+  # rotating proxy pool spreads load across IPs so they don't throttle. Uncomment + fill with
+  # your real proxies (http/https/socks5), or have provision.sh inject them from $ARGUS_SEARXNG_PROXIES.
+  # proxies:
+  #   all://:
+  #     - socks5h://user:pass@proxy-a.example:1080
+  #     - socks5h://user:pass@proxy-b.example:1080
+  #     - http://user:pass@proxy-c.example:8080
+
+# Broadened engine set (owner-chosen): mix throttle-prone majors with low-friction engines so
+# a query still returns results when brave/google/ddg are temporarily suspended. use_default_settings
+# keeps the rest; these entries (re)enable the resilient ones for the general category.
+engines:
+  - name: mojeek
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
+  - name: marginalia
+    disabled: false
+
+ui:
+  static_use_hash: true
+
+# RELIABILITY NOTE (validated live 2026-06-24): on a single IP the big free engines
+# (brave/google/ddg/startpage) rate-limit/CAPTCHA after a burst -> SearXNG returns 0 results
+# with `unresponsive_engines` set, which Argus `search` surfaces as RETRYABLE search_backend_down.
+# Mitigation here = broad engine set (above) + outbound proxy pool (outgoing.proxies). Datacenter
+# IPs throttle FASTER than residential, so the proxy pool matters most on the VPS.

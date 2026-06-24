@@ -1,0 +1,62 @@
+# Argus benchmark RESULTS (durable summary)
+
+_Run 2026-06-24. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked record._
+Harness: `benchmark/run_compare.py` + `benchmark/scenarios.py` (200 queries x 10 categories, 50 stratified compare ids) + `benchmark/run_codex.sh` + `benchmark/burst_test.py`.
+
+## Argus search - 200 scenarios (paced 4s)
+- **100% success / 0% throttle / 0 no-results** across all 200 / 10 categories.
+- Latency p50 1.42s / p95 2.51s / mean 9.66 results / relevance proxy (top-1 title overlap) 0.70.
+- Engine answer distribution: **duckduckgo 189/200**, bing 55, brave 16, mojeek 7.
+- No category breached the auto-flag thresholds (success<80 / overlap<0.3 / throttle>30).
+
+## 3-way: Argus vs Claude WebSearch vs Codex CLI (n=25, then n=50)
+Identical queries through each system's native path. Both N agree:
+
+| arm | found | mean breadth | depth (content) |
+|---|---|---|---|
+| **Argus** `research` | 50/50 | 4.94 sources | **7,321 words FULL content/query** |
+| Claude WebSearch | 50/50 | 9.1 hits | titles + URLs only |
+| Codex CLI (`web_search` live) | 50/50 | 8.72 URLs | synthesized answer + citations (no raw content) |
+
+- **Discovery parity** - all three find the answer on every scenario.
+- **Depth = Argus's decisive edge** - one call returns ~5 sources of full extracted markdown (~7.3k words); competitors return hits / a summary. Argus research at n=50: **all 50 returned sources, 0 failures**.
+
+## Burst re-validation (un-paced, 15 queries)
+Engines were healthy this run: both Argus-resilient (backoff + multi-engine) and a naive raw client hit **100% success / 0% throttle** -> no throttle to recover from, so **no measurable delta today**. Redundancy was observably active (Argus pulled bing+ddg; naive only bing). The earlier ~5-10-query burst-throttle was not reproducible under current engine health. Honest read: backoff/redundancy are wired and active but not load-bearing on a healthy run; the durable fix for datacenter-IP throttle remains the deploy-time proxy pool.
+
+## Findings -> actions taken
+1. **Engine concentration risk** (ddg 189/200). -> multi-engine redundancy (default engine set) + auto-backoff retry on transient throttle (committed); proxy pool wired for deploy.
+2. **Relevance-proxy artifact** on how-to/conceptual queries (title-only overlap). -> rerank v2 keeps snippet contribution; metric noted as a proxy artifact (3-way shows those queries still find good sources).
+3. **Breadth vs depth** - research capped at 5 sources. -> `max_sources` exposed + `mode` (quick/deep/answer).
+4. **No new Argus bugs** across 200 + 50 + 50 runs (0 errors). Harness build caught 1 real wiring bug (SSRF client on the trusted loopback search backend - fixed).
+
+## Competitor feature gap -> adopted (see docs/05-COMPETITIVE-GAP.md)
+Researched Jina / Brave / Firecrawl / Exa / Tavily / Bright Data. Adopted the top self-hostable gaps:
+- **`map_urls`** - sitemap.xml / robots.txt / 1-hop link URL discovery (Firecrawl/Exa `map`).
+- **`research(mode='answer')`** - cited LLM answer over the bundle (Exa/Tavily/Jina `answer`).
+- **search `include_domains`/`exclude_domains` + `safesearch` + recency-v2** (Exa/Tavily/Brave filters).
+- Deferred (effort/infra): semantic/`findSimilar` (local embeddings), image captioning (VLM), managed residential proxies (Bright Data - only genuine non-self-hostable gap).
+
+**Argus already matches/beats the field on:** full content (no truncation) vs lossy summaries/hits, unlimited+owned vs metered, self-hosted JS+stealth render, transparent archive egress-fallback, content-addressed persistent cache, and the trading-extractor moat.
+
+## Semantic rerank A/B - quantified gain (2026-06-24)
+Same SearXNG candidate pool reranked two ways via `argus.search.rerank` (lexical vs hybrid),
+scored nDCG@5. Judge = an INDEPENDENT embedding model (all-MiniLM, different family from the
+reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quota (see finding).
+
+| metric | lexical | hybrid | delta |
+|---|---|---|---|
+| mean nDCG@5 (n=50) | 0.7373 | 0.8428 | **+0.1055 (+14.3%)** |
+| **conceptual/how-to subset (n=19)** | 0.6074 | 0.7729 | **+0.1655 (+27.3%)** |
+| mean top-5 relevance | 0.941 | 0.983 | +0.042 |
+
+- Hybrid changed the top-1 result on **50%** of queries; mean top-5 Jaccard 0.599 (substantial reordering).
+- Gain is largest on conceptual/how-to queries (+27%) - the exact weak spot the lexical relevance proxy flagged in the 200-run. Confirmed.
+- **Caveat:** the embedding judge leans semantic, so treat the magnitude as an upper-ish bound; a neutral LLM judge would tighten it. Direction (hybrid > lexical, biggest on conceptual) is robust.
+
+### Finding: OpenAI key has no quota (429 insufficient_quota)
+`OPENAI_API_KEY` is set but the account is out of credit. Impact: Argus's LLM-dependent features
+(`research(mode='answer')`, `extract_structured` llm/auto) will FAIL at runtime with this key even
+though `llm_available()` returns True (it checks key presence, not quota). FIX before relying on
+LLM features: top up OpenAI, OR point `ARGUS_LLM_BASE_URL`/`ARGUS_LLM_API_KEY` at a self-hosted
+(VPS Kimi) / Groq OpenAI-compatible endpoint (the provider-agnostic path already supports this).

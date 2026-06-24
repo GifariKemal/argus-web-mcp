@@ -1,0 +1,98 @@
+[
+  {
+    "title": "1-y Loan Prime Rate",
+    "country": "CNY",
+    "date": "2026-06-21T21:00:00-04:00",
+    "impact": "Low",
+    "forecast": "3.00%",
+    "previous": "3.00%"
+  },
+  {
+    "title": "5-y Loan Prime Rate",
+    "country": "CNY",
+    "date": "2026-06-21T21:00:00-04:00",
+    "impact": "Low",
+    "forecast": "3.50%",
+    "previous": "3.50%"
+  },
+  {
+    "title": "Credit Card Spending y/y",
+    "country": "NZD",
+    "date": "2026-06-21T23:00:00-04:00",
+    "impact": "Low",
+    "forecast": "",
+    "previous": "2.9%"
+  },
+  {
+    "title": "Foreign Direct Investment ytd/y",
+    "country": "CNY",
+    "date": "2026-06-22T05:06:00-04:00",
+    "impact": "Low",
+    "forecast": "",
+    "previous": "-10.3%"
+  },
+  {
+    "title": "German Buba President Nagel Speaks",
+    "country": "EUR",
+    "date": "2026-06-22T07:00:00-04:00",
+    "impact": "Low",
+    "forecast": "",
+    "previous": ""
+  },
+  {
+    "title": "CPI m/m",
+    "country": "CAD",
+    "date": "2026-06-22T08:30:00-04:00",
+    "impact": "High",
+    "forecast": "0.7%",
+    "previous": "0.4%"
+  },
+  {
+    "title": "Median CPI y/y",
+    "country": "CAD",
+    "date": "2026-06-22T08:30:00-04:00",
+    "impact": "High",
+    "forecast": "2.1%",
+    "previous": "2.1%"
+  },
+  {
+    "title": "Trimmed CPI y/y",
+    "country": "CAD",
+    "date": "2026-06-22T08:30:00-04:00",
+    "impact": "High",
+    "forecast": "2.0%",
+    "previous": "2.0%"
+  },
+  {
+    "title": "Common CPI y/y",
+    "country": "CAD",
+    "date": "2026-06-22T08:30:00-04:00",
+    "impact": "Medium",
+    "forecast": "2.5%",
+    "previous": "2.5%"
+  },
+  {
+    "title": "Core CPI m/m",
+    "country": "CAD",
+    "date": "2026-06-22T08:30:00-04:00",
+    "impact": "Low",
+    "forecast": "",
+    "previous": "0.2%"
+  },
+  {
+    "title": "ECB President Lagarde Speaks",
+    "country": "EUR",
+    "date": "2026-06-22T09:00:00-04:00",
+    "impact": "Medium",
+    "forecast": "",
+    "previous": ""
+  },
+  {
+    "title": "FOMC Member Waller Speaks",
+    "country": "USD",
+    "date": "2026-06-22T09:00:00-04:00",
+    "impact": "Low",
+    "forecast": "",
+    "previous": ""
+  }
+]

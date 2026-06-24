@@ -1,0 +1,96 @@
+# =============================================================================
+# Argus Benchmark Test-Set Specification  /  benchmark/testset.yaml
+# =============================================================================
+# PURPOSE: reference-based benchmark for Argus vs 12 incumbent tools. 7 fetch/
+# scrape categories (~30 URLs) + 10 search queries. Each tool runs every item;
+# outputs scored vs hand-curated gold references.
+#
+# SCOPE NOTE (owner directive 2026-06-24): Argus is GENERAL-PURPOSE - it must
+# serve ALL SURIOTA domains (firmware/ESP32, trading/Aurix, web, business docs,
+# AI servers) AND general web research (the broad "12 use cases"). This seed
+# testset leans trading (the moat) + general docs/news; **P1 MUST enrich** with
+# non-trading SURIOTA domains: ESP-IDF/ESP32 docs, MQL5/MetaTrader docs, Flutter,
+# FastAPI/Node, business/market-research sources, and broader general queries.
+#
+# gold_reference: "TBD-curate-in-P1" -> human curates canonical clean extraction
+# in P1 (inline string OR path gold/<id>.md). Search queries store ranked gold
+# URL list for nDCG. Until curated, scorers compute only reference-free signals.
+#
+# METRICS: rouge_l, token_f1, success, truncation, latency(p50/p95),
+# table_fidelity (pdf/trading), search_ndcg_10, cost (USD/call -> cost/success).
+# URLs verified live 2026-06-24; volatile items (news/calendars) should be
+# HTML/PDF-snapshotted alongside the gold ref in P1.
+# =============================================================================
+
+meta:
+  name: argus-benchmark
+  version: "0.1.0-spec"
+  created: "2026-06-24"
+  incumbent_tools: 12
+  url_count: 36
+  search_query_count: 13
+  gold_status: "partial-curated-P1 (5 stable text items have gold/<id>.md; rest TBD)"
+  p1_todo: "DONE 2026-06-24 - added ESP-IDF/MQL5/Flutter/FastAPI docs + 2 market-research longform + 3 broad general queries; curated gold for 5 stable text items (longform-04, longform-01, longform-03, docs-01, docs-03)."
+
+urls:
+  # --- news (5) ---
+  - {id: news-01, category: news, url: "https://www.forex.com/en/news-and-analysis/gold-price-forecast-xau-usd-drops-12pct-yearly-support-now-critical-6-6-2026/", type: html, notes: "FOREX.com XAU/USD forecast (dated). Editorial + levels.", gold_reference: "TBD-curate-in-P1"}
+  - {id: news-02, category: news, url: "https://fortune.com/article/current-price-of-gold-06-22-2026/", type: html, notes: "Fortune dated gold news; ad-heavy -> boilerplate test.", gold_reference: "TBD-curate-in-P1"}
+  - {id: news-03, category: news, url: "https://www.fxstreet.com/markets/commodities/metals/gold", type: html, notes: "FXStreet gold hub; link-vs-article disambiguation.", gold_reference: "TBD-curate-in-P1"}
+  - {id: news-04, category: news, url: "https://www.jpmorgan.com/insights/global-research/commodities/gold-prices", type: html, notes: "JPM Global Research gold outlook; corporate CMS.", gold_reference: "TBD-curate-in-P1"}
+  - {id: news-05, category: news, url: "https://goldsilver.com/industry-news/article/gold-price-forecast-2026-2027-key-predictions-from-top-analysts/", type: html, notes: "Forecast roundup; entity/number extraction.", gold_reference: "TBD-curate-in-P1"}
+  # --- spa_js (4) ---
+  - {id: spa-01, category: spa_js, url: "https://www.tradingview.com/symbols/XAUUSD/", type: spa, notes: "TradingView SPA; client-rendered quote.", gold_reference: "TBD-curate-in-P1"}
+  - {id: spa-02, category: spa_js, url: "https://react.dev/learn/thinking-in-react", type: spa, notes: "React.dev SPA docs + code blocks.", gold_reference: "TBD-curate-in-P1"}
+  - {id: spa-03, category: spa_js, url: "https://www.investing.com/currencies/xau-usd", type: spa, notes: "Investing.com JS quote + infinite-scroll news.", gold_reference: "TBD-curate-in-P1"}
+  - {id: spa-04, category: spa_js, url: "https://www.tradingview.com/symbols/XAUUSD/ideas/?sort=recent", type: spa, notes: "Infinite-scroll lazy-loaded feed.", gold_reference: "TBD-curate-in-P1"}
+  # --- docs (4) ---
+  - {id: docs-01, category: docs, url: "https://fastapi.tiangolo.com/tutorial/first-steps/", type: html, notes: "MkDocs Material; prose+code+admonitions.", gold_reference: "gold/docs-01.md"}
+  - {id: docs-02, category: docs, url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise", type: html, notes: "MDN API ref; method tables + examples.", gold_reference: "TBD-curate-in-P1"}
+  - {id: docs-03, category: docs, url: "https://raw.githubusercontent.com/tiangolo/fastapi/master/README.md", type: html, notes: "Raw markdown passthrough (don't re-mangle).", gold_reference: "gold/docs-03.md"}
+  - {id: docs-04, category: docs, url: "https://docs.github.com/en/rest/repos/repos", type: html, notes: "API ref: endpoints/params/schemas.", gold_reference: "TBD-curate-in-P1"}
+  # --- docs: non-trading SURIOTA domains + general (P1 enrichment 2026-06-24) ---
+  - {id: docs-05, category: docs, url: "https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/mcpwm.html", type: html, notes: "ESP-IDF MCPWM peripheral API (SURIOTA firmware/ESP32). Sphinx; prose+C tables.", gold_reference: "TBD-curate-in-P1"}
+  - {id: docs-06, category: docs, url: "https://www.mql5.com/en/docs/event_handlers/ontick", type: html, notes: "MQL5 OnTick handler ref (SURIOTA trading/MetaTrader). Code + prose.", gold_reference: "TBD-curate-in-P1"}
+  - {id: docs-07, category: docs, url: "https://api.flutter.dev/flutter/widgets/StatefulWidget-class.html", type: html, notes: "Flutter/Dart API ref (SURIOTA apps). Dartdoc; members + examples.", gold_reference: "TBD-curate-in-P1"}
+  - {id: docs-08, category: docs, url: "https://fastapi.tiangolo.com/tutorial/path-params/", type: html, notes: "FastAPI path-params tutorial (Python backend). MkDocs Material.", gold_reference: "TBD-curate-in-P1"}
+  # --- pdf (4) ---
+  - {id: pdf-01, category: pdf, url: "https://www.cftc.gov/dea/futures/deacmxsf.htm", type: pdf, notes: "CFTC COT CMX report (gold/silver); fixed-width tabular.", gold_reference: "TBD-curate-in-P1"}
+  - {id: pdf-02, category: pdf, url: "https://www.federalreserve.gov/monetarypolicy/files/monetary20250917a1.pdf", type: pdf, notes: "FOMC statement PDF; native-text baseline.", gold_reference: "TBD-curate-in-P1"}
+  - {id: pdf-03, category: pdf, url: "https://arxiv.org/pdf/1706.03762", type: pdf, notes: "arXiv multi-column academic PDF; figs/eqs/refs.", gold_reference: "TBD-curate-in-P1"}
+  - {id: pdf-04, category: pdf, url: "https://www.bls.gov/news.release/pdf/cpi.pdf", type: pdf, notes: "BLS CPI multi-table PDF; bot-protected (403) -> doubles as antibot.", gold_reference: "TBD-curate-in-P1"}
+  # --- trading (5) ---
+  - {id: trading-01, category: trading, url: "https://www.forexfactory.com/calendar", type: trading, notes: "ForexFactory calendar; JS table impact/actual/forecast/prev; Cloudflare.", gold_reference: "TBD-curate-in-P1"}
+  - {id: trading-02, category: trading, url: "https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm", type: trading, notes: "CFTC COT index; report discovery.", gold_reference: "TBD-curate-in-P1"}
+  - {id: trading-03, category: trading, url: "https://www.investing.com/economic-calendar", type: trading, notes: "Investing.com calendar; dynamic grid; antibot.", gold_reference: "TBD-curate-in-P1"}
+  - {id: trading-04, category: trading, url: "https://www.dailyfx.com/economic-calendar", type: trading, notes: "DailyFX calendar; SPA-ish feed.", gold_reference: "TBD-curate-in-P1"}
+  - {id: trading-05, category: trading, url: "https://www.ecb.europa.eu/press/govcdec/mopo/html/index.en.html", type: trading, notes: "ECB monetary-policy decisions index; stable HTML.", gold_reference: "TBD-curate-in-P1"}
+  # --- antibot (4) ---
+  - {id: antibot-01, category: antibot, url: "https://www.forexfactory.com/market/goldusd", type: html, notes: "ForexFactory gold; Cloudflare JS challenge.", gold_reference: "TBD-curate-in-P1"}
+  - {id: antibot-02, category: antibot, url: "https://www.investing.com/currencies/xau-usd-news", type: html, notes: "Investing news; aggressive Cloudflare, often 403.", gold_reference: "TBD-curate-in-P1"}
+  - {id: antibot-03, category: antibot, url: "https://www.barchart.com/futures/quotes/GCY00/overview", type: html, notes: "Barchart gold futures; PerimeterX/HUMAN + cookie wall.", gold_reference: "TBD-curate-in-P1"}
+  - {id: antibot-04, category: antibot, url: "https://www.nasdaq.com/market-activity/commodities/gc:cmx", type: html, notes: "Nasdaq commodity quote; Akamai bot defense.", gold_reference: "TBD-curate-in-P1"}
+  # --- longform (4) ---
+  - {id: longform-01, category: longform, url: "https://en.wikipedia.org/wiki/Gold_as_an_investment", type: html, notes: "~10k words, tables, 60+ refs; truncation+table.", gold_reference: "gold/longform-01.md"}
+  - {id: longform-02, category: longform, url: "https://en.wikipedia.org/wiki/Bretton_Woods_system", type: html, notes: "Long macro/history; heavy footnotes.", gold_reference: "TBD-curate-in-P1"}
+  - {id: longform-03, category: longform, url: "https://en.wikipedia.org/wiki/Federal_Reserve", type: html, notes: "Very long, multi-section, infoboxes; truncation stress.", gold_reference: "gold/longform-03.md"}
+  - {id: longform-04, category: longform, url: "https://www.paulgraham.com/greatwork.html", type: html, notes: "10k+ word essay; near-zero boilerplate baseline.", gold_reference: "gold/longform-04.md"}
+  # --- longform: business / market-research (P1 enrichment 2026-06-24) ---
+  - {id: longform-05, category: longform, url: "https://en.wikipedia.org/wiki/Internet_of_things", type: html, notes: "IoT market/tech overview (SURIOTA business+firmware context). Long, tables, refs.", gold_reference: "TBD-curate-in-P1"}
+  - {id: longform-06, category: longform, url: "https://en.wikipedia.org/wiki/Electric_vehicle", type: html, notes: "EV market article - public market-research style longform.", gold_reference: "TBD-curate-in-P1"}
+
+search_queries:
+  - {id: q-01, query: "XAU/USD price drivers", type: factual, intent: "what moves gold vs USD (rates/DXY/real yields/risk)"}
+  - {id: q-02, query: "FOMC decision latest", type: news-recency, intent: "most recent FOMC rate decision; freshness"}
+  - {id: q-03, query: "CFTC COT gold positioning", type: entity, intent: "canonical CFTC COT gold report + interpretation"}
+  - {id: q-04, query: "gold price forecast 2026 investment banks", type: trading-macro, intent: "bank/research forecasts for end-2026 gold"}
+  - {id: q-05, query: "ECB monetary policy decision June 2026", type: news-recency, intent: "latest ECB Governing Council decision/rates"}
+  - {id: q-06, query: "ESP-IDF MCPWM servo control example", type: technical, intent: "SURIOTA firmware - ESP32 ESP-IDF docs/example (general-domain coverage)"}
+  - {id: q-07, query: "MQL5 OnTick expert advisor order_send example", type: technical, intent: "SURIOTA trading - MQL5/MetaTrader docs (general-domain coverage)"}
+  - {id: q-08, query: "ForexFactory economic calendar today high impact", type: trading-macro, intent: "locate live high-impact calendar feed"}
+  - {id: q-09, query: "transformer attention mechanism paper", type: entity, intent: "return arXiv 'Attention Is All You Need' as top"}
+  - {id: q-10, query: "best web scraping API for JavaScript heavy sites", type: general, intent: "competitive landscape; broad ranking + dedup"}
+  # --- broad general queries (P1 enrichment 2026-06-24) ---
+  - {id: q-11, query: "rust vs go performance benchmarks", type: general, intent: "broad technical comparison; many sources, dedup + ranking"}
+  - {id: q-12, query: "kubernetes vs docker swarm", type: general, intent: "orchestration comparison; canonical docs + opinion mix"}
+  - {id: q-13, query: "site reliability engineering best practices", type: general, intent: "SRE guidance; Google SRE book + broad coverage"}

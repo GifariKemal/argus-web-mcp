@@ -1,0 +1,88 @@
+# Argus - Web fetch/scrape/search MCP server
+# systemd unit for Unix socket + local HTTP binding on 127.0.0.1:8090
+# Deployed on Ubuntu 24.04 VPS, unprivileged user 'argus' + browser pool.
+# Coexists with Hermes (:80) and SUVA (:8080); nginx proxies public TLS subdomain -> 8090.
+
+[Unit]
+Description=Argus Web MCP Server
+Documentation=https://github.com/SURIOTA/argus-web-mcp
+After=network-online.target syslog.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+# Process identity: unprivileged 'argus' user, 'argus' group (created by provision.sh).
+User=argus
+Group=argus
+
+# Working directory: /opt/argus (where the app is cloned).
+# Virtual environment bin/ in the same directory for uvicorn + Playwright.
+WorkingDirectory=/opt/argus
+
+# Environment file: /etc/argus/argus.env
+# Sourced by systemd; contains ARGUS_TOKEN (bearer auth), optional LLM keys, etc.
+# File permissions: 0600, owned root:argus (only root+service can read secrets).
+EnvironmentFile=/etc/argus/argus.env
+
+# Paths: /opt/argus/.argus for cache (SQLite+disk), ~/.cache/ms-playwright for browser cache.
+# ProtectSystem=strict + ReadWritePaths limits writes to these two locations.
+ReadWritePaths=/opt/argus/.argus %h/.cache
+
+# Execution: uvicorn entry point.
+# --host 127.0.0.1 : bind loopback only (nginx is the public interface).
+# --port 8090 : chosen to avoid conflict with Hermes (:80) and SUVA (:8080).
+# --workers 1 : CRITICAL - single worker because Chromium browser pool is stateful and shared.
+# Scaling later requires browser-pool refactor (stateless HTTP + separate broker).
+ExecStart=/opt/argus/.venv/bin/uvicorn argus.server:app --host 127.0.0.1 --port 8090 --workers 1
+
+# Restart policy: transient failures (e.g., network blip, browser crash) should recover.
+# But don't spin infinitely on startup errors (StartLimitBurst=3 per 60s).
+Restart=on-failure
+RestartSec=5
+
+# Resource limits: prevent OOM from eating the whole VPS.
+# Chromium + browser pool are the heavy hitters.
+# 2 GB cap is conservative; adjust based on observed memory under load.
+MemoryMax=2G
+
+# Security hardening: minimize attack surface.
+# -- File system isolation --
+# ProtectSystem=strict : mount /usr /boot /etc read-only (exceptions via ReadWritePaths).
+# ProtectHome=true : hide /root /home (the app has no business there).
+# PrivateTmp=true : mount /tmp and /var/tmp in the service's private namespace.
+# Caveat: Chromium/Playwright need /dev/shm (shared memory for IPC).
+# ProtectSystem=strict does NOT hide /dev/shm (tmpfs, not /dev).
+# If you see "Cannot open display" or IPC errors, ProtectSystem=strict is the culprit;
+# downgrade to ProtectSystem=full or carve /dev/shm via ReadWritePaths.
+# For now, we keep strict; if Playwright fails, move to full and comment the caveat.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+# -- Process restrictions --
+# NoNewPrivileges=true : forbid setuid/setgid (can't escalate even if exploited).
+# PrivateDevices=true : no /dev/* except essentials (null, zero, full, random, urandom).
+# SystemCallFilter : optional; if stricter hardening is needed, whitelist syscalls.
+# (Omitted for now; adds maintenance burden. Revisit if security incident occurs.)
+NoNewPrivileges=true
+PrivateDevices=true
+
+# -- IPC & networking --
+# PrivateNetwork=false : keep network access (needed for external HTTP calls + SearXNG :8888 local).
+# PrivateIPC=true : isolate SysV IPC/mqueue from other processes.
+PrivateIPC=true
+
+# Logging: journal (systemd-journald).
+# All stdout/stderr captured; use `journalctl -u argus` to read.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus
+
+# User namespaces: optional, but helpful for unprivileged containment.
+# Uncomment if the Linux kernel version supports it (5.10+).
+# PrivateUsers=true
+
+[Install]
+# Enable by running: systemctl enable argus
+WantedBy=multi-user.target
