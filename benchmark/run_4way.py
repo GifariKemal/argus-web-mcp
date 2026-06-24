@@ -46,6 +46,20 @@ DEFAULT_REPORT = BENCH_DIR / "compare-4way-report.md"
 _URL_RE = re.compile(r"https?://[^\s<>()\]]+", re.IGNORECASE)
 SUBPROCESS_TIMEOUT_S = 240
 
+# gpt-5.5 public API pricing per 1M tokens (looked up 2026-06-25):
+# input $5, output $30, cached-input $0.50. Codex (subscription auth) reports
+# only a TOTAL token count - no input/output split - so codex $ is ESTIMATED at
+# a blended rate assuming a research-task mix of ~80% input / 20% output (the
+# 20% absorbs gpt-5.5 reasoning-high tokens, which bill as output):
+#   0.8*5 + 0.2*30 = $10 / 1M. Claude cost, by contrast, is the CLI's ACTUAL $.
+GPT55_INPUT_USD_PER_1M = 5.0
+GPT55_OUTPUT_USD_PER_1M = 30.0
+CODEX_OUTPUT_FRACTION = 0.20
+CODEX_BLENDED_USD_PER_1M = (
+    (1 - CODEX_OUTPUT_FRACTION) * GPT55_INPUT_USD_PER_1M
+    + CODEX_OUTPUT_FRACTION * GPT55_OUTPUT_USD_PER_1M
+)
+
 # Condition labels -> CLI family. Order is the canonical leaderboard order.
 CONDITIONS: dict[str, str] = {
     "claude-native": "claude",
@@ -168,6 +182,29 @@ def found(text: str) -> bool:
     return count_urls(text) >= 1 or len(text.strip()) > 40
 
 
+def estimate_codex_cost(total_tokens: float | None) -> float | None:
+    """Estimated USD for a codex run from its TOTAL token count (pure).
+
+    Codex exposes only total tokens (no input/output split), so this is a
+    blended-rate ESTIMATE (see CODEX_BLENDED_USD_PER_1M), not an actual bill.
+    """
+    if total_tokens is None:
+        return None
+    return round(total_tokens / 1_000_000 * CODEX_BLENDED_USD_PER_1M, 4)
+
+
+def effective_cost(condition: str, mean_cost_usd: float | None,
+                   mean_total_tokens: float | None) -> tuple[float | None, bool]:
+    """Cost to display for a condition: (value, is_estimated) (pure).
+
+    Claude conditions report an ACTUAL cost; codex conditions have none, so we
+    return the token-derived estimate flagged as estimated.
+    """
+    if CONDITIONS.get(condition) == "claude":
+        return mean_cost_usd, False
+    return estimate_codex_cost(mean_total_tokens), True
+
+
 def _mean(values: list) -> float | None:
     """Mean over non-None values; None if there are none."""
     vals = [v for v in values if v is not None]
@@ -234,7 +271,7 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
     # (1) Leaderboard.
     parts.append("\n## Per-condition leaderboard\n")
     parts.append(
-        "| condition | n | found | mean_tokens | median_tokens | mean_cost_usd | "
+        "| condition | n | found | mean_tokens | median_tokens | cost_usd | "
         "mean_latency_s | mean_urls | mean_words |\n"
     )
     parts.append("|---|---|---|---|---|---|---|---|---|\n")
@@ -242,12 +279,21 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
         a = by_condition.get(cond)
         if not a:
             continue
+        cost, est = effective_cost(cond, a["mean_cost_usd"], a["mean_total_tokens"])
+        cost_cell = _fmt(cost) + ("*" if est and cost is not None else "")
         parts.append(
             f"| {cond} | {a['n']} | {a['found_count']} | "
             f"{_fmt(a['mean_total_tokens'])} | {_fmt(a['median_total_tokens'])} | "
-            f"{_fmt(a['mean_cost_usd'])} | {_fmt(a['mean_latency_s'])} | "
+            f"{cost_cell} | {_fmt(a['mean_latency_s'])} | "
             f"{_fmt(a['mean_urls'])} | {_fmt(a['mean_answer_words'])} |\n"
         )
+    parts.append(
+        f"\n_`cost_usd`: Claude = actual (CLI-reported). Codex = `*`ESTIMATE_ "
+        f"(codex reports only total tokens; blended gpt-5.5 rate "
+        f"${CODEX_BLENDED_USD_PER_1M:.2f}/1M, ~{int(CODEX_OUTPUT_FRACTION*100)}% "
+        f"output assumed: input ${GPT55_INPUT_USD_PER_1M:.0f} / output "
+        f"${GPT55_OUTPUT_USD_PER_1M:.0f} per 1M).\n"
+    )
 
     # (2) WITH vs WITHOUT Argus deltas, per CLI.
     parts.append("\n## WITH vs WITHOUT Argus\n")
@@ -257,9 +303,9 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
     )
     parts.append(
         "| CLI | native tokens | argus tokens | token change | "
-        "url breadth delta | words delta |\n"
+        "native cost | argus cost | url breadth delta | words delta |\n"
     )
-    parts.append("|---|---|---|---|---|---|\n")
+    parts.append("|---|---|---|---|---|---|---|---|\n")
     for cli, native, argus in (
         ("Claude", "claude-native", "claude-argus"),
         ("Codex", "codex-native", "codex-argus"),
@@ -268,9 +314,13 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
         arg = by_condition.get(argus, {})
         nat_tok = nat.get("mean_total_tokens")
         arg_tok = arg.get("mean_total_tokens")
+        nat_cost, nat_est = effective_cost(native, nat.get("mean_cost_usd"), nat_tok)
+        arg_cost, arg_est = effective_cost(argus, arg.get("mean_cost_usd"), arg_tok)
+        nat_cc = _fmt(nat_cost) + ("*" if nat_est and nat_cost is not None else "")
+        arg_cc = _fmt(arg_cost) + ("*" if arg_est and arg_cost is not None else "")
         parts.append(
             f"| {cli} | {_fmt(nat_tok)} | {_fmt(arg_tok)} | "
-            f"{_pct_change(nat_tok, arg_tok)} | "
+            f"{_pct_change(nat_tok, arg_tok)} | {nat_cc} | {arg_cc} | "
             f"{_delta(nat.get('mean_urls'), arg.get('mean_urls'))} | "
             f"{_delta(nat.get('mean_answer_words'), arg.get('mean_answer_words'))} |\n"
         )

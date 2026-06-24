@@ -197,3 +197,17 @@ def test_build_command_shapes():
     # Codex takes the env-var NAME, not the literal token (auth via ARGUS_TOKEN env).
     assert any("mcp_servers.argus.bearer_token_env_var=ARGUS_TOKEN" in a for a in cx_argus)
     assert not any("bearer_token=tok" in a for a in cx_argus)
+
+
+def test_codex_cost_estimate_and_effective_cost():
+    # blended gpt-5.5 rate = 0.8*5 + 0.2*30 = $10 / 1M
+    assert r4.CODEX_BLENDED_USD_PER_1M == 10.0
+    assert r4.estimate_codex_cost(1_000_000) == 10.0
+    assert r4.estimate_codex_cost(55_000) == round(55_000 / 1e6 * 10, 4)
+    assert r4.estimate_codex_cost(None) is None
+    # Claude -> actual cost, not flagged estimate.
+    val, est = r4.effective_cost("claude-native", 0.66, 32_000)
+    assert val == 0.66 and est is False
+    # Codex -> token-derived estimate, flagged.
+    val, est = r4.effective_cost("codex-native", None, 55_000)
+    assert est is True and val == r4.estimate_codex_cost(55_000)
