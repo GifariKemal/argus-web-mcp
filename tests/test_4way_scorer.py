@@ -194,4 +194,6 @@ def test_build_command_shapes():
 
     cx_argus = r4._build_command("codex-argus", prompt, argus)
     assert any("mcp_servers.argus.url=" in a for a in cx_argus)
-    assert any("mcp_servers.argus.bearer_token=tok" in a for a in cx_argus)
+    # Codex takes the env-var NAME, not the literal token (auth via ARGUS_TOKEN env).
+    assert any("mcp_servers.argus.bearer_token_env_var=ARGUS_TOKEN" in a for a in cx_argus)
+    assert not any("bearer_token=tok" in a for a in cx_argus)

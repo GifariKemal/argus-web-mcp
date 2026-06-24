@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -388,7 +390,10 @@ def _build_command(condition: str, prompt: str, argus: dict | None) -> list[str]
             "-c", f"mcp_servers.argus.url={url}",
         ]
         if token:
-            cmd += ["-c", f"mcp_servers.argus.bearer_token={token}"]
+            # Codex streamable_http MCP rejects a literal `bearer_token`; it takes
+            # `bearer_token_env_var` (the NAME of an env var). The runner injects
+            # ARGUS_TOKEN into the codex-argus subprocess env (never on argv).
+            cmd += ["-c", "mcp_servers.argus.bearer_token_env_var=ARGUS_TOKEN"]
         cmd.append(prompt)
         return cmd
     raise ValueError(f"unknown condition: {condition}")
@@ -420,13 +425,28 @@ def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
         rec["error"] = f"build:{type(e).__name__}:{e}"
         return rec
 
+    # Resolve the CLI to its real path (Windows npm shims are `claude.CMD` /
+    # `codex.CMD`; a bare name fails CreateProcess with FileNotFoundError).
+    cmd = [shutil.which(cmd[0]) or cmd[0], *cmd[1:]]
+
+    # codex-argus authenticates via the ARGUS_TOKEN env var (see _build_command);
+    # inject it into this child only, never onto the command line.
+    env = None
+    if condition == "codex-argus" and argus is not None:
+        _, token = _argus_url_and_token(argus)
+        if token:
+            env = {**os.environ, "ARGUS_TOKEN": token}
+
     t0 = time.perf_counter()
     try:
         proc = subprocess.run(  # noqa: S603 - argv list, no shell
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=SUBPROCESS_TIMEOUT_S,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         rec["latency_s"] = round(time.perf_counter() - t0, 3)
@@ -445,9 +465,11 @@ def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
         rec["cost_usd"] = parsed["cost_usd"]
         answer = parsed["answer_text"]
     else:
-        parsed = parse_codex_tokens(proc.stdout)
+        # Codex prints the clean answer to STDOUT and the "tokens used" line to
+        # STDERR; parse tokens from both streams, prefer stdout for the answer.
+        parsed = parse_codex_tokens((proc.stdout or "") + "\n" + (proc.stderr or ""))
         rec["total_tokens"] = parsed["total_tokens"]
-        answer = parsed["answer_text"]
+        answer = (proc.stdout or "").strip() or parsed["answer_text"]
 
     rec["urls"] = count_urls(answer)
     rec["words"] = len(answer.split())
@@ -502,6 +524,7 @@ def run_sweep(args) -> None:
     records: list[dict] = []
     first = True
     total = len(items) * len(conds)
+    out_path = Path(args.out)
     for s in items:
         for cond in conds:
             if not first:
@@ -509,14 +532,18 @@ def run_sweep(args) -> None:
             first = False
             rec = _run_one(cond, s, argus)
             records.append(rec)
+            # Write the JSON after EVERY record so a long sweep is partial-readable
+            # and survives an interrupt (resume-friendly); flush progress so a
+            # backgrounded run is monitorable (output is otherwise block-buffered).
+            out_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
             print(
                 f"  [{len(records)}/{total}] {s['id']} {cond} "
-                f"tokens={rec['total_tokens']} err={rec['error']}",
+                f"tokens={rec['total_tokens']} lat={rec['latency_s']}s err={rec['error']}",
                 file=sys.stderr,
+                flush=True,
             )
 
-    Path(args.out).write_text(json.dumps(records, indent=2), encoding="utf-8")
-    print(f"wrote {len(records)} records ({len(items)}x{len(conds)}) -> {args.out}")
+    print(f"wrote {len(records)} records ({len(items)}x{len(conds)}) -> {args.out}", flush=True)
 
 
 def run_score(args) -> None:
