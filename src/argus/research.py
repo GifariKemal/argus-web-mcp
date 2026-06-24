@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 # Per-source content budget (chars) when building the answer-synthesis context, so a
 # handful of long articles still fit the model window. Truncation is LOGGED, never silent.
 ANSWER_SOURCE_BUDGET = 4000
+# Minimum extracted word count for a source to land in sources; below this
+# the page is treated as a low-quality stub (nav/footer noise) and moved to failed.
+MIN_CONTENT_WORDS = 30
 
 
 def _dedup_results(results: list[dict], limit: int) -> list[dict]:
@@ -60,8 +63,11 @@ async def _read_one(url, *, fetch_fn, client, browser, timeout, sem) -> dict:
             art = extract_article(res["html"], res["final_url"])
         except (SSRFError, FetchError) as exc:
             return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
-        if not art["content"]:
+        word_count = art["metadata"]["word_count"]
+        if not word_count:
             return {"url": url, "ok": False, "error": "empty_content"}
+        if word_count < MIN_CONTENT_WORDS:
+            return {"url": url, "ok": False, "error": "low_content"}
         return {
             "url": url,
             "ok": True,
@@ -75,22 +81,37 @@ async def _read_one(url, *, fetch_fn, client, browser, timeout, sem) -> dict:
 
 
 async def _deep_bundle(
-    top, *, fetch_fn, client, browser, timeout, concurrency
+    candidates, *, fetch_fn, client, browser, timeout, concurrency, target: int = 0
 ) -> tuple[list, list]:
-    """Fetch+extract the deduped `top` results in parallel -> (sources, failed)."""
+    """Fetch+extract `candidates` in waves until `target` good sources collected.
+
+    `target=0` (or target >= len(candidates)) fetches the whole list in one wave
+    (original behaviour).  When target > 0 and the first wave yields enough good
+    sources, spare candidates are left untouched (no wasted fetches).
+    """
     fetch_fn = fetch_fn or _default_fetch
     sem = asyncio.Semaphore(concurrency)
-    records = await asyncio.gather(
-        *(
-            _read_one(
-                r["url"], fetch_fn=fetch_fn, client=client, browser=browser,
-                timeout=timeout, sem=sem,
+    sources: list[dict] = []
+    failed: list[dict] = []
+    i = 0
+    want = target or len(candidates)  # 0 -> fetch all
+    while i < len(candidates) and len(sources) < want:
+        wave = candidates[i : i + (want - len(sources))]
+        i += len(wave)
+        records = await asyncio.gather(
+            *(
+                _read_one(
+                    r["url"], fetch_fn=fetch_fn, client=client, browser=browser,
+                    timeout=timeout, sem=sem,
+                )
+                for r in wave
             )
-            for r in top
         )
-    )
-    sources = [{k: v for k, v in r.items() if k != "ok"} for r in records if r["ok"]]
-    failed = [{"url": r["url"], "error": r["error"]} for r in records if not r["ok"]]
+        for r in records:
+            if r["ok"]:
+                sources.append({k: v for k, v in r.items() if k != "ok"})
+            else:
+                failed.append({"url": r["url"], "error": r["error"]})
     return sources, failed
 
 
@@ -180,7 +201,8 @@ async def research(
 
     search_fn = search_fn or _default_search
     found = await search_fn(query, count=max_sources * 2)  # overfetch for dedup/drop
-    top = _dedup_results(found.get("results", []), max_sources)
+    candidates = _dedup_results(found.get("results", []), max_sources * 2)
+    top = candidates[:max_sources]  # quick-mode lightweight slice
 
     if mode == "quick":
         sources = [
@@ -208,8 +230,8 @@ async def research(
         llm_fn = extract_llm
 
     sources, failed = await _deep_bundle(
-        top, fetch_fn=fetch_fn, client=client, browser=browser,
-        timeout=timeout, concurrency=concurrency,
+        candidates, fetch_fn=fetch_fn, client=client, browser=browser,
+        timeout=timeout, concurrency=concurrency, target=max_sources,
     )
 
     if mode == "deep":

@@ -388,3 +388,202 @@ async def test_live_scholar_search():
     for r in out["results"]:
         assert r["title"]
         assert r["citations"] is not None or r["doi"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# FIX A -- S2 retry on 429 (up to 2 retries, backoff, sleep injected)
+# --------------------------------------------------------------------------- #
+@respx.mock
+async def test_s2_429_retries_twice_then_uses_s2_on_third_success(monkeypatch):
+    import asyncio
+    slept = []
+    async def _fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    responses = [
+        httpx.Response(429, json={"message": "rate"}),
+        httpx.Response(429, json={"message": "rate"}),
+        httpx.Response(200, json={"data": [_s2_paper(1)]}),
+    ]
+    idx = {"i": 0}
+    def _side(request):
+        r = responses[idx["i"]]
+        idx["i"] += 1
+        return r
+    respx.get(_S2_SEARCH).mock(side_effect=_side)
+    cr = respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("attention", client=client)
+    assert out["source"] == "semantic_scholar"
+    assert not cr.called
+    assert len(slept) == 2
+    assert slept[0] == pytest.approx(0.5 * 2**0)
+    assert slept[1] == pytest.approx(0.5 * 2**1)
+
+
+@respx.mock
+async def test_s2_429_exhausted_falls_back_to_crossref(monkeypatch):
+    import asyncio
+    slept = []
+    async def _fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    respx.get(_S2_SEARCH).mock(return_value=httpx.Response(429, json={"message": "rate"}))
+    cr = respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("attention", client=client)
+    assert out["source"] == "crossref"
+    assert cr.called
+    assert len(slept) == 2
+
+
+@respx.mock
+async def test_s2_non_429_error_no_retry(monkeypatch):
+    import asyncio
+    slept = []
+    async def _fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    respx.get(_S2_SEARCH).mock(return_value=httpx.Response(503, json={"message": "down"}))
+    respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("x", client=client)
+    assert out["source"] == "crossref"
+    assert not slept
+
+
+@respx.mock
+async def test_s2_transport_error_no_retry(monkeypatch):
+    import asyncio
+    slept = []
+    async def _fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    respx.get(_S2_SEARCH).mock(side_effect=httpx.ConnectError("boom"))
+    respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("x", client=client)
+    assert out["source"] == "crossref"
+    assert not slept
+
+
+# --------------------------------------------------------------------------- #
+# FIX B -- relevance rerank (both backends)
+# --------------------------------------------------------------------------- #
+def _s2_paper_titled(title, *, citations=100, year=2020):
+    return {
+        "title": title,
+        "authors": [{"name": "Author A"}],
+        "year": year,
+        "venue": "Some Venue",
+        "citationCount": citations,
+        "externalIds": {"DOI": "10.0/x"},
+        "abstract": "Abstract.",
+        "url": "https://www.semanticscholar.org/paper/x",
+        "openAccessPdf": None,
+    }
+
+
+@respx.mock
+async def test_rerank_s2_surfaces_canonical_above_derivatives():
+    query = "transformer attention is all you need paper"
+    papers = [
+        _s2_paper_titled("Patches Are All You Need", citations=500, year=2021),
+        _s2_paper_titled("Attention Is All You Need", citations=87000, year=2017),
+        _s2_paper_titled("MLP-Mixer Is All You Need", citations=200, year=2022),
+    ]
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    assert out["results"][0]["title"] == "Attention Is All You Need"
+
+
+@respx.mock
+async def test_rerank_crossref_surfaces_canonical_above_derivatives(monkeypatch):
+    import asyncio
+    async def _noop_sleep(s):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    query = "transformer attention is all you need paper"
+    works = [
+        {
+            "title": ["Patches Are All You Need"],
+            "author": [{"given": "A", "family": "B"}],
+            "published": {"date-parts": [[2021]]},
+            "container-title": ["ICLR"],
+            "is-referenced-by-count": 500,
+            "DOI": "10.0/patch",
+            "URL": "https://doi.org/10.0/patch",
+        },
+        {
+            "title": ["Attention Is All You Need"],
+            "author": [{"given": "Ashish", "family": "Vaswani"}],
+            "published": {"date-parts": [[2017]]},
+            "container-title": ["NeurIPS"],
+            "is-referenced-by-count": 87000,
+            "DOI": "10.0/vaswani",
+            "URL": "https://doi.org/10.0/vaswani",
+        },
+        {
+            "title": ["MLP-Mixer Is All You Need"],
+            "author": [{"given": "C", "family": "D"}],
+            "published": {"date-parts": [[2022]]},
+            "container-title": ["ICML"],
+            "is-referenced-by-count": 200,
+            "DOI": "10.0/mlp",
+            "URL": "https://doi.org/10.0/mlp",
+        },
+    ]
+    respx.get(_S2_SEARCH).mock(return_value=httpx.Response(429, json={"message": "rate"}))
+    respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": works}})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    assert out["results"][0]["title"] == "Attention Is All You Need"
+
+
+@respx.mock
+async def test_rerank_stable_on_equal_overlap():
+    query = "deep learning survey"
+    papers = [
+        _s2_paper_titled("A Deep Learning Survey", citations=50, year=2020),
+        _s2_paper_titled("Another Deep Learning Survey", citations=200, year=2021),
+        _s2_paper_titled("Unrelated Topic Paper", citations=9999, year=2022),
+    ]
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    titles = [r["title"] for r in out["results"]]
+    assert titles[0] == "Another Deep Learning Survey"
+    assert titles[1] == "A Deep Learning Survey"
+    assert titles[2] == "Unrelated Topic Paper"
+
+
+@respx.mock
+async def test_rerank_none_citations_treated_as_minus_one():
+    query = "neural network training"
+    papers = [
+        _s2_paper_titled("Neural Network Training", citations=None, year=2020),
+        _s2_paper_titled("Neural Network Training Methods", citations=0, year=2019),
+    ]
+    papers[0]["citationCount"] = None
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    assert out["results"][0]["citations"] == 0
+    assert out["results"][1]["citations"] is None

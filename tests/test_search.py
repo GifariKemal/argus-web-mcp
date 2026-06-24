@@ -1044,3 +1044,125 @@ async def test_search_passes_semantic_auto(monkeypatch):
     out = await search("zzqq", base_url=BASE)
     urls = [r["url"] for r in out["results"]]
     assert "https://para.example.com" in urls  # rescued by semantic despite zero overlap
+
+
+# --------------------------------------------------------------------------- #
+# 16. relative-relevance gate (_REL_FLOOR) - gentle backfill trimming
+# --------------------------------------------------------------------------- #
+def test_rel_floor_trims_weak_backfill_on_lexical_path():
+    # Mirrors the live failure: 3 strong GitHub results + 2 weak Docker Hub results
+    # whose only overlap with "ESP-IDF wifi provisioning manager" is the single generic
+    # token "manager" in the snippet.  All five survive the zero-overlap drop (they all
+    # have non-zero overlap), but the 2 weak ones have
+    #   score = 0.2   (1 snippet token / 5 query tokens)
+    # while the strong ones have
+    #   score = 3.0   (full title + full snippet coverage)
+    # Ratio = 0.2 / 3.0 = 0.067 << _REL_FLOOR (0.25) -> gate trims them.
+    # Use distinct titles to avoid title-dedup collapsing the 3 strong results.
+    query = "ESP-IDF wifi provisioning manager"
+    strong = [
+        _mapped(
+            f"ESP-IDF Wifi Provisioning Manager doc {i}",
+            f"https://github.com/espressif/esp-idf/{i}",
+            "esp idf wifi provisioning manager component",
+        )
+        for i in range(3)
+    ]
+    weak = [
+        _mapped(
+            f"cert-manager Docker Hub image {i}",
+            f"https://hub.docker.com/r/cert-manager/{i}",
+            "kubernetes certificate manager container image",
+        )
+        for i in range(2)
+    ]
+    out = rerank(query, strong + weak)
+    urls = [r["url"] for r in out]
+    # 3 strong results kept
+    assert len(out) == 3
+    for r in strong:
+        assert r["url"] in urls
+    # 2 weak backfill trimmed
+    for r in weak:
+        assert r["url"] not in urls
+
+
+def test_rel_floor_does_not_fire_on_equal_moderate_overlap():
+    # 5 results all with the SAME moderate score (2 of 5 query tokens in title).
+    # top_score == every result's score -> ratio == 1.0 for all -> gate never fires.
+    query = "ESP-IDF wifi provisioning manager"
+    results = [
+        _mapped(
+            f"ESP-IDF provisioning doc {i}",
+            f"https://docs.example.com/{i}",
+            "some unrelated body",
+        )
+        for i in range(5)
+    ]
+    out = rerank(query, results)
+    # All 5 must be kept; no result was trimmed.
+    assert len(out) == 5
+
+
+def test_rel_floor_respects_min_keep_floor():
+    # 2 strong + 1 weak (total = 3 = _MIN_KEEP).  The weak result ratio
+    # (cert-manager: score=0.60, top=3.0, ratio=0.20 < _REL_FLOOR=0.25) would
+    # trigger the gate, but dropping it leaves only 2 < _MIN_KEEP -- so the floor
+    # blocks the drop and all 3 are kept.  Use distinct titles to avoid dedup.
+    query = "ESP-IDF wifi provisioning manager"
+    strong = [
+        _mapped(
+            "ESP-IDF Wifi Provisioning Manager Guide",
+            "https://github.com/espressif/esp-idf/0",
+            "esp idf wifi provisioning manager",
+        ),
+        _mapped(
+            "ESP-IDF Provisioning Manager API",
+            "https://github.com/espressif/esp-idf/1",
+            "esp idf wifi provisioning manager",
+        ),
+    ]
+    weak = _mapped(
+        "cert-manager Docker Hub",
+        "https://hub.docker.com/r/cert-manager/0",
+        "kubernetes certificate manager container",
+    )
+    out = rerank(query, strong + [weak])
+    assert len(out) == 3  # floor prevents drop below _MIN_KEEP
+    assert weak["url"] in [r["url"] for r in out]
+
+
+def test_rel_floor_trims_weak_backfill_on_hybrid_path(monkeypatch):
+    # Same scenario as test_rel_floor_trims_weak_backfill_on_lexical_path but with
+    # the hybrid semantic path enabled.  Use distinct titles to avoid title-dedup.
+    # strong: lex=3.0, lex_norm=1.0, sem=0.90 -> blended=0.6*0.90+0.4*1.0=0.94
+    # weak  : lex=0.6, lex_norm=0.6/3.0=0.20, sem=0.10 -> blended=0.6*0.10+0.4*0.20=0.14
+    # ratio = 0.14/0.94 = 0.149 < _REL_FLOOR (0.25) -> gate trims the 2 weak results.
+    _enable_semantic(monkeypatch, {
+        "ESP-IDF Wifi Provisioning Manager": 0.90,
+        "cert-manager Docker Hub": 0.10,
+    })
+    query = "ESP-IDF wifi provisioning manager"
+    strong = [
+        _mapped(
+            f"ESP-IDF Wifi Provisioning Manager doc {i}",
+            f"https://github.com/espressif/esp-idf/{i}",
+            "esp idf wifi provisioning manager component",
+        )
+        for i in range(3)
+    ]
+    weak = [
+        _mapped(
+            f"cert-manager Docker Hub image {i}",
+            f"https://hub.docker.com/r/cert-manager/{i}",
+            "kubernetes certificate manager container image",
+        )
+        for i in range(2)
+    ]
+    out = rerank(query, strong + weak)
+    urls = [r["url"] for r in out]
+    assert len(out) == 3
+    for r in strong:
+        assert r["url"] in urls
+    for r in weak:
+        assert r["url"] not in urls

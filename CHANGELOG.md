@@ -14,6 +14,16 @@ All notable changes. Dates are absolute. Argus went from research -> 20-tool, se
 
 ## [Unreleased] - feature-complete locally, deploy pending
 
+### Quality tuning (branch tune/argus-quality-bench-deploy, PR #1) - 2026-06-24
+Surfaced by live end-to-end testing of the deployed MCP; focus on deep-research power.
+- **scholar**: retry Semantic Scholar on 429 (2x bounded backoff) so the richer S2 backend is used; rerank by query/title overlap then citations so the canonical highly-cited paper beats derivative "X is All You Need" titles.
+- **research (deep mode)**: `MIN_CONTENT_WORDS=30` low-content floor moves near-empty stub pages (e.g. a bare video page) to `failed` as `low_content`; **source backfill** keeps pulling from the overfetched candidate pool until `max_sources` GOOD sources or pool exhausted (failures no longer shrink the bundle; happy path does no extra fetches).
+- **search**: gentle relative-relevance gate (`_REL_FLOOR=0.25`) trims clearly-weak backfill (off-topic single-generic-token matches) without hurting recall or the `_MIN_KEEP=3` floor; consistent across lexical + hybrid paths.
+- 18 new tests; 544 offline green; ruff clean; SSRF 100% intact.
+
+### Safe auto-update (branch tune/argus-quality-bench-deploy)
+- `deploy/argus-update.sh` + `.service` + `.timer`: pull-only (no inbound port) poll of `main` every 5 min, fast-forward only, reinstall deps only on manifest change, restart, `/health`-gate, and **auto-rollback** to the prior commit on failure. Runbook in `deploy/README.md`.
+
 ### Hardening & ops
 - **Streaming body-size cap** - `fetch/static.py` aborts a chunked/no-Content-Length body once it exceeds 32 MB (true OOM guard, not just the header check).
 - **Per-host throttle + circuit breaker** - `fetch/throttle.py`: courtesy delay between same-host requests + closed->open->half-open breaker; wired into `fetch()` (default-off in tests).

@@ -605,3 +605,186 @@ async def test_answer_mode_search_error_reraised():
             llm_fn=_fake_llm("x"),
         )
     assert ei.value.code == "search_backend_down"
+
+
+# A page that renders to a handful of nav/footer words only (~7 words) -- well
+# under the MIN_CONTENT_WORDS floor but non-empty (Tier 3 markdownify recovers
+# the nav text). Simulates a YouTube watch page with no article body.
+STUB_HTML = (
+    "<html><head><title>Watch - YouTube</title></head><body>"
+    "<nav>Home About Contact Shorts Subscriptions Library History</nav>"
+    "<footer>Copyright Privacy Terms</footer>"
+    "</body></html>"
+)
+
+
+# --------------------------------------------------------------------------- #
+# 17. low-content stub (< MIN_CONTENT_WORDS) -> failed with "low_content"
+# --------------------------------------------------------------------------- #
+async def test_low_content_stub_excluded_from_sources():
+    """A near-empty page (nav/footer only, ~7 words) must land in failed, not sources."""
+    from argus.research import MIN_CONTENT_WORDS
+
+    results = [_search_result(1, url="https://www.youtube.com/watch?v=abc")]
+    html = {"https://www.youtube.com/watch?v=abc": STUB_HTML}
+
+    out = await research(
+        "IoT gateway tutorial",
+        max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 0
+    assert out["sources"] == []
+    assert len(out["failed"]) == 1
+    f = out["failed"][0]
+    assert f["url"] == "https://www.youtube.com/watch?v=abc"
+    assert f["error"] == "low_content"
+    # Sanity: the stub really is below floor
+    from argus.extract.article import extract_article
+    art = extract_article(STUB_HTML, "https://www.youtube.com/watch?v=abc")
+    assert art["metadata"]["word_count"] < MIN_CONTENT_WORDS
+
+
+# --------------------------------------------------------------------------- #
+# 18. healthy source (500+ words) is kept in sources
+# --------------------------------------------------------------------------- #
+async def test_healthy_source_kept_in_sources():
+    """A multi-hundred-word article must still appear in sources after the floor is added."""
+    results = [_search_result(1)]
+    html = {"https://example.com/1": ARTICLE_HTML}
+
+    out = await research(
+        "gold IoT",
+        max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 1
+    assert len(out["sources"]) == 1
+    assert out["sources"][0]["url"] == "https://example.com/1"
+    assert out["failed"] == []
+    assert out["sources"][0]["word_count"] >= 30
+
+
+# --------------------------------------------------------------------------- #
+# 19. mix: 1 healthy + 1 stub -> count==1 and failed has 1 low_content entry
+# --------------------------------------------------------------------------- #
+async def test_mix_healthy_and_stub_keeps_only_healthy():
+    """One healthy source + one stub: sources=[healthy], failed=[{stub, low_content}]."""
+    results = [
+        _search_result(1),
+        _search_result(2, url="https://www.youtube.com/watch?v=abc"),
+    ]
+    html = {
+        "https://example.com/1": ARTICLE_HTML,
+        "https://www.youtube.com/watch?v=abc": STUB_HTML,
+    }
+
+    out = await research(
+        "IoT ESP32",
+        max_sources=2,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 1
+    assert [s["url"] for s in out["sources"]] == ["https://example.com/1"]
+    assert len(out["failed"]) == 1
+    assert out["failed"][0]["url"] == "https://www.youtube.com/watch?v=abc"
+    assert out["failed"][0]["error"] == "low_content"
+
+
+# --------------------------------------------------------------------------- #
+# 20. backfill: failures in first wave -> pull spares until max_sources good
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_on_partial_failure():
+    """Candidates 1 and 3 fail; spares 4 and 5 must backfill to reach max_sources=3."""
+    # search returns 6 results (max_sources*2 overfetch for 3)
+    results = [_search_result(i) for i in range(1, 7)]
+    html = {
+        "https://example.com/1": FetchError("timeout", "boom"),     # fails
+        "https://example.com/2": ARTICLE_HTML,                       # ok
+        "https://example.com/3": EMPTY_HTML,                         # empty_content
+        "https://example.com/4": ARTICLE_HTML,                       # ok (backfill)
+        "https://example.com/5": ARTICLE_HTML,                       # ok (backfill)
+        "https://example.com/6": ARTICLE_HTML,                       # spare (not needed)
+    }
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 3
+    good_urls = [s["url"] for s in out["sources"]]
+    assert "https://example.com/2" in good_urls
+    assert "https://example.com/4" in good_urls
+    assert "https://example.com/5" in good_urls
+    # search rank order preserved: 2 before 4 before 5
+    assert good_urls == ["https://example.com/2", "https://example.com/4", "https://example.com/5"]
+    # both failures recorded
+    failed_urls = {f["url"] for f in out["failed"]}
+    assert "https://example.com/1" in failed_urls
+    assert "https://example.com/3" in failed_urls
+    assert len(out["failed"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# 21. backfill: candidate pool exhausted before max_sources reached
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_pool_exhausted():
+    """Only 2 good sources exist in total; must return 2 (not hang/error)."""
+    results = [_search_result(i) for i in range(1, 5)]  # 4 candidates total
+    html = {
+        "https://example.com/1": FetchError("timeout", "boom"),
+        "https://example.com/2": ARTICLE_HTML,
+        "https://example.com/3": EMPTY_HTML,
+        "https://example.com/4": ARTICLE_HTML,
+    }
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,   # want 3 but only 2 good exist
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 2
+    assert [s["url"] for s in out["sources"]] == [
+        "https://example.com/2",
+        "https://example.com/4",
+    ]
+    failed_urls = {f["url"] for f in out["failed"]}
+    assert "https://example.com/1" in failed_urls
+    assert "https://example.com/3" in failed_urls
+    assert len(out["failed"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# 22. backfill: happy path -> NO extra fetches beyond max_sources
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_no_waste_on_happy_path():
+    """When the first max_sources candidates all succeed, no spare candidates are fetched."""
+    results = [_search_result(i) for i in range(1, 7)]  # 6 candidates (overfetch 3*2)
+    html = {f"https://example.com/{i}": ARTICLE_HTML for i in range(1, 7)}
+    rec_fetch = {}
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html, recorder=rec_fetch),
+    )
+
+    assert out["count"] == 3
+    assert out["failed"] == []
+    # Exactly 3 fetches -- spares 4,5,6 must NOT be touched
+    assert rec_fetch["calls"] == 3
