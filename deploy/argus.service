@@ -6,7 +6,7 @@
 [Unit]
 Description=Argus Web MCP Server
 Documentation=https://github.com/SURIOTA/argus-web-mcp
-After=network-online.target syslog.target
+After=network-online.target syslog.target docker.service
 Wants=network-online.target
 StartLimitIntervalSec=60
 StartLimitBurst=3
@@ -16,25 +16,28 @@ StartLimitBurst=3
 User=argus
 Group=argus
 
-# Working directory: /opt/argus (where the app is cloned).
-# Virtual environment bin/ in the same directory for uvicorn + Playwright.
-WorkingDirectory=/opt/argus
+# Working directory: /opt/argus/app (the cloned repo).
+# Virtual environment bin/ lives at /opt/argus/app/.venv for uvicorn + Playwright.
+WorkingDirectory=/opt/argus/app
 
 # Environment file: /etc/argus/argus.env
 # Sourced by systemd; contains ARGUS_TOKEN (bearer auth), optional LLM keys, etc.
-# File permissions: 0600, owned root:argus (only root+service can read secrets).
+# File permissions: 0640, owned root:argus (only root+service group read secrets).
 EnvironmentFile=/etc/argus/argus.env
 
-# Paths: /opt/argus/.argus for cache (SQLite+disk), ~/.cache/ms-playwright for browser cache.
-# ProtectSystem=strict + ReadWritePaths limits writes to these two locations.
-ReadWritePaths=/opt/argus/.argus %h/.cache
+# Writable paths (ProtectSystem=strict makes everything else read-only). All
+# three MUST pre-exist and be owned by argus:argus before first start:
+#   /opt/argus/.argus    content-addressed cache (SQLite + blobs; ~/.argus default)
+#   /opt/argus/.cache    Playwright + fastembed/HF model caches (~/.cache)
+#   /opt/argus/.crawl4ai Crawl4AI robots/db cache (~/.crawl4ai)
+ReadWritePaths=/opt/argus/.argus /opt/argus/.cache /opt/argus/.crawl4ai
 
 # Execution: uvicorn entry point.
 # --host 127.0.0.1 : bind loopback only (nginx is the public interface).
 # --port 8090 : chosen to avoid conflict with Hermes (:80) and SUVA (:8080).
 # --workers 1 : CRITICAL - single worker because Chromium browser pool is stateful and shared.
 # Scaling later requires browser-pool refactor (stateless HTTP + separate broker).
-ExecStart=/opt/argus/.venv/bin/uvicorn argus.server:app --host 127.0.0.1 --port 8090 --workers 1
+ExecStart=/opt/argus/app/.venv/bin/uvicorn argus.server:app --host 127.0.0.1 --port 8090 --workers 1
 
 # Restart policy: transient failures (e.g., network blip, browser crash) should recover.
 # But don't spin infinitely on startup errors (StartLimitBurst=3 per 60s).
