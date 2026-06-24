@@ -695,3 +695,96 @@ async def test_mix_healthy_and_stub_keeps_only_healthy():
     assert len(out["failed"]) == 1
     assert out["failed"][0]["url"] == "https://www.youtube.com/watch?v=abc"
     assert out["failed"][0]["error"] == "low_content"
+
+
+# --------------------------------------------------------------------------- #
+# 20. backfill: failures in first wave -> pull spares until max_sources good
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_on_partial_failure():
+    """Candidates 1 and 3 fail; spares 4 and 5 must backfill to reach max_sources=3."""
+    # search returns 6 results (max_sources*2 overfetch for 3)
+    results = [_search_result(i) for i in range(1, 7)]
+    html = {
+        "https://example.com/1": FetchError("timeout", "boom"),     # fails
+        "https://example.com/2": ARTICLE_HTML,                       # ok
+        "https://example.com/3": EMPTY_HTML,                         # empty_content
+        "https://example.com/4": ARTICLE_HTML,                       # ok (backfill)
+        "https://example.com/5": ARTICLE_HTML,                       # ok (backfill)
+        "https://example.com/6": ARTICLE_HTML,                       # spare (not needed)
+    }
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 3
+    good_urls = [s["url"] for s in out["sources"]]
+    assert "https://example.com/2" in good_urls
+    assert "https://example.com/4" in good_urls
+    assert "https://example.com/5" in good_urls
+    # search rank order preserved: 2 before 4 before 5
+    assert good_urls == ["https://example.com/2", "https://example.com/4", "https://example.com/5"]
+    # both failures recorded
+    failed_urls = {f["url"] for f in out["failed"]}
+    assert "https://example.com/1" in failed_urls
+    assert "https://example.com/3" in failed_urls
+    assert len(out["failed"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# 21. backfill: candidate pool exhausted before max_sources reached
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_pool_exhausted():
+    """Only 2 good sources exist in total; must return 2 (not hang/error)."""
+    results = [_search_result(i) for i in range(1, 5)]  # 4 candidates total
+    html = {
+        "https://example.com/1": FetchError("timeout", "boom"),
+        "https://example.com/2": ARTICLE_HTML,
+        "https://example.com/3": EMPTY_HTML,
+        "https://example.com/4": ARTICLE_HTML,
+    }
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,   # want 3 but only 2 good exist
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert out["count"] == 2
+    assert [s["url"] for s in out["sources"]] == [
+        "https://example.com/2",
+        "https://example.com/4",
+    ]
+    failed_urls = {f["url"] for f in out["failed"]}
+    assert "https://example.com/1" in failed_urls
+    assert "https://example.com/3" in failed_urls
+    assert len(out["failed"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# 22. backfill: happy path -> NO extra fetches beyond max_sources
+# --------------------------------------------------------------------------- #
+async def test_deep_backfill_no_waste_on_happy_path():
+    """When the first max_sources candidates all succeed, no spare candidates are fetched."""
+    results = [_search_result(i) for i in range(1, 7)]  # 6 candidates (overfetch 3*2)
+    html = {f"https://example.com/{i}": ARTICLE_HTML for i in range(1, 7)}
+    rec_fetch = {}
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html, recorder=rec_fetch),
+    )
+
+    assert out["count"] == 3
+    assert out["failed"] == []
+    # Exactly 3 fetches -- spares 4,5,6 must NOT be touched
+    assert rec_fetch["calls"] == 3
