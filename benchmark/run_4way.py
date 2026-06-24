@@ -211,6 +211,19 @@ def _mean(values: list) -> float | None:
     return round(statistics.mean(vals), 4) if vals else None
 
 
+def _quantile(values: list, q: float) -> float | None:
+    """Linear-interpolated quantile over non-None values (p50/p95); None if empty."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return round(vals[0], 3)
+    idx = q * (len(vals) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(vals) - 1)
+    return round(vals[lo] + (vals[hi] - vals[lo]) * (idx - lo), 3)
+
+
 def aggregate_condition(records: list[dict]) -> dict:
     """Aggregate one condition's run records into summary metrics (pure).
 
@@ -220,9 +233,13 @@ def aggregate_condition(records: list[dict]) -> dict:
     n = len(records)
     tokens = [r.get("total_tokens") for r in records]
     present_tokens = [t for t in tokens if t is not None]
+    found_count = sum(1 for r in records if r.get("found"))
+    latencies = [r.get("latency_s") for r in records]
     return {
         "n": n,
-        "found_count": sum(1 for r in records if r.get("found")),
+        "found_count": found_count,
+        "success_pct": round(100.0 * found_count / n, 1) if n else 0.0,
+        "error_count": sum(1 for r in records if r.get("error")),
         "mean_total_tokens": round(statistics.mean(present_tokens), 1)
         if present_tokens
         else None,
@@ -230,7 +247,9 @@ def aggregate_condition(records: list[dict]) -> dict:
         if present_tokens
         else None,
         "mean_cost_usd": _mean([r.get("cost_usd") for r in records]),
-        "mean_latency_s": _mean([r.get("latency_s") for r in records]),
+        "mean_latency_s": _mean(latencies),
+        "latency_p50": _quantile(latencies, 0.50),
+        "latency_p95": _quantile(latencies, 0.95),
         "mean_urls": _mean([r.get("urls") for r in records]),
         "mean_answer_words": _mean([r.get("words") for r in records]),
     }
@@ -271,10 +290,10 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
     # (1) Leaderboard.
     parts.append("\n## Per-condition leaderboard\n")
     parts.append(
-        "| condition | n | found | mean_tokens | median_tokens | cost_usd | "
-        "mean_latency_s | mean_urls | mean_words |\n"
+        "| condition | n | success% | mean_tok | median_tok | cost_usd | "
+        "lat_mean_s | lat_p50_s | lat_p95_s | mean_urls | mean_words | errors |\n"
     )
-    parts.append("|---|---|---|---|---|---|---|---|---|\n")
+    parts.append("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
     for cond in CONDITIONS:
         a = by_condition.get(cond)
         if not a:
@@ -282,10 +301,11 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
         cost, est = effective_cost(cond, a["mean_cost_usd"], a["mean_total_tokens"])
         cost_cell = _fmt(cost) + ("*" if est and cost is not None else "")
         parts.append(
-            f"| {cond} | {a['n']} | {a['found_count']} | "
+            f"| {cond} | {a['n']} | {_fmt(a.get('success_pct'))} | "
             f"{_fmt(a['mean_total_tokens'])} | {_fmt(a['median_total_tokens'])} | "
-            f"{cost_cell} | {_fmt(a['mean_latency_s'])} | "
-            f"{_fmt(a['mean_urls'])} | {_fmt(a['mean_answer_words'])} |\n"
+            f"{cost_cell} | {_fmt(a['mean_latency_s'])} | {_fmt(a.get('latency_p50'))} | "
+            f"{_fmt(a.get('latency_p95'))} | {_fmt(a['mean_urls'])} | "
+            f"{_fmt(a['mean_answer_words'])} | {_fmt(a.get('error_count'))} |\n"
         )
     parts.append(
         f"\n_`cost_usd`: Claude = actual (CLI-reported). Codex = `*`ESTIMATE_ "
