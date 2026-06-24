@@ -37,6 +37,9 @@ Rate limit:       fail2ban (401 brute-force protection on /mcp)
 | `fail2ban-argus.conf` | fail2ban jail (401 brute-force protection) |
 | `provision.sh` | Idempotent bash script (run as root) |
 | `searxng/` | SearXNG docker-compose (already present, do not modify) |
+| `argus-update.sh` | Safe auto-update: poll main, ff-only, health-gate, auto-rollback |
+| `argus-update.service` | Oneshot unit that runs `argus-update.sh` (root) |
+| `argus-update.timer` | Polls main every 5 min to trigger the update |
 
 ## Prerequisites
 
@@ -416,6 +419,40 @@ fail2ban-client status argus
 - **Roadmap**: `docs/02-ROADMAP.md` P3 (Productionize the MCP)
 - **Tool specs**: `docs/03-TOOL-SPECS.md`
 - **Hermes coexistence**: `../08. Hermes AI Server/docs/ARSITEKTUR-HERMES-SUVA.md`
+
+## Safe auto-update (poll main -> health-check -> auto-rollback)
+
+When an approved change lands on `main` (PR-reviewed), the live server self-updates
+within ~5 min. The model is **pull-only** (no inbound webhook port): a systemd timer
+runs `argus-update.sh`, which fast-forwards `main`, reinstalls deps only if the
+manifest changed, restarts `argus`, then polls `/health`. If health does not come
+up it **auto-rolls-back** to the prior commit and restarts. A no-change cycle is a
+silent no-op.
+
+One-time install on the VPS (run as root, after the repo is at `/opt/argus/app`):
+
+```bash
+install -m 0755 /opt/argus/app/deploy/argus-update.sh /opt/argus/app/deploy/argus-update.sh
+cp /opt/argus/app/deploy/argus-update.service /etc/systemd/system/argus-update.service
+cp /opt/argus/app/deploy/argus-update.timer   /etc/systemd/system/argus-update.timer
+systemctl daemon-reload
+systemctl enable --now argus-update.timer
+```
+
+Operate it:
+
+```bash
+systemctl list-timers argus-update.timer        # next/last run
+journalctl -u argus-update -n 50 --no-pager      # update + rollback log
+systemctl start argus-update.service             # force an update check now
+systemctl disable --now argus-update.timer       # pause auto-update
+```
+
+Notes:
+- The script is **fast-forward only**. A non-ff `main` (force-push / divergence)
+  is logged and skipped, never silently reset - fix manually then re-run.
+- Trust boundary is the GitHub `main` branch; keep merges PR-gated.
+- The timer is independent of `argus.service`; pausing it does not stop the server.
 
 ## Contact & Support
 

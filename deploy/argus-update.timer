@@ -1,0 +1,13 @@
+# Periodic trigger for argus-update.service: poll main every 5 minutes.
+# So when an approved change lands on main, the live server self-updates within
+# ~5 min, health-gated with auto-rollback. Disable with: systemctl disable --now argus-update.timer
+[Unit]
+Description=Poll main and run Argus safe auto-update periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

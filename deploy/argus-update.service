@@ -1,0 +1,17 @@
+# Argus safe auto-update (oneshot, driven by argus-update.timer).
+# Runs as root: needs `systemctl restart argus` and drops to the argus user for
+# git/pip inside the script. Pull model - no inbound port is opened.
+[Unit]
+Description=Argus safe auto-update (poll main, health-check, auto-rollback)
+After=network-online.target argus.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/argus/app/deploy/argus-update.sh
+# Bound the run so a hung git/pip/restart can never wedge the timer.
+TimeoutStartSec=300
+# Output goes to the journal: `journalctl -u argus-update`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus-update
