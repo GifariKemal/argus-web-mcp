@@ -651,6 +651,11 @@ async def find_similar(url_or_text: str, count: int = 10) -> dict:
     if not semantic.available():
         return err("extraction_failed", "find_similar needs the [semantic] extra (fastembed)")
 
+    # Validate/clamp count at the trust boundary: count < 1 previously sliced `[:negative]`
+    # (returning a wrong subset, never an error), and a huge count over-fetched via count*2.
+    # Bound it to a sane [1, 50] so bad input degrades predictably instead of misbehaving.
+    count = max(1, min(count, 50))
+
     # Exclude the seed itself from candidates by BOTH its requested url and (post-)redirect
     # final_url - a candidate equal to either is the seed, not a "similar" page.
     seed_urls: set[str] = set()
