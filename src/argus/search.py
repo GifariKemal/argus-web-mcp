@@ -54,6 +54,20 @@ _DOCKER_INTENT_TOKENS = frozenset(
     {"docker", "container", "containers", "image", "dockerfile",
      "compose", "kubernetes", "k8s", "registry", "oci"}
 )
+# Generic-token down-weight: a SMALL fixed stoplist of very-common, low-information
+# query tokens. A result whose ONLY query-token overlap is generic tokens (i.e. it
+# matches NO content-bearing query token) gets its score scaled by _GENERIC_WEIGHT, so a
+# lone "manager"/"guide"-style match can't inflate an otherwise-irrelevant result.
+# Deliberately conservative: NOT IDF (no corpus); the penalty applies ONLY to
+# generic-ONLY matches - any content-token match leaves the score untouched, so a
+# legitimately relevant result is never demoted and the (equal-weight) relevance proxy
+# can't regress.  Multiplicative, composing with the Docker host-penalty and the
+# relative-relevance gate.
+_GENERIC_TOKENS = frozenset(
+    {"guide", "best", "how", "top", "manager", "component",
+     "tutorial", "example", "overview", "introduction"}
+)
+_GENERIC_WEIGHT = 0.5  # multiply score by this when ALL matched query tokens are generic
 
 
 class SearchError(Exception):
@@ -232,12 +246,20 @@ def rerank(
         else:
             title_cov = snip_cov = 0.0
         score = _TITLE_WEIGHT * title_cov + snip_cov
-        has_overlap = bool(qtokens & title_tok) or bool(qtokens & snip_tok)
+        matched = qtokens & (title_tok | snip_tok)
+        has_overlap = bool(matched)
         is_fresh = bool(r.get("published"))
         # Recency boost is additive but applied ONLY to relevant (overlapping) results,
         # so an irrelevant fresh page (dropped below) never benefits - relevance wins.
         if recency and is_fresh and has_overlap:
             score += _RECENCY_BOOST
+        # Generic-token down-weight: if the result matches at least one query token but
+        # EVERY matched token is generic/low-information, shrink the score so a lone
+        # generic overlap can't inflate an off-topic result.  A result matching any
+        # content-bearing query token is left untouched (matched - _GENERIC_TOKENS
+        # non-empty), preserving its exact score and ranking.
+        if matched and matched <= _GENERIC_TOKENS:
+            score *= _GENERIC_WEIGHT
         # Docker Hub host-penalty: if no docker intent and result is from hub.docker.com,
         # apply a multiplicative penalty so generic-token overlap scores sink below
         # _REL_FLOOR relative to strong results.  Does not affect has_overlap (the result
