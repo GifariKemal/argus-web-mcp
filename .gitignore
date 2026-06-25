@@ -29,3 +29,4 @@ benchmark/codex_*/
 benchmark/*_report.md
 benchmark/report.md
 benchmark/qa_report.md
+benchmark/compare-*.md
