@@ -174,8 +174,8 @@ async def test_overfetch_cap_and_dedup():
         fetch_fn=_fake_fetch(html, recorder=rec_fetch),
     )
 
-    # overfetched at max_sources*2
-    assert rec_search["count"] == 6
+    # overfetched at max_sources*3 (larger pool gives backfill more spares)
+    assert rec_search["count"] == 9
     # only top-3 DISTINCT urls fetched
     assert rec_fetch["calls"] == 3
     assert out["count"] == 3
@@ -247,8 +247,8 @@ async def test_quick_mode_returns_lightweight_hits_without_fetching():
     assert out["source_count_requested"] == 3
     assert len(out["sources"]) == 3
 
-    # still overfetches at max_sources*2 so dedup has room to work
-    assert rec_search["count"] == 6
+    # still overfetches at max_sources*3 so dedup has room to work
+    assert rec_search["count"] == 9
 
     assert [s["url"] for s in out["sources"]] == [
         "https://example.com/1",
@@ -788,6 +788,143 @@ async def test_deep_backfill_no_waste_on_happy_path():
     assert out["failed"] == []
     # Exactly 3 fetches -- spares 4,5,6 must NOT be touched
     assert rec_fetch["calls"] == 3
+
+
+# --------------------------------------------------------------------------- #
+# 23. lean payload (#1) - max_chars_per_source caps long sources, FLAGGED honestly
+# --------------------------------------------------------------------------- #
+async def test_max_chars_per_source_truncates_and_flags_long_source():
+    """A source longer than the cap is cut to the cap, but flagged: truncated=True,
+    full_chars=<orig len>, and the ORIGINAL word_count is preserved (no silent cut)."""
+    para = "Gold prices are driven by real yields and the dollar. "
+    big_html = (
+        "<html><head><title>Gold Outlook</title></head><body>"
+        "<article><h1>Gold Outlook</h1><p>" + (para * 400) + "</p></article></body></html>"
+    )
+    results = [_search_result(1)]
+
+    # First fetch full to learn the real content length + word count.
+    full = await research(
+        "q", max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch({"https://example.com/1": big_html}),
+    )
+    orig_len = len(full["sources"][0]["content"])
+    orig_wc = full["sources"][0]["word_count"]
+    cap = 500
+    assert orig_len > cap  # precondition: this source is over the cap
+
+    out = await research(
+        "q", max_sources=1,
+        max_chars_per_source=cap,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch({"https://example.com/1": big_html}),
+    )
+    s = out["sources"][0]
+    assert len(s["content"]) == cap            # content cut to the cap
+    assert s["truncated"] is True              # FLAGGED, not silent
+    assert s["full_chars"] == orig_len         # original length recorded
+    assert s["word_count"] == orig_wc          # original word_count preserved (honest)
+
+
+# --------------------------------------------------------------------------- #
+# 24. lean payload (#1) - short source under the cap is untouched, no flag
+# --------------------------------------------------------------------------- #
+async def test_max_chars_per_source_leaves_short_source_untouched():
+    results = [_search_result(1)]
+    out = await research(
+        "q", max_sources=1,
+        max_chars_per_source=100_000,  # far larger than the small article
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch({"https://example.com/1": ARTICLE_HTML}),
+    )
+    s = out["sources"][0]
+    assert "Gold prices are driven by real yields" in s["content"]
+    assert "truncated" not in s     # no flag when not truncated
+    assert "full_chars" not in s
+
+
+# --------------------------------------------------------------------------- #
+# 25. lean payload (#1) - None (default) = full content, identical to today
+# --------------------------------------------------------------------------- #
+async def test_max_chars_per_source_none_returns_full_content():
+    para = "Gold prices are driven by real yields and the dollar. "
+    big_html = (
+        "<html><head><title>Gold Outlook</title></head><body>"
+        "<article><h1>Gold Outlook</h1><p>" + (para * 400) + "</p></article></body></html>"
+    )
+    results = [_search_result(1)]
+    out = await research(
+        "q", max_sources=1,
+        max_chars_per_source=None,  # default behaviour
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch({"https://example.com/1": big_html}),
+    )
+    s = out["sources"][0]
+    assert len(s["content"]) > 500
+    assert "truncated" not in s
+    assert "full_chars" not in s
+
+
+# --------------------------------------------------------------------------- #
+# 26. source yield (#2) - larger pool lets backfill reach max_sources
+# --------------------------------------------------------------------------- #
+async def test_larger_overfetch_pool_backfills_from_spares():
+    """With max_sources=3 the pool is now *3 (=9). If the first 6 candidates have
+    failures, backfill must reach into candidates 7-9 to still return 3 good sources."""
+    results = [_search_result(i) for i in range(1, 10)]  # 9 candidates
+    html = {f"https://example.com/{i}": ARTICLE_HTML for i in range(1, 10)}
+    # fail the first 6 so only candidates 7,8,9 can satisfy max_sources=3
+    for i in range(1, 7):
+        html[f"https://example.com/{i}"] = FetchError("timeout", "boom")
+    rec_search = {}
+
+    out = await research(
+        "q", mode="deep", max_sources=3,
+        search_fn=_fake_search(results, recorder=rec_search),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    assert rec_search["count"] == 9  # overfetch pool is now max_sources*3
+    assert out["count"] == 3
+    assert [s["url"] for s in out["sources"]] == [
+        "https://example.com/7",
+        "https://example.com/8",
+        "https://example.com/9",
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 27. source yield (#2) - MIN_CONTENT_WORDS overridable via env
+# --------------------------------------------------------------------------- #
+async def test_min_content_words_env_override(monkeypatch):
+    """ARGUS_MIN_CONTENT_WORDS raises the floor so a mid-length article is dropped."""
+    import argus.research as research_mod
+
+    # ARTICLE_HTML extracts to well over 30 but under, say, 100000 words; set a huge
+    # floor so even the healthy article is treated as low_content.
+    monkeypatch.setattr(research_mod, "_min_content_words", lambda: 100_000)
+
+    results = [_search_result(1)]
+    out = await research(
+        "q", max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch({"https://example.com/1": ARTICLE_HTML}),
+    )
+    assert out["count"] == 0
+    assert out["failed"][0]["error"] == "low_content"
+
+
+def test_min_content_words_reads_env(monkeypatch):
+    """The floor helper reads ARGUS_MIN_CONTENT_WORDS (default 30, bad value -> 30)."""
+    from argus.research import _min_content_words
+
+    monkeypatch.delenv("ARGUS_MIN_CONTENT_WORDS", raising=False)
+    assert _min_content_words() == 30
+    monkeypatch.setenv("ARGUS_MIN_CONTENT_WORDS", "50")
+    assert _min_content_words() == 50
+    monkeypatch.setenv("ARGUS_MIN_CONTENT_WORDS", "not-an-int")
+    assert _min_content_words() == 30
 
 
 def test_build_answer_context_escapes_url_quotes():

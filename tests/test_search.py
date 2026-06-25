@@ -1253,3 +1253,82 @@ def test_dockerhub_penalty_no_regression_without_docker_results():
     urls = [r["url"] for r in out_with_penalty_code]
     for r in results:
         assert r["url"] in urls
+
+
+# --------------------------------------------------------------------------- #
+# 18. generic-token down-weight - a result matching ONLY a generic/low-info
+#     query token ranks below results matching a content-bearing token.
+# --------------------------------------------------------------------------- #
+def test_generic_only_match_ranks_below_content_match():
+    # Query mixes a content token ("kubernetes") with a generic one ("manager").
+    # - `content` matches "kubernetes" (content-bearing) -> full score, NO penalty.
+    # - `generic` matches only "manager" (generic, low-info) -> down-weighted.
+    # Equal RAW token counts (both match exactly 1 query token in the title), so without
+    # the generic down-weight they would tie; with it, the content match ranks strictly
+    # above the generic-only match.
+    query = "kubernetes manager"
+    content = _mapped(
+        "kubernetes orchestration notes",
+        "https://content.example.com",
+        "container scheduling",
+    )
+    generic = _mapped(
+        "project manager handbook",
+        "https://generic.example.com",
+        "task tracking",
+    )
+    # `generic` passed first so a tie would leave it on top (stable order); the
+    # down-weight must flip it below the content match.
+    out = rerank(query, [generic, content])
+    urls = [r["url"] for r in out]
+    assert urls.index("https://content.example.com") < urls.index(
+        "https://generic.example.com"
+    )
+
+
+def test_generic_plus_content_match_not_penalised():
+    # A result matching a generic token AND a content token must NOT be penalised:
+    # it keeps full score and is not demoted relative to a content-only match with the
+    # SAME content coverage.  Here both match the content token "kubernetes"; `both`
+    # additionally matches the generic "manager".  `both` must not rank below `content`.
+    query = "kubernetes manager"
+    both = _mapped(
+        "kubernetes manager guide",
+        "https://both.example.com",
+        "orchestration",
+    )
+    content = _mapped(
+        "kubernetes deep dive",
+        "https://content.example.com",
+        "orchestration",
+    )
+    # `both` has >= the content coverage of `content` plus an (unpenalised) generic
+    # match, so it must rank first (passed first; equal-or-higher score keeps it there).
+    out = rerank(query, [both, content])
+    assert out[0]["url"] == "https://both.example.com"
+
+
+def test_generic_down_weight_preserves_zero_overlap_drop_and_min_keep():
+    # A purely-generic-only match is DEMOTED, not dropped, while a zero-overlap result is
+    # still dropped (overlap gate unchanged) - subject to the _MIN_KEEP floor.
+    query = "kubernetes manager"
+    content = [
+        _mapped(
+            f"kubernetes orchestration {i}",
+            f"https://k{i}.example.com",
+            "scheduling",
+        )
+        for i in range(3)
+    ]
+    generic = _mapped(
+        "project manager handbook",
+        "https://generic.example.com",
+        "task tracking",
+    )
+    zero = _mapped("totally unrelated", "https://zero.example.com", "nothing here")
+    out = rerank(query, [*content, generic, zero])
+    urls = [r["url"] for r in out]
+    # zero-overlap result dropped (>=3 relevant content matches satisfy the floor)
+    assert "https://zero.example.com" not in urls
+    # generic-only match still present (demoted, not dropped) but ranked last
+    assert urls[-1] == "https://generic.example.com"

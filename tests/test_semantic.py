@@ -126,6 +126,38 @@ def test_embed_raises_when_unavailable(monkeypatch):
         semantic.embed(["python"])
 
 
+# --- warm (startup pre-warm) ------------------------------------------------
+def test_warm_returns_false_when_unavailable(monkeypatch):
+    """No [semantic] extra -> warm is a no-op returning False (never raises)."""
+    monkeypatch.setattr(semantic, "available", lambda: False)
+    called = {"embed": False}
+    monkeypatch.setattr(semantic, "embed", lambda t: called.__setitem__("embed", True))
+    assert semantic.warm() is False
+    assert called["embed"] is False  # must NOT trigger a model load
+
+
+def test_warm_runs_tiny_embed_and_returns_true(monkeypatch):
+    """Available -> warm runs one tiny embed and returns True."""
+    monkeypatch.setattr(semantic, "available", lambda: True)
+    seen = {}
+    monkeypatch.setattr(semantic, "embed", lambda texts: seen.update(texts=texts) or [[0.0]])
+    assert semantic.warm() is True
+    assert seen["texts"]  # a non-empty warm-up batch was embedded
+
+
+def test_warm_swallows_embed_errors(monkeypatch, caplog):
+    """A failing embed during warm-up must be swallowed (False), never raised."""
+    monkeypatch.setattr(semantic, "available", lambda: True)
+
+    def _boom(texts):
+        raise RuntimeError("model download failed")
+
+    monkeypatch.setattr(semantic, "embed", _boom)
+    with caplog.at_level("WARNING", logger="argus.semantic"):
+        assert semantic.warm() is False
+    assert any("warm-up" in r.message for r in caplog.records)
+
+
 # --- singleton lazy-init (double-checked locking) ---------------------------
 def test_get_embedder_uses_lock():
     import threading

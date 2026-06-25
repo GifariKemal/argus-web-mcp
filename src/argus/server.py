@@ -120,13 +120,20 @@ async def lifespan(_server: FastMCP):
         watch_store=WatchStore(),
     )
     await _S.browser.start()
+    # Pre-warm the local embedding model off the event loop so the FIRST research/find_similar
+    # doesn't eat the one-time ~5s HF model load. Best-effort: never blocks/fails startup
+    # (no-op when the [semantic] extra is absent).
+    warm_task = asyncio.create_task(asyncio.to_thread(semantic.warm))
     watch_task = asyncio.create_task(_watch_loop())
     try:
         yield
     finally:
         watch_task.cancel()
+        warm_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watch_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await warm_task
         if _S.browser is not None:
             await _S.browser.stop()
         await _S.client.aclose()
@@ -537,22 +544,26 @@ def _build_auth():
 
 async def research(
     query: str, mode: str = "deep", max_sources: int = 5, highlights: bool = False,
-    timeout: int = 30,
+    max_chars_per_source: int | None = None, timeout: int = 30,
 ) -> dict:
     """Deep research in one call. mode='deep' (default) = search + parallel FULL read of the top
     sources -> consolidated complete content (replaces search->fetch->repeat). mode='quick' = ranked
     hits (title/url/snippet) only, zero fetches (fast). `highlights`=True attaches the top
-    query-relevant sentences per source (local embeddings; deep mode)."""
+    query-relevant sentences per source (local embeddings; deep mode). `max_chars_per_source`
+    (opt-in) caps each source's content for token-sensitive callers; truncation is FLAGGED
+    (truncated=True + full_chars), word_count preserved - default None returns FULL content."""
     s = _state()
     ck = s.cache.key("research:" + query,
-                     {"mode": mode, "max_sources": max_sources, "hl": highlights})
+                     {"mode": mode, "max_sources": max_sources, "hl": highlights,
+                      "mcps": max_chars_per_source})
     cached = s.cache.get(ck, ttl_for("general"))
     if cached is not None:
         return {**cached, "from_cache": True}
 
     try:
         res = await _research(
-            query, mode=mode, max_sources=max_sources, timeout=timeout,
+            query, mode=mode, max_sources=max_sources,
+            max_chars_per_source=max_chars_per_source, timeout=timeout,
             client=s.client, browser=s.browser,
         )
     except ValueError as e:  # invalid mode

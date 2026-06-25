@@ -259,6 +259,21 @@ def aggregate_condition(records: list[dict]) -> dict:
     }
 
 
+def aggregate_by_scenario_condition(records: list[dict]) -> dict[tuple[str, str], dict]:
+    """Aggregate over reps, keyed by (scenario id, condition) (pure).
+
+    With --repeat>1 each (id, condition) cell has N records; this collapses each
+    cell to one summary (mean/median over its reps) via aggregate_condition. The
+    `rep` field is ignored - records are grouped purely by (id, condition), so
+    repeated runs of the same cell fold together. Used for per-cell rep analysis;
+    the leaderboard's aggregate_condition still pools all reps per condition.
+    """
+    cells: dict[tuple[str, str], list[dict]] = {}
+    for r in records:
+        cells.setdefault((r.get("id", "?"), r.get("condition", "?")), []).append(r)
+    return {key: aggregate_condition(recs) for key, recs in cells.items()}
+
+
 def _fmt(value: object) -> str:
     """Render a metric for a markdown cell ('-' for None)."""
     return "-" if value is None else str(value)
@@ -288,7 +303,14 @@ def render_report(by_condition: dict[str, dict], rows: list[dict]) -> str:
     parts.append("# Argus 4-way comparison - Claude/Codex, WITH vs WITHOUT Argus\n")
     parts.append(
         f"_Conditions: {', '.join(CONDITIONS)}. n="
-        f"{by_condition.get(next(iter(CONDITIONS), ''), {}).get('n', 0)} scenarios._\n"
+        f"{by_condition.get(next(iter(CONDITIONS), ''), {}).get('n', 0)} records "
+        f"(scenarios x reps; see --repeat)._\n"
+    )
+    parts.append(
+        "_Token means are cache-sensitive across reps (Claude Code caches the "
+        "system prompt, so a 2nd rep can read far cheaper); the `*-native` "
+        "condition is the environmental control - compare Argus deltas against "
+        "it, not across separate runs._\n"
     )
 
     # (1) Leaderboard.
@@ -503,11 +525,12 @@ def _run_capture(cmd: list[str], env: dict | None, timeout: int):
         return out or "", err or "", proc.returncode, True
 
 
-def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
+def _run_one(condition: str, scenario: dict, argus: dict | None, rep: int = 0) -> dict:
     """Execute a single CLI run and return a parsed record (I/O, never raises).
 
-    Records {id, category, query, condition, total_tokens, cost_usd?, latency_s,
-    urls, words, found, error?}. Any failure is captured into `error`.
+    Records {id, category, query, condition, rep, total_tokens, cost_usd?,
+    latency_s, urls, words, found, error?}. `rep` is the 0-based repetition index
+    (for --repeat>1). Any failure is captured into `error`.
     """
     prompt = PROMPT_TEMPLATE.format(query=scenario["query"])
     rec: dict = {
@@ -515,6 +538,7 @@ def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
         "category": scenario["category"],
         "query": scenario["query"],
         "condition": condition,
+        "rep": rep,
         "total_tokens": None,
         "cost_usd": None,
         "latency_s": None,
@@ -618,27 +642,36 @@ def run_sweep(args) -> None:
 
     records: list[dict] = []
     first = True
-    total = len(items) * len(conds)
+    reps = max(1, getattr(args, "repeat", 1) or 1)
+    total = len(items) * len(conds) * reps
     out_path = Path(args.out)
-    for s in items:
-        for cond in conds:
-            if not first:
-                time.sleep(args.pace)
-            first = False
-            rec = _run_one(cond, s, argus)
-            records.append(rec)
-            # Write the JSON after EVERY record so a long sweep is partial-readable
-            # and survives an interrupt (resume-friendly); flush progress so a
-            # backgrounded run is monitorable (output is otherwise block-buffered).
-            out_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
-            print(
-                f"  [{len(records)}/{total}] {s['id']} {cond} "
-                f"tokens={rec['total_tokens']} lat={rec['latency_s']}s err={rec['error']}",
-                file=sys.stderr,
-                flush=True,
-            )
+    # Repeat the OUTER loop so reps of the same (scenario, condition) are spread
+    # across the sweep rather than back-to-back - reduces transient correlation
+    # (rate-limits, cache warmth) between reps of the same cell.
+    for rep in range(reps):
+        for s in items:
+            for cond in conds:
+                if not first:
+                    time.sleep(args.pace)
+                first = False
+                rec = _run_one(cond, s, argus, rep=rep)
+                records.append(rec)
+                # Write the JSON after EVERY record so a long sweep is
+                # partial-readable and survives an interrupt (resume-friendly);
+                # flush progress so a backgrounded run is monitorable.
+                out_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+                print(
+                    f"  [{len(records)}/{total}] {s['id']} {cond} rep={rep} "
+                    f"tokens={rec['total_tokens']} lat={rec['latency_s']}s err={rec['error']}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
-    print(f"wrote {len(records)} records ({len(items)}x{len(conds)}) -> {args.out}", flush=True)
+    print(
+        f"wrote {len(records)} records ({len(items)}x{len(conds)}x{reps} reps) "
+        f"-> {args.out}",
+        flush=True,
+    )
 
 
 def run_score(args) -> None:
@@ -671,6 +704,12 @@ def main() -> None:
     r.add_argument("--limit", type=int, default=None)
     r.add_argument("--ids", default=None, help="comma-separated scenario ids")
     r.add_argument("--pace", type=float, default=2.0, help="seconds between runs")
+    r.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repetitions per (scenario, condition) for statistical validity (default 1)",
+    )
 
     s = sub.add_parser("score", help="aggregate a run JSON into a markdown report")
     s.add_argument("--in", dest="in_path", required=True)
