@@ -116,6 +116,15 @@ def test_upsert_replaces_and_keeps_one_row(cache):
     assert count == 1
 
 
+# 5b. WAL + busy_timeout pragmas (audit C2: concurrent-access resilience)
+def test_wal_and_busy_timeout_pragmas(cache):
+    journal = cache.conn.execute("PRAGMA journal_mode").fetchone()[0]
+    # a file-backed db reports 'wal'; an in-memory db can only report 'memory'
+    assert journal == "wal"
+    busy = cache.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert busy == 5000
+
+
 # 6. ttl_for
 def test_ttl_for_known():
     assert ttl_for("news") == 900
