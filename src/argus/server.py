@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from . import semantic
 from .cache import Cache, ttl_for
-from .config import HEALTH_LATENCY_BUCKETS, RATE_LIMIT_ENABLED, RATE_LIMIT_LOCAL_BYPASS, TIMEOUTS
+from .config import HEALTH_LATENCY_BUCKETS, TIMEOUTS
 from .extract.article import extract_article
 from .extract.links import extract_links_images
 from .extract.llm import extract_llm, llm_available
@@ -40,7 +40,6 @@ from .gh_search import GitHubSearchError
 from .gh_search import github_search as _gh_search
 from .mapsite import MapError, map_site
 from .models import err
-from .rate_limit import RateLimiter
 from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
@@ -95,7 +94,14 @@ def _latency_percentiles(name: str) -> dict:
         idx = int(n * k)
         idx = min(idx, n - 1)
         return round(s[max(0, idx)], 3)
-    return {"p50": _p(0.50), "p90": _p(0.90), "p99": _p(0.99), "count": n, "min": round(s[0], 3), "max": round(s[-1], 3)}
+    return {
+        "p50": _p(0.50),
+        "p90": _p(0.90),
+        "p99": _p(0.99),
+        "count": n,
+        "min": round(s[0], 3),
+        "max": round(s[-1], 3),
+    }
 
 
 def _safe_detail(exc: Exception) -> str:
@@ -113,7 +119,6 @@ class State:
     browser: BrowserPool | None
     throttle: object | None = None
     watch_store: object | None = None
-    rate_limiter: RateLimiter | None = None
 
 
 _S: State | None = None
@@ -129,7 +134,6 @@ def _state() -> State:
 async def lifespan(_server: FastMCP):
     global _S, _STARTUP_TIME
     from .fetch.throttle import HostThrottle
-    from .config import RATE_LIMIT_RPM, RATE_LIMIT_BURST
 
     _STARTUP_TIME = time.monotonic()
     courtesy = float(os.environ.get("ARGUS_COURTESY_DELAY", "1.0"))
@@ -143,7 +147,6 @@ async def lifespan(_server: FastMCP):
         browser=BrowserPool(concurrency=max_ctx),
         throttle=HostThrottle(min_interval=courtesy),
         watch_store=WatchStore(),
-        rate_limiter=RateLimiter(rpm=RATE_LIMIT_RPM, burst=RATE_LIMIT_BURST),
     )
     await _S.browser.start()
     # Pre-warm the local embedding model off the event loop so the FIRST research/find_similar
@@ -297,7 +300,10 @@ async def search(
 
 
 async def read_pdf(
-    url_or_path: str, pages: str | None = None, mode: str = "text", timeout: int = TIMEOUTS["read_pdf"]
+    url_or_path: str,
+    pages: str | None = None,
+    mode: str = "text",
+    timeout: int = TIMEOUTS["read_pdf"],
 ) -> dict:
     """PDF (URL or local path) -> markdown + tables."""
     s = _state()
@@ -812,24 +818,12 @@ _TOOL_CALLS: dict[str, int] = {}
 
 
 class _MetricsMiddleware(Middleware):
-    """Count MCP tool invocations, track latencies, and enforce per-IP rate limiting.
-    Signature-safe (no wrapping)."""
+    """Count MCP tool invocations and track per-tool latency. Signature-safe (no wrapping)."""
 
     async def on_call_tool(self, context, call_next):
         name = getattr(getattr(context, "message", None), "name", "unknown")
         _TOOL_CALLS[name] = _TOOL_CALLS.get(name, 0) + 1
 
-        # --- Rate limiting (best-effort IP extraction) ---
-        s = _state()
-        if RATE_LIMIT_ENABLED and s.rate_limiter is not None:
-            identity = _extract_identity(context)
-            if not (RATE_LIMIT_LOCAL_BYPASS and identity in {"127.0.0.1", "localhost", "::1", "local"}):
-                allowed, info = s.rate_limiter.check(identity)
-                if not allowed:
-                    logger.warning("rate_limit: %s blocked on %s", identity, name)
-                    return err("rate_limited", f"Rate limit exceeded. Retry after {info['retry_after_seconds']}s.", f"current={info['current']} limit={info['limit']}")
-
-        # --- Latency tracking ---
         t0 = time.perf_counter()
         try:
             result = await call_next(context)
@@ -838,27 +832,6 @@ class _MetricsMiddleware(Middleware):
             lat = _tool_latencies.setdefault(name, deque(maxlen=HEALTH_LATENCY_BUCKETS))
             lat.append(elapsed)
         return result
-
-
-def _extract_identity(context) -> str:
-    """Extract client identity (IP) from FastMCP context if available."""
-    try:
-        req = getattr(context, "request", None)
-        if req is None:
-            return "local"
-        # Starlette Request
-        xf = getattr(req, "headers", {}).get("x-forwarded-for")
-        if xf:
-            return xf.split(",")[0].strip()
-        real_ip = getattr(req, "headers", {}).get("x-real-ip")
-        if real_ip:
-            return real_ip.strip()
-        client = getattr(req, "client", None)
-        if client:
-            return client[0] if isinstance(client, (tuple, list)) else getattr(client, "host", "unknown")
-        return "unknown"
-    except Exception:
-        return "unknown"
 
 
 # The registered tool set (20 tools). Exposed as a module constant so the offline test
@@ -902,10 +875,6 @@ async def health(_request):
             body["watch_count"] = len(s.watch_store.list()) if s.watch_store else 0
         except Exception:
             body["watch_count"] = None
-        # rate limit config
-        if s.rate_limiter is not None:
-            body["rate_limit_rpm"] = s.rate_limiter._rpm
-            body["rate_limit_burst"] = s.rate_limiter._burst
         # per-tool latency percentiles (last N samples)
         body["tool_latencies"] = {
             name: _latency_percentiles(name) for name in _TOOL_CALLS
@@ -943,10 +912,11 @@ async def metrics(_request):
     for name in sorted(_TOOL_CALLS):
         pct = _latency_percentiles(name)
         if pct:
-            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.5"}} {pct["p50"]}')
-            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.9"}} {pct["p90"]}')
-            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.99"}} {pct["p99"]}')
-            lines.append(f'argus_tool_latency_seconds_count{{tool="{name}"}} {pct["count"]}')
+            m = "argus_tool_latency_seconds"
+            lines.append(f'{m}{{tool="{name}",quantile="0.5"}} {pct["p50"]}')
+            lines.append(f'{m}{{tool="{name}",quantile="0.9"}} {pct["p90"]}')
+            lines.append(f'{m}{{tool="{name}",quantile="0.99"}} {pct["p99"]}')
+            lines.append(f'{m}_count{{tool="{name}"}} {pct["count"]}')
 
     return PlainTextResponse("\n".join(lines) + "\n")
 

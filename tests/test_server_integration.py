@@ -226,6 +226,48 @@ async def test_metrics_middleware_counts():
     assert server._TOOL_CALLS["read"] == 1
 
 
+async def test_metrics_middleware_no_longer_requires_state():
+    """The middleware must work with no lifespan state (_S is None) — it no longer
+    calls _state() for rate limiting. It only counts calls and records latency."""
+    assert server._S is None
+    server._TOOL_CALLS.clear()
+    server._tool_latencies.clear()
+    mw = server._MetricsMiddleware()
+
+    class _Ctx:
+        class message:
+            name = "scrape"
+
+    async def _next(_c):
+        return {"ok": True}
+
+    out = await mw.on_call_tool(_Ctx(), _next)
+    assert out == {"ok": True}
+    assert server._TOOL_CALLS["scrape"] == 1
+    # latency sample was recorded for the tool
+    assert len(server._tool_latencies["scrape"]) == 1
+
+
+def test_latency_percentiles_empty():
+    server._tool_latencies.pop("nonesuch", None)
+    assert server._latency_percentiles("nonesuch") == {}
+
+
+def test_latency_percentiles_known_samples():
+    from collections import deque
+
+    # 1..100 -> p50=50, p90=90, p99=99 with int(n*k) indexing on the sorted list.
+    server._tool_latencies["sample"] = deque(float(i) for i in range(1, 101))
+    pct = server._latency_percentiles("sample")
+    assert pct["count"] == 100
+    assert pct["min"] == 1.0
+    assert pct["max"] == 100.0
+    assert pct["p50"] == 51.0  # s[int(100*0.5)] = s[50] = 51
+    assert pct["p90"] == 91.0  # s[int(100*0.9)] = s[90] = 91
+    assert pct["p99"] == 100.0  # s[int(100*0.99)] = s[99] = 100
+    server._tool_latencies.pop("sample", None)
+
+
 async def test_read_with_throttle_path(app_state):
     from argus.fetch.throttle import HostThrottle
 

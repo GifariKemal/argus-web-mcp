@@ -1,4 +1,4 @@
-"""Argus server configuration — timeouts, rate limits, feature flags.
+"""Argus server configuration — timeouts, metrics/health knobs.
 
 All values load from environment variables with sensible production defaults.
 No YAML file needed; 12-factor app style.
@@ -14,18 +14,6 @@ def _int(env: str, default: int) -> int:
         return int(os.environ.get(env, str(default)))
     except (ValueError, TypeError):
         return default
-
-
-def _float(env: str, default: float) -> float:
-    try:
-        return float(os.environ.get(env, str(default)))
-    except (ValueError, TypeError):
-        return default
-
-
-def _bool(env: str, default: bool) -> bool:
-    v = os.environ.get(env, "")
-    return v.lower() in {"1", "true", "yes", "on"} if v else default
 
 
 # Per-tool adaptive timeouts (seconds). Raised from hardcoded defaults based on QA data.
@@ -51,12 +39,6 @@ TIMEOUTS: dict[str, int] = {
     "list_watches": _int("ARGUS_TIMEOUT_WATCH", 30),
     "unwatch": _int("ARGUS_TIMEOUT_WATCH", 30),
 }
-
-# Rate limiting
-RATE_LIMIT_ENABLED = _bool("ARGUS_RATE_LIMIT_ENABLED", True)
-RATE_LIMIT_RPM = _int("ARGUS_RATE_LIMIT_RPM", 60)          # requests per minute per IP
-RATE_LIMIT_BURST = _int("ARGUS_RATE_LIMIT_BURST", 10)      # concurrent burst
-RATE_LIMIT_LOCAL_BYPASS = _bool("ARGUS_RATE_LIMIT_LOCAL_BYPASS", True)
 
 # Metrics / health
 HEALTH_LATENCY_BUCKETS = _int("ARGUS_HEALTH_LATENCY_BUCKETS", 500)  # max latencies per tool
