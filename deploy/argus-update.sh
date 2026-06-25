@@ -37,6 +37,16 @@ if ! g merge --ff-only "origin/$BRANCH"; then
   log "ERROR: $BRANCH not fast-forwardable; manual intervention needed"; exit 1
 fi
 
+# Docs/benchmark-only commits don't change the running service, so skip the
+# restart + health-gate for them (a prod restart on a README edit is pure risk).
+# A path is "runtime" if it touches code/deps/service config; everything else
+# (docs/, benchmark/, *.md, ...) is non-runtime. grep -q -> match=restart.
+changed=$(g diff --name-only "$local_rev" "$remote_rev")
+if ! grep -Eq '^(src/|pyproject\.toml$|uv\.lock$|deploy/argus\.service$|deploy/argus\.env)' <<<"$changed"; then
+  log "no code change - skipping restart (docs/benchmark-only): ${local_rev:0:8} -> ${remote_rev:0:8}"
+  exit 0
+fi
+
 # Reinstall deps only when the manifest actually changed (avoids a slow no-op).
 # ponytail: uses the venv's pip; if the venv was built by uv without pip this
 # logs a warning rather than failing - dep-changing updates are rare and the

@@ -157,6 +157,58 @@ def test_render_report_has_all_sections_and_delta():
         assert cond in report
 
 
+def test_aggregate_condition_pools_reps():
+    # 3 reps of one condition: aggregate_condition pools ALL reps (mean/median
+    # over the flat list); the extra `rep` field must not break aggregation.
+    recs = [
+        {"rep": 0, "total_tokens": 1000, "cost_usd": 0.10, "latency_s": 5.0,
+         "urls": 2, "words": 60, "found": True},
+        {"rep": 1, "total_tokens": 2000, "cost_usd": 0.20, "latency_s": 6.0,
+         "urls": 4, "words": 80, "found": True},
+        {"rep": 2, "total_tokens": 3000, "cost_usd": 0.30, "latency_s": 7.0,
+         "urls": 6, "words": 100, "found": True},
+    ]
+    a = r4.aggregate_condition(recs)
+    assert a["n"] == 3
+    assert a["found_count"] == 3
+    assert a["mean_total_tokens"] == 2000.0  # mean over 3 reps
+    assert a["median_total_tokens"] == 2000.0  # median over 3 reps
+    assert a["mean_cost_usd"] == 0.2
+    assert a["mean_latency_s"] == 6.0
+
+
+def test_aggregate_by_scenario_condition_groups_cells():
+    # Two scenarios x one condition, 2 reps each: each (id, condition) cell folds
+    # to one summary averaging only its own reps (rep index ignored for grouping).
+    recs = [
+        {"id": "s1", "condition": "claude-argus", "rep": 0, "total_tokens": 1000,
+         "latency_s": 4.0, "urls": 2, "words": 50, "found": True},
+        {"id": "s1", "condition": "claude-argus", "rep": 1, "total_tokens": 3000,
+         "latency_s": 6.0, "urls": 4, "words": 70, "found": True},
+        {"id": "s2", "condition": "claude-argus", "rep": 0, "total_tokens": 5000,
+         "latency_s": 8.0, "urls": 1, "words": 30, "found": True},
+        {"id": "s2", "condition": "claude-argus", "rep": 1, "total_tokens": 7000,
+         "latency_s": 10.0, "urls": 3, "words": 90, "found": True},
+    ]
+    cells = r4.aggregate_by_scenario_condition(recs)
+    assert set(cells) == {("s1", "claude-argus"), ("s2", "claude-argus")}
+    assert cells[("s1", "claude-argus")]["n"] == 2
+    assert cells[("s1", "claude-argus")]["mean_total_tokens"] == 2000.0  # (1000+3000)/2
+    assert cells[("s2", "claude-argus")]["mean_total_tokens"] == 6000.0  # (5000+7000)/2
+    assert cells[("s2", "claude-argus")]["median_total_tokens"] == 6000.0
+
+
+def test_run_one_default_rep_field():
+    # An unknown condition records {error} but must still carry rep=0 by default,
+    # and an explicit rep index must propagate to the record (no CLI executed).
+    scenario = {"id": "x01", "category": "general", "query": "q"}
+    rec = r4._run_one("not-a-condition", scenario, None)
+    assert rec["rep"] == 0
+    assert rec["error"].startswith("build:")
+    rec2 = r4._run_one("not-a-condition", scenario, None, rep=2)
+    assert rec2["rep"] == 2
+
+
 def test_argus_url_and_token_parsing():
     argus = {
         "type": "http",
