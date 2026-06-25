@@ -60,3 +60,23 @@ reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quot
 though `llm_available()` returns True (it checks key presence, not quota). FIX before relying on
 LLM features: top up OpenAI, OR point `ARGUS_LLM_BASE_URL`/`ARGUS_LLM_API_KEY` at a self-hosted
 (VPS Kimi) / Groq OpenAI-compatible endpoint (the provider-agnostic path already supports this).
+
+## 4-way: Claude/Codex x WITH vs WITHOUT Argus (n=25 stratified, 2026-06-25)
+Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per scenario, 4 conditions. Claude cost = CLI-reported ACTUAL; Codex cost = ESTIMATE (subscription auth reports only total tokens; blended gpt-5.5 $10/1M, ~20% output). Per-call hard-cap 180s.
+
+| condition | success% | mean_tok | median_tok | cost/query | lat p50 | lat p95 | urls | words |
+|---|---|---|---|---|---|---|---|---|
+| claude-native | 100 | 26.9k | 31.8k | $0.528 | 30.5s | 46.8s | 3.6 | 177 |
+| claude-argus | 92 | 26.0k | 33.0k | $0.570 | 46.3s | 169.5s | 3.3 | 195 |
+| codex-native | 100 | 26.1k | 26.7k | $0.261* | 28.3s | 51.0s | 4.16 | 144 |
+| codex-argus | 100 | 44.9k | 42.8k | $0.449* | 53.7s | 88.5s | 3.76 | 134 |
+
+**WITH vs WITHOUT Argus:** Claude tokens -3.3% (median slightly up), cost +8%, synthesis +17 words (deeper), latency ~2x, 2/25 timeouts. Codex tokens **+72%**, cost +72%*, words -9, latency ~1.7x.
+
+**Findings:**
+1. **Claude leverages Argus efficiently** - token-neutral while producing the deepest synthesis (one `research` call returns full clean extracted content vs many native WebSearch hits). The right consumer for Argus.
+2. **Codex does NOT** - +72% tokens, no quality gain; it makes many MCP round-trips that balloon context.
+3. **Latency tail is the real cost** - the `*-argus` path adds latency and produced 2 claude-argus timeouts (p95 169s) because the single-uvicorn-worker deployed server + courtesy throttle serialize an agent's many tool calls. Normal single-user Argus latency is far lower (search ~1.4s, see above); these numbers are under one agent's burst. **Action: scale Argus to a worker pool / raise per-host concurrency for multi-call agent sessions.**
+4. **Cost:** Argus adds ~8% $/query for Claude (full-content input vs hit lists); for Codex the estimate is +72% (token-driven).
+
+**Caveat:** claude-argus mean_tok is dragged by the 2 timeout records (partial, 0 tokens parsed); median (33.0k) is the robust central value. Codex $ is an estimate (no per-call billing exposed).
