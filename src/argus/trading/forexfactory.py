@@ -19,12 +19,25 @@ Aurix's own keyword filter if needed). currency/impact/actual/forecast/previous 
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
+from datetime import UTC, datetime
 
 from argus.security.ssrf import build_safe_async_client
 
 FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 _TIMEOUT = 20.0
+# Resilience (the FairEconomy feed is an external single point of failure): a tight
+# per-attempt timeout + one retry, then a STALE-but-FLAGGED fallback to the last good
+# fetch (<= _STALE_MAX_AGE). Stale data is never served silently - it carries
+# `stale: True` + `stale_age_seconds` so a trading consumer can decide to trust it.
+_ATTEMPT_TIMEOUT = 15.0
+_MAX_ATTEMPTS = 2  # initial + 1 retry
+_STALE_MAX_AGE = 6 * 3600  # serve last-good up to 6h on fetch failure
+# Last successful FULL (unfiltered) fetch. Module-global = per-process (single worker).
+# ponytail: in-module last-good store instead of touching the shared cache layer.
+_last_good: dict | None = None
 
 # FairEconomy impact strings -> normalized Aurix labels. Anything else (e.g. a
 # bank holiday flagged on the feed) folds into "Holiday".
@@ -94,34 +107,71 @@ def _in_range(time: str | None, lo: str, hi: str) -> bool:
     return lo <= day <= hi
 
 
+def _filter_range(events: list[dict], date_range) -> list[dict]:
+    """Filter events to a (start, end) inclusive YYYY-MM-DD window (auto-swapped)."""
+    if not date_range:
+        return events
+    lo, hi = date_range[0][:10], date_range[1][:10]
+    if lo > hi:
+        lo, hi = hi, lo
+    return [e for e in events if _in_range(e["time"], lo, hi)]
+
+
 async def forexfactory_calendar(date_range=None, *, client=None) -> dict:
     """Fetch + parse the FairEconomy FF feed, optionally filtered by date range.
 
     ``date_range`` is a (start, end) tuple/list of ISO dates (inclusive, compared
     on the YYYY-MM-DD prefix) or ``None``. Returns
-    ``{events, count, source}``. Raises :class:`ForexFactoryError` on fetch failure.
+    ``{events, count, source, stale}``.
+
+    Resilience: a tight per-attempt timeout + one retry. If the external feed is
+    still unreachable, falls back to the last good fetch (<= 6h old) flagged
+    ``stale: True`` (+ ``stale_age_seconds``, ``fetched_at``) so a trading consumer
+    can decide whether to trust it - stale data is NEVER served silently. Raises
+    :class:`ForexFactoryError` only when there is no recent last-good to fall back on.
     """
+    global _last_good
     owns_client = client is None
     if owns_client:
         client = build_safe_async_client(timeout=_TIMEOUT)
+    body = None
+    last_exc: Exception | None = None
     try:
-        try:
-            resp = await client.get(FEED_URL)
-            resp.raise_for_status()
-            body = resp.content
-        except Exception as exc:  # noqa: BLE001 - normalize to structured error
-            raise ForexFactoryError(
-                "ff_fetch_failed", f"FairEconomy feed fetch failed: {exc}"
-            ) from exc
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                resp = await client.get(FEED_URL, timeout=_ATTEMPT_TIMEOUT)
+                resp.raise_for_status()
+                body = resp.content
+                break
+            except Exception as exc:  # noqa: BLE001 - retry, then stale-fallback
+                last_exc = exc
+                if attempt + 1 < _MAX_ATTEMPTS:
+                    await asyncio.sleep(0.5 * (attempt + 1))
     finally:
         if owns_client:
             await client.aclose()
 
-    events = parse_ff_calendar(body)
-    if date_range:
-        lo, hi = date_range[0][:10], date_range[1][:10]
-        if lo > hi:
-            lo, hi = hi, lo
-        events = [e for e in events if _in_range(e["time"], lo, hi)]
+    if body is None:
+        # Fetch failed after retries. Serve the last good feed if recent, FLAGGED stale.
+        if _last_good is not None:
+            age = time.time() - _last_good["ts"]
+            if age <= _STALE_MAX_AGE:
+                events = _filter_range(_last_good["events"], date_range)
+                return {
+                    "events": events,
+                    "count": len(events),
+                    "source": FEED_URL,
+                    "stale": True,
+                    "stale_age_seconds": int(age),
+                    "fetched_at": datetime.fromtimestamp(
+                        _last_good["ts"], tz=UTC
+                    ).isoformat(),
+                }
+        raise ForexFactoryError(
+            "ff_fetch_failed", f"FairEconomy feed fetch failed: {last_exc}"
+        ) from last_exc
 
-    return {"events": events, "count": len(events), "source": FEED_URL}
+    all_events = parse_ff_calendar(body)
+    _last_good = {"events": all_events, "ts": time.time()}
+    events = _filter_range(all_events, date_range)
+    return {"events": events, "count": len(events), "source": FEED_URL, "stale": False}
