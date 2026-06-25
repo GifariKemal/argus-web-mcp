@@ -24,7 +24,11 @@ log() { logger -t "$TAG" -- "$*" 2>/dev/null || true; echo "[$TAG] $*"; }
 cd "$APP" 2>/dev/null || { log "FATAL: app dir $APP missing"; exit 1; }
 
 # git as the repo-owning user (repo is owned by argus:argus under ProtectSystem).
-g() { sudo -u "$SVC_USER" git -C "$APP" "$@"; }
+# core.fileMode=false: ignore executable-bit drift so a chmod'd deploy script (or
+# any mode-only change in the working tree) can NEVER block the ff-merge. This was
+# a real incident: `chmod +x argus-update.sh` at install left a mode diff that
+# aborted the merge the first time a commit touched that file.
+g() { sudo -u "$SVC_USER" git -C "$APP" -c core.fileMode=false "$@"; }
 
 g fetch --quiet origin "$BRANCH" || { log "fetch failed (network?); skip this cycle"; exit 0; }
 local_rev=$(g rev-parse HEAD)
