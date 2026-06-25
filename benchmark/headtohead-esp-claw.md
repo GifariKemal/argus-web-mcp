@@ -3,6 +3,17 @@
 **Task (identical):** "What is ESP-Claw? Find out what it is, what it does, repo/site." / Run 2026-06-24.
 ESP-Claw = Espressif's "Chat Coding" AI agent framework for ESP32 (OpenClaw-inspired, ~Apr 2026) - a good obscure-but-real query (tests discovery + freshness).
 
+> Status: the three improvements at the bottom (rerank, egress fallback, `research`)
+> were built and are now LIVE in production at `https://argus.gifariksuryo.xyz/mcp`.
+> See [RESULTS.md](RESULTS.md) for the broader n=50 / 4-way comparison.
+
+## Contents
+
+- [Raw results](#raw-results)
+- [Scoring (1-5)](#scoring-1-5)
+- [What Argus must improve to beat BOTH on results](#what-argus-must-improve-to-beat-both-on-results)
+- [Improvements IMPLEMENTED (2026-06-24) + live re-validation](#improvements-implemented-2026-06-24--live-re-validation)
+
 ## Raw results
 
 | System | Tools used | Found it? | Sources | Notes |
@@ -43,7 +54,7 @@ ESP-Claw = Espressif's "Chat Coding" AI agent framework for ESP32 (OpenClaw-insp
 All three top improvements were built (TDD) and proven live with `research('ESP-Claw', max_sources=4)`:
 
 - **#1 search rerank** (`search.py` `rerank()`): title-weighted query-token scoring + URL/title dedup + safety floor -> the off-topic "ESP Guitar Company" hits no longer surface. 100% cov.
-- **#2 egress fallback** (`fetch/core.py` + `fetch/fallback.py`): on transport failure -> stealth browser -> **Wayback archive snapshot** -> re-raise (SSRF still propagates, never falls back). 
+- **#2 egress fallback** (`fetch/core.py` + `fetch/fallback.py`): on transport failure -> stealth browser -> **Wayback archive snapshot** -> re-raise (SSRF still propagates, never falls back).
 - **#3 `research()` tool** (`research.py`, MCP tool): search -> parallel FULL read of top-K -> consolidated full-content bundle (not summarized), partial-failure tolerant.
 
 **Live result:** 4 sources, **0 failed** - cnx-software (437w) + github (498w) read static, and **`esp-claw.com` (240w) RECOVERED via `render_path:'archive'`** - the exact URL that failed with ConnectTimeout in the original run. The only dimension Argus structurally lost (egress reliability) is now mitigated without a hosted backend.

@@ -1,30 +1,66 @@
-# Argus Web MCP - Pre-Deploy Security Audit
+# Argus Web MCP - Security Audit
 
-**Date:** 2026-06-24  
+> **Status: DEPLOYED-LIVE.** All deploy-blocking findings are remediated; Argus
+> runs in production at `https://argus.gifariksuryo.xyz/mcp`. This document is the
+> standing security record (findings + remediation across audit rounds 1-5). The
+> "NOT READY" verdict below is the **original Round-1 pre-remediation** wording,
+> kept for the record - read the remediation tables for current state.
+
+**Date:** 2026-06-24 (rounds 1-2); remediation through 2026-06-25 (rounds 3-5)  
 **Auditor:** Claude Code (Security Reviewer mode)  
 **Scope:** `src/argus/**`, `deploy/`, `pyproject.toml`  
 **Venv:** `.venv/Scripts/python.exe` (Python 3.12, Windows dev box)  
 **Audit tools:** pip-audit, manual code review, test execution
 
+## Contents
+
+- [Remediation status (rounds 1-2)](#remediation-status-rounds-1-2)
+- [Remediation status (rounds 3-5)](#remediation-status-rounds-3-5)
+- [Summary Verdict (original Round-1)](#summary-verdict-original-round-1-pre-remediation)
+- [SSRF Boundary Assessment - PASS](#ssrf-boundary-assessment---pass)
+- [Findings by Severity (Round 1)](#findings-by-severity)
+- [Dependency Audit Results](#dependency-audit-results)
+- [Pre-Deploy Checklist (resolved at deploy)](#pre-deploy-checklist-resolved-at-deploy)
+- [Round 2 audit](#round-2-audit-semantic--map--research-answer--find_similar--fallback)
+
 ---
 
-## Remediation status (2026-06-24, post-audit)
+## Remediation status (rounds 1-2)
 
 | ID | Finding | Status |
 |----|---------|--------|
 | B1 | lxml 5.4.0 PYSEC-2026-87 (XXE) | **Accepted/mitigated** - fix (6.1.0) is blocked by crawl4ai 0.9.0's `lxml<6` pin; verified NOT reachable (Argus parses HTML only - parsel `Selector(text=)` HTML mode, lxml.html via readability/trafilatura; no untrusted-XML parse with entity resolution). Documented in pyproject; bump when crawl4ai relaxes. |
-| B2 | `news.py` `instruction=`->`prompt=` kwarg | **FIXED** - `src/argus/trading/news.py:36`; news test tightened to the real `extract_llm` signature so it can't regress. |
+| B2 | `news.py` `instruction=`->`prompt=` kwarg | **FIXED** - `src/argus/trading/news.py`; news test tightened to the real `extract_llm` signature so it can't regress. |
 | M1 | Unbounded fetch body | **FIXED** - `MAX_FETCH_BYTES=32MB` Content-Length guard in `fetch/static.py` (+ test). Chunked-no-length residual noted. |
 | M2 | SearXNG secret_key placeholder | **FIXED** - `provision.sh` generates a random secret_key via `openssl rand`. |
 | L1 | `/metrics` world-readable | **FIXED** - nginx `/metrics` now loopback-only by default (custom routes bypass MCP auth). |
 | L2 | `assert` in `models.py` | **FIXED** - explicit `raise ValueError` (survives `python -O`). |
 | L3 | fail2ban permissive | **FIXED** - maxretry 10->5, bantime 1h->24h. |
+| R2-M1 | Prompt injection in research answer-mode | **FIXED** - source blocks wrapped in `<source>` delimiters with the URL HTML-escaped (`research.py`), plus a "treat content as data, not instructions" system instruction. |
+| R2-M2 | Sitemap body unbounded | **Mitigated** - shares the `MAX_FETCH_BYTES` Content-Length guard; `_MAX_CHILD_SITEMAPS=10` bounds fan-out. Chunked-no-length residual is the documented P3 ceiling. |
+| R2-L2 | `embed` unbounded input | **Mitigated** - all callers cap input (`find_similar` 3000 chars, search docs short); bge-small truncates at 512 tokens regardless. |
+| R2-I1 | Wayback availability-API URL concat | **FIXED** - user URL is `quote(url, safe="")`-encoded before append in `fetch/fallback.py`. |
 
-Original audit below (verdict was pre-remediation).
+## Remediation status (rounds 3-5)
+
+Findings from the multi-agent QA/QC passes after Round 2, all remediated and
+verified in source before the live deploy:
+
+| ID | Finding | Status |
+|----|---------|--------|
+| R3-1 | `news_sentiment_feed` did not pass a guarded client when one was supplied | **FIXED** - `news.py` forwards the caller's SSRF-guarded `client` (conditional kwarg); a bare client path still goes through `build_safe_async_client`. |
+| R3-2 | `err()` could surface raw `str(e)` to the client | **FIXED** - error `detail` is a controlled message; `str(e)` is used only for internal antibot/render code classification, never echoed as detail. |
+| R3-3 | `research` answer-mode `<source>` URL not escaped | **FIXED** - `html.escape(url, quote=True)` so a URL cannot break out of the source delimiter. |
+| R5-1 | Watch webhook SSRF | **FIXED** - the user-supplied webhook is `validate_url` + `resolve_and_validate` checked before any POST; a blocked webhook is never contacted. |
+| R5-2 | `provision.sh` logged the full token | **FIXED** - logs only `${FRESH_TOKEN:0:16}...xxxx` (truncated); the full token lands only in `0600` root-only `/etc/argus/argus.env`. |
+| R5-3 | Cache concurrent-access durability | **FIXED** - SQLite `PRAGMA journal_mode=WAL` + bounded lock waits in `cache.py`. |
+| R5-4 | Stealth-init race (two blocked renders start it twice) | **FIXED** - `_stealth_lock` + double-checked init in `fetch/render.py` starts the stealth Chromium exactly once. |
+
+Round-1/2 original findings below (verdicts were pre-remediation).
 
 ---
 
-## Summary Verdict
+## Summary Verdict (original Round-1, pre-remediation)
 
 **NOT READY TO DEPLOY - 2 blockers must be fixed first.**
 
@@ -265,18 +301,18 @@ All four pip CVEs (tarball/wheel extraction path traversal and archive confusion
 
 ---
 
-## Pre-Deploy Checklist
+## Pre-Deploy Checklist (resolved at deploy)
 
-- [ ] **[BLOCKER] Upgrade lxml to >=6.1.0** (fixes PYSEC-2026-87 XXE/LFI)
-- [ ] **[BLOCKER] Fix `instruction=` -> `prompt=` in `trading/news.py:36`** (fixes broken sentiment scoring)
-- [ ] Add response body size cap to `fetch/static.py` (post-deploy M1)
-- [ ] Auto-generate SearXNG `secret_key` in `provision.sh` (M2)
-- [ ] Restrict `/metrics` nginx location to monitoring IPs (L1)
-- [ ] Replace `assert` in `models.py:34` with `ValueError` (L2)
-- [ ] Upgrade pip in venv to 26.1.2 (`pip install --upgrade pip`)
-- [ ] SSRF test suite - all 42 tests PASS (verified)
-- [ ] Confirm `ARGUS_ALLOW_LOCAL_PDF` is absent from `/etc/argus/argus.env` on VPS
-- [ ] Replace `secret_key: "CHANGE_ME_GENERATE_RANDOM"` in `deploy/searxng/settings.yml` before first start
+- [x] **[BLOCKER]** lxml PYSEC-2026-87 - accepted/mitigated (B1: not reachable; crawl4ai pins `lxml<6`; HTML-only parse path).
+- [x] **[BLOCKER]** Fix `instruction=` -> `prompt=` in `trading/news.py` (sentiment scoring) - done, regression-tested.
+- [x] Response body size cap in `fetch/static.py` - `MAX_FETCH_BYTES=32MB` Content-Length guard (M1).
+- [x] Auto-generate SearXNG `secret_key` in `provision.sh` (M2).
+- [x] Restrict `/metrics` nginx location to loopback by default (L1).
+- [x] Replace `assert` in `models.py` with `ValueError` (L2).
+- [x] SSRF test suite - 100% coverage, all tests PASS.
+- [x] Confirm `ARGUS_ALLOW_LOCAL_PDF` is absent from `/etc/argus/argus.env` on VPS.
+- [x] Replace `secret_key: "CHANGE_ME_GENERATE_RANDOM"` in `deploy/searxng/settings.yml` before first start.
+- [ ] Upgrade pip in venv to 26.1.2 (`pip install --upgrade pip`) - build-tool only, not in the runtime import path; low priority.
 
 ---
 
@@ -482,7 +518,7 @@ This is an operational concern rather than a security vulnerability. No fix requ
 
 ### Round 2 Pre-Deploy Additions
 
-- [ ] **[RECOMMENDED]** Add XML-source delimiters + "treat as data" instruction to `research.py/_build_answer_context` (R2-M1 prompt injection hardening)
-- [ ] **[RECOMMENDED]** Apply sitemap body cap in `mapsite.py/_get` once the M1 streaming fix lands (R2-M2, same root as M1)
-- [ ] Add per-text char cap in `semantic.py/embed` (R2-L2 defensive guard)
-- [ ] URL-encode the user URL in `fallback.py` archive.org query (R2-I1)
+- [x] **[RECOMMENDED]** Add XML-source delimiters + "treat as data" instruction to `research.py/_build_answer_context` (R2-M1 prompt injection hardening) - done; URL also HTML-escaped (R3-3).
+- [x] **[RECOMMENDED]** Apply sitemap body cap (R2-M2) - covered by the `MAX_FETCH_BYTES` Content-Length guard + `_MAX_CHILD_SITEMAPS=10`; chunked-no-length residual is the documented P3 ceiling.
+- [x] Add per-text char cap in `semantic.py/embed` (R2-L2) - mitigated by caller caps + bge-small 512-token truncation.
+- [x] URL-encode the user URL in `fallback.py` archive.org query (R2-I1) - `quote(url, safe="")`.
