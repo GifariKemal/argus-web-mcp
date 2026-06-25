@@ -398,6 +398,43 @@ async def test_poll_due_changed_but_delivery_fails(tmp_path, private_dns):
     assert s.list()[0].last_hash == content_signature(CHANGELOG_HTML2)
 
 
+async def test_check_xpath_text_selector_extracts_value(tmp_path):
+    # XPath text() yields a bare str node -> _select_value takes the node.get() path.
+    s = _store(tmp_path)
+    w = s.add("https://x.test/cal", "//h1/text()", 300, "https://hook.test/in")
+    fetch = FakeFetch(CHANGELOG_HTML)
+    res = await check_watch(w, fetch_fn=fetch, now=100.0)
+    assert res["value"] == "v1"
+    assert res["new_hash"] == content_signature(CHANGELOG_HTML, "v1")
+
+
+def test_persist_oserror_unlinks_temp_and_reraises(tmp_path, monkeypatch):
+    # If os.replace fails, the temp file must be cleaned up and the error re-raised
+    # so a half-written watch store is never left behind.
+    s = _store(tmp_path)
+    created: list[str] = []
+    real_mkstemp = W.tempfile.mkstemp
+
+    def spy_mkstemp(*a, **k):
+        fd, path = real_mkstemp(*a, **k)
+        created.append(path)
+        return fd, path
+
+    monkeypatch.setattr(W.tempfile, "mkstemp", spy_mkstemp)
+
+    def boom_replace(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(W.os, "replace", boom_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        s.add("https://x.test/cal", None, 300, "https://hook.test/in")
+
+    assert created, "mkstemp should have created a temp file"
+    for path in created:
+        assert not W.os.path.exists(path)  # temp cleaned up on failure
+
+
 async def test_check_selector_no_match_value_none(tmp_path):
     s = _store(tmp_path)
     w = s.add("https://x.test/cal", ".missing", 300, "https://hook.test/in")

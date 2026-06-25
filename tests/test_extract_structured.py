@@ -93,6 +93,22 @@ def test_many_empty_list_optional_valid():
     assert res["valid"] is True
 
 
+def test_xpath_text_node_with_attr_returns_none():
+    # XPath text() yields a bare str node; requesting an attr on a text node has no
+    # attribute -> value is None (and the required field is therefore invalid).
+    schema = {"t": {"selector": "//h1/text()", "attr": "data-x"}}
+    res = extract_selectors(HTML, schema)
+    assert res["data"]["t"] is None
+    assert res["valid"] is False
+
+
+def test_xpath_text_node_with_attr_optional_still_valid():
+    schema = {"t": {"selector": "//h1/text()", "attr": "data-x", "required": False}}
+    res = extract_selectors(HTML, schema)
+    assert res["data"]["t"] is None
+    assert res["valid"] is True
+
+
 def test_return_shape():
     res = extract_selectors(HTML, {"title": "h1"})
     assert set(res.keys()) == {"data", "valid"}

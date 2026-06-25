@@ -367,6 +367,17 @@ async def test_research_search_backend_down(app_state, monkeypatch):
     assert r["code"] == "search_backend_down"
 
 
+async def test_research_unexpected_error_maps_to_extraction_failed(app_state, monkeypatch):
+    # A bare RuntimeError (not ValueError/SearchError) hits the catch-all and is
+    # surfaced as a structured extraction_failed error, never raised to the client.
+    async def boom(query, **kw):
+        raise RuntimeError("synthesis blew up")
+
+    monkeypatch.setattr(server, "_research", boom)
+    r = await server.research("anything")
+    assert r["code"] == "extraction_failed"
+
+
 async def test_research_cached(app_state, monkeypatch):
     calls = {"n": 0}
 

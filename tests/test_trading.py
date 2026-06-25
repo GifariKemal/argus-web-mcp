@@ -119,6 +119,33 @@ async def test_forexfactory_calendar_date_range_filter():
     assert all(e["time"].startswith("2026-06-22") for e in out["events"])
 
 
+async def test_forexfactory_calendar_date_range_reversed_bounds_auto_swap():
+    # lo > hi must be swapped so the filter still matches the intended window.
+    body = FF_FIXTURE.read_bytes()
+    async with _mock_client(body) as client:
+        out = await forexfactory.forexfactory_calendar(
+            date_range=("2026-06-22", "2026-06-21"), client=client  # reversed
+        )
+    # Same window as ("2026-06-21","2026-06-22") -> all 12 events.
+    assert out["count"] == 12
+
+
+async def test_forexfactory_calendar_excludes_empty_time_event():
+    # An event with empty/missing date -> time is None -> excluded by _in_range.
+    feed = [
+        {"title": "Has date", "country": "USD", "date": "2026-06-22T08:30:00-04:00",
+         "impact": "High"},
+        {"title": "No date", "country": "EUR", "date": "", "impact": "Low"},
+    ]
+    body = json.dumps(feed).encode("utf-8")
+    async with _mock_client(body) as client:
+        out = await forexfactory.forexfactory_calendar(
+            date_range=("2026-06-22", "2026-06-22"), client=client
+        )
+    assert out["count"] == 1
+    assert out["events"][0]["event"] == "Has date"
+
+
 async def test_forexfactory_calendar_fetch_failure_raises_coded():
     async with _mock_client(b"err", status=503) as client:
         with pytest.raises(forexfactory.ForexFactoryError) as ei:
@@ -174,6 +201,28 @@ def test_parse_cot_blank_numeric_to_none():
     rows = cot.parse_cot(text)
     assert rows[0]["market"] == "TEST MARKET"
     assert rows[0]["open_interest"] is None
+
+
+def test_parse_cot_non_numeric_cell_to_none():
+    # _MAX_COL is 16, so a row needs >16 columns. open_interest (col 7) is the
+    # non-numeric token "N.A." -> _to_int returns None; other int cells parse.
+    cells = ["MKT NONNUM", "260616", "2026-06-16", "x", "y", "z", "w"]
+    cells.append("N.A.")  # col 7: open_interest, non-numeric
+    cells += [str(i) for i in range(8, 20)]  # cols 8..19 numeric, > _MAX_COL
+    rows = cot.parse_cot(",".join(cells))
+    assert len(rows) == 1
+    assert rows[0]["market"] == "MKT NONNUM"
+    assert rows[0]["open_interest"] is None  # non-numeric -> None
+    assert rows[0]["noncommercial_long"] == 8  # col 8 still parsed as int
+
+
+def test_parse_cot_skips_too_short_line():
+    short = "ONLY,A,FEW,COLUMNS"  # 4 cols <= _MAX_COL (16) -> skipped
+    valid = ["GOOD MKT", "260616", "2026-06-16"] + [str(i) for i in range(3, 20)]
+    text = short + "\n" + ",".join(valid)
+    rows = cot.parse_cot(text)
+    assert len(rows) == 1  # short line dropped
+    assert rows[0]["market"] == "GOOD MKT"
 
 
 async def test_cot_report_shape_and_count():
