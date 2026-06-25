@@ -2,7 +2,7 @@
 
 # AGENTS.md - working on Argus
 
-<img src="https://img.shields.io/badge/tests-526_offline-3fb950?style=flat-square&logo=pytest&logoColor=white" alt=""/>
+<img src="https://img.shields.io/badge/tests-600_offline-3fb950?style=flat-square&logo=pytest&logoColor=white" alt=""/>
 <img src="https://img.shields.io/badge/SSRF-100%25_required-16a34a?style=flat-square" alt=""/>
 <img src="https://img.shields.io/badge/lint-ruff_clean-d29922?style=flat-square" alt=""/>
 <img src="https://img.shields.io/badge/style-Ponytail_minimal-0ea5e9?style=flat-square" alt=""/>
@@ -14,6 +14,16 @@
 ---
 
 > Read [`SOUL.md`](SOUL.md) for *why*, [`docs/00-DESIGN.md`](docs/00-DESIGN.md) for the architecture, [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md) for the plan. This file is *how to work here*.
+
+## Contents
+
+- [Setup](#setup)
+- [Commands](#commands)
+- [Hard gates - never compromise](#hard-gates---never-compromise)
+- [How to build a change](#how-to-build-a-change)
+- [Layout & conventions](#layout--conventions)
+- [Secrets & deploy](#secrets--deploy)
+- [Don't](#dont)
 
 ## Setup
 
@@ -80,7 +90,7 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 
 - Manage VPS secrets via SSH/scp directly - **not** via Hermes tools (`redact_secrets` masks them).
 - Never commit a real `secret_key`/token. `*.bak` and benchmark run-artifacts are gitignored.
-- Don't deploy to the VPS without the owner inputs in `docs/02-ROADMAP.md` (subdomain/DNS, `ARGUS_TOKEN`, optional proxy). Runbook: [`deploy/README.md`](deploy/README.md).
+- **Already live** at `https://argus.gifariksuryo.xyz/mcp` (`103.172.172.29`). A systemd timer auto-deploys `main`: poll every 5 min -> fast-forward only -> restart -> `/health` gate -> auto-rollback (docs/benchmark-only commits skip the restart). So a merged change to `main` ships itself - keep `main` green. Runbook: [`deploy/README.md`](deploy/README.md).
 
 ## Don't
 

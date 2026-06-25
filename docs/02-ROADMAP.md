@@ -1,6 +1,16 @@
 # Argus - Step-by-Step Roadmap (no gaps)
 
+> **Status (2026-06-25):** P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. Remaining owner item: `ARGUS_S2_API_KEY` (F1).
+
 Build **locally first**, prove it via QA/QC + benchmark, then wrap as our MCP and deploy to the VPS. Each phase has an explicit **exit gate** - do not advance until it passes.
+
+## Contents
+
+- [P0 - Research and Design](#p0---research--design-x-done-2026-06-24)
+- [P1 - MVP, validated locally](#p1---mvp-built--validated-locally-windows-dev-box-x-done-2026-06-24)
+- [P2 - Feature parity + trading moat](#p2---feature-parity-with-the-paid-tier--trading-moat-local---mostly-done-2026-06-24)
+- [P3 - Productionize + deploy](#p3---productionize-the-mcp--deploy-to-vps-x-done--deployed-live-2026-06-25)
+- [P4 - Operate](#p4---operate--live)
 
 ---
 
@@ -51,22 +61,25 @@ After the P2 gate, a 200-scenario benchmark + 3-way comparison (vs Claude Code &
 
 ---
 
-## P3 - Productionize the MCP & DEPLOY to VPS
-Only after P1+P2 gates pass. **Local productionization + artifacts + security gate [x] DONE (2026-06-24); actual VPS deploy (paused) AWAITING owner authorization (outward-facing, shared box).**
+## P3 - Productionize the MCP & DEPLOY to VPS [x] DONE + DEPLOYED LIVE (2026-06-25)
+Only after P1+P2 gates pass. **Local productionization + artifacts + security gate DONE (2026-06-24); deployed live to the VPS (2026-06-25).** Live at `https://argus.gifariksuryo.xyz/mcp`.
 1. **Switch transport to Streamable HTTP** - [x] `app = mcp.http_app(path="/mcp")` (uvicorn `argus.server:app`); `/health` + `/metrics` (Prometheus). Auth `StaticTokenVerifier` from env `ARGUS_TOKEN`. Verified live: /health 200, /metrics OK, /mcp no-token -> 401.
 2. **Deploy artifacts** (`deploy/`) - [x] `argus.service` (systemd, `User=argus`, hardened, EnvironmentFile), `argus.nginx.conf` (TLS, `proxy_buffering off`, /metrics loopback-only), `provision.sh` (idempotent, playwright-as-argus, SearXNG secret_key gen), `fail2ban-argus.conf`, `argus.env.example`, `README` runbook. **Security SAST + deps-audit done (`deploy/SECURITY-AUDIT.md`): 2 HIGH fixed/accepted, mediums/lows fixed.**
-3. **Deploy to `103.172.172.29`** via SSH (key-only `gifari_vps_ed25519`) - SearXNG :8888, Argus :8090, nginx `argus.<domain>`. Coexist with Hermes/SUVA. Secret via scp (not Hermes tools).
-4. **Security + load test on staging** - [x] security SAST + deps-audit done. [x] **local load test PASS** (`benchmark/loadtest.py`): 1000-read flood x3 rounds 0 errors + RSS flat ~181 MB (no leak); 24 concurrent browser renders x3 rounds 0 errors, peak active_contexts=4=pool concurrency (semaphore bound holds), RSS flat ~216 MB (no context leak); peak well under 2 GB cap. (paused) 24h soak - run on staging/VPS before cutover.
-5. **Register in Claude Code** - `claude mcp add --transport http argus https://argus.<domain>/mcp --header Authorization` (user scope). Verify zero local process.
-6. **Cutover** - point Aurix `calendar_client`/research + general web needs at Argus; optionally retire remaining web-MCP redundancy.
-**Exit gate (P3):** remote HTTP MCP live + authed + TLS; health green; load test passes (no OOM/leak); Claude Code connects with zero local process; security gates clean.
+3. **Deploy to `103.172.172.29`** - [x] **LIVE** via SSH (key-only `gifari_vps_ed25519`): SearXNG :8888, Argus :8090 (`--workers 1`), nginx `argus.gifariksuryo.xyz` + Let's Encrypt TLS + fail2ban. Coexists with Hermes/SUVA. Secret via scp (not Hermes tools).
+4. **Safe auto-update** - [x] `deploy/argus-update.{sh,service,timer}` poll `main` every 5 min, fast-forward only, `/health`-gate, **auto-rollback** on failure, skip-restart on docs-only changes, mode-drift hardened.
+5. **Security + load test** - [x] security SAST + deps-audit done. [x] **local load test PASS** (`benchmark/loadtest.py`): 1000-read flood x3 rounds 0 errors + RSS flat ~181 MB (no leak); 24 concurrent browser renders x3 rounds 0 errors, peak active_contexts=4=pool concurrency (semaphore bound holds), RSS flat ~216 MB (no context leak); peak well under 2 GB cap.
+6. **Register in Claude Code** - [x] `claude mcp add --transport http argus https://argus.gifariksuryo.xyz/mcp --header Authorization` (user scope); zero local process confirmed.
+7. **Cutover** - point Aurix `calendar_client`/research + general web needs at Argus; optionally retire remaining web-MCP redundancy.
+**Exit gate (P3):** [x] remote HTTP MCP live + authed + TLS; health green; load test passes (no OOM/leak); Claude Code connects with zero local process; security gates clean. **MET.**
 
 ---
 
-## P4 - Operate
-- Hermes watchdog curls `/health` /30m; Prometheus alerts on error-rate/active-context.
-- Benchmark is a re-runnable regression gate before any future change.
-- Phase-future (YAGNI): `watch`/`map`, proxy pool, owned search index.
+## P4 - Operate [~] LIVE
+- [x] Hermes watchdog curls `/health`; Prometheus `/metrics` for error-rate / active-context.
+- [x] Safe auto-update timer keeps the VPS in sync with `main` (ff-only, health-gated, auto-rollback).
+- [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
+- **Open owner item (F1):** set `ARGUS_S2_API_KEY` (Semantic Scholar) to lift `scholar_search` rate limits.
+- Phase-future (YAGNI): proxy pool, owned search index, 24h soak on the live box.
 
 ---
 

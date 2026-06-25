@@ -1,9 +1,30 @@
 # Argus Benchmark Harness
 
 Reference-based + reference-free benchmark for the Argus web fetch/scrape/search
-MCP, scoring it against **free** scraper baselines on the same URLs. P1 Task 9.
+MCP, scoring it against **free** scraper baselines and against the native web
+tools of Claude Code and Codex CLI on the same queries.
 
-## Files
+For the durable, tracked results (numbers + findings), read
+[RESULTS.md](RESULTS.md). This README documents the harnesses that produce them.
+
+## Contents
+
+- [Two benchmark families](#two-benchmark-families)
+- [Extraction-quality harness (files)](#extraction-quality-harness-files)
+- [Comparison harness (files)](#comparison-harness-files)
+- [Running](#running)
+- [Metrics](#metrics-stdlib-token-level-lowercased-whitespace-tokens)
+- [Gold curation - read this](#gold-curation---read-this)
+- [Adapters](#adapters)
+
+## Two benchmark families
+
+| Family | What it answers | Entry points | Results |
+|---|---|---|---|
+| Extraction quality | Does Argus capture main content and reject boilerplate vs free scrapers? | `run_bench.py`, `scorer.py`, `adapters.py` | `report.md` (regenerable) |
+| Comparison | How does Argus stack up against Claude/Codex native web tools (breadth, depth, tokens, cost, speed)? | `run_compare.py`, `run_4way.py`, `scenarios.py`, `run_codex.sh`, `burst_test.py` | [RESULTS.md](RESULTS.md) |
+
+## Extraction-quality harness (files)
 
 | File | Role |
 |---|---|
@@ -12,10 +33,25 @@ MCP, scoring it against **free** scraper baselines on the same URLs. P1 Task 9.
 | `scorer.py` | Stdlib-only metrics (no rouge/nltk dep): legacy `rouge_l`, `token_f1`, `truncation_completeness`; **fair `content_recall`, `boilerplate_rejection`, `quality_f1`**; plus `success`, `lcs_len`, `score_item`. Run `python benchmark/scorer.py` for an assert self-check. |
 | `adapters.py` | Uniform `async run(item) -> {content, latency, ok}`. Adapters: `argus` (real in-process tool), `raw_trafilatura`, `readability_only` (free baselines). Paid adapters are a documented stub in `KEYED_ADAPTERS` (skipped - never called without a key). |
 | `run_bench.py` | Runner - loads testset, runs adapters, scores, writes `report.md`. |
+| `regold.py` | Regenerates the independent gold with a neutral third extractor (see [Gold curation](#gold-curation---read-this)). |
 | `gold/<id>.md` | Curated clean main-text for the stable text items. |
 | `report.md` | Generated leaderboard + per-item + "where Argus loses" + exit-gate. |
 
+## Comparison harness (files)
+
+| File | Role |
+|---|---|
+| `scenarios.py` | The query instrument: `SCENARIOS` = 200 real queries across 10 SURIOTA-relevant categories (~20 each); `COMPARE_IDS` = a 50-id stratified sample (exactly 5 per category) for the expensive head-to-head runs. Run `python benchmark/scenarios.py` for the self-check. |
+| `run_compare.py` | 3-arm harness. `argus` runs `search()` over all 200 scenarios (paced for SearXNG per-IP throttle); `argus-research` runs `research()` over the compare ids; `score` aggregates the 200-sweep + auto-flags weak categories; `merge-3way` builds the Argus-vs-Claude-vs-Codex section. Aggregation is pure functions (offline-tested in `tests/test_compare_scorer.py`). |
+| `run_4way.py` | 4-condition harness with `--repeat` plus token / cost / speed: claude-native, claude-argus, codex-native, codex-argus. Shells out to the CLIs (`run`), then `score` renders the table. Pure parse/aggregate functions are offline-tested in `tests/test_4way_scorer.py`. Per-call wall-clock cap 180s. |
+| `run_codex.sh` | Drives Codex CLI (`web_search=live`) over the 50 `COMPARE_IDS`, one raw answer per scenario to `codex_25/<id>.txt`. Idempotent (skips ids that already have non-empty output, so it resumes after a stop). |
+| `burst_test.py` | Un-paced burst re-validation: exercises Argus backoff + multi-engine redundancy vs a naive raw client to measure throttle recovery. |
+| `loadtest.py` | Local load test (no OOM / leak check). |
+| `semantic_ab.py` | Semantic rerank A/B: scores the same SearXNG candidate pool reranked lexical vs hybrid at nDCG@5 (see RESULTS.md). |
+
 ## Running
+
+### Extraction-quality harness
 
 ```bash
 # default = curated subset (items that have a real gold/<id>.md), live network
@@ -36,6 +72,26 @@ MCP, scoring it against **free** scraper baselines on the same URLs. P1 Task 9.
 The runner is resilient: a failing fetch for one item is caught and recorded
 (`ok=False`), never crashing the run. Every skipped item is logged with a reason
 (no silent caps).
+
+### Comparison harness
+
+```bash
+# 3-arm: Argus search over all 200 scenarios, then aggregate + auto-flag
+./.venv/Scripts/python.exe benchmark/run_compare.py argus --out out.json --pace 4.0
+./.venv/Scripts/python.exe benchmark/run_compare.py score --argus out.json
+
+# Argus research() over the 50 compare ids, then merge the 3-way section
+./.venv/Scripts/python.exe benchmark/run_compare.py argus-research --out r.json --ids-from-compare
+./.venv/Scripts/python.exe benchmark/run_compare.py merge-3way --argus-research r.json \
+    --claude claude.json --codex-dir benchmark/codex_25
+
+# 4-condition (Claude/Codex x WITH/WITHOUT Argus) with token/cost/speed
+./.venv/Scripts/python.exe benchmark/run_4way.py run --out out.json --repeat 3
+./.venv/Scripts/python.exe benchmark/run_4way.py score --in out.json
+
+# Codex native answers over the 50 compare ids (idempotent, resumable)
+bash benchmark/run_codex.sh
+```
 
 ## Metrics (stdlib, token-level, lowercased whitespace tokens)
 

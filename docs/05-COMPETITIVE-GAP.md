@@ -1,6 +1,8 @@
 # Argus - Competitive Feature Gap Analysis (vs paid web tooling)
 
-> _Created 2026-06-24._ Maps the web read/search/scrape feature sets of the leading **paid** products against Argus's current 12 tools, then ranks what to adopt - favoring **self-hostable (OSS, no paid API)** options. All competitor features verified against official docs (URLs cited per section). Items we could not verify are flagged `[UNVERIFIED]`.
+> _Created 2026-06-24._ Maps the web read/search/scrape feature sets of the leading **paid** products against Argus's tool surface at the time of analysis, then ranks what to adopt - favoring **self-hostable (OSS, no paid API)** options. All competitor features verified against official docs (URLs cited per section). Items we could not verify are flagged `[UNVERIFIED]`.
+>
+> **Status note (2026-06-25):** this is a point-in-time analysis record. Several gaps flagged "P3-only / not built" below were subsequently **shipped** - `map` (`map_urls`), `watch` / `list_watches` / `unwatch`, `find_similar`, `research(answer)`, and domain filters are now live in the 20-tool set. The tables are preserved as the original gap-analysis snapshot; see `CHANGELOG.md` and `docs/03-TOOL-SPECS.md` for what shipped.
 
 ## Argus baseline (the 12, for reference)
 
