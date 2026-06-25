@@ -96,10 +96,15 @@ async def lifespan(_server: FastMCP):
     from .fetch.throttle import HostThrottle
 
     courtesy = float(os.environ.get("ARGUS_COURTESY_DELAY", "1.0"))
+    # ARGUS_MAX_CONCURRENT_CONTEXTS was documented (deploy/README) but never read -
+    # the browser concurrency was hardcoded to the pool default. Wire it so the
+    # documented scaling knob actually works (raise to lift multi-call throughput;
+    # each Chromium context costs RAM - watch argus_active_contexts vs MemoryMax).
+    max_ctx = int(os.environ.get("ARGUS_MAX_CONCURRENT_CONTEXTS", "4"))
     _S = State(
         client=build_safe_async_client(timeout=30),
         cache=Cache(),
-        browser=BrowserPool(),
+        browser=BrowserPool(concurrency=max_ctx),
         throttle=HostThrottle(min_interval=courtesy),
         watch_store=WatchStore(),
     )

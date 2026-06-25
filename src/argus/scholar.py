@@ -13,6 +13,7 @@ Both return one lean, mapped shape (never raw backend JSON). See docs/03-TOOL-SP
 """
 
 import asyncio
+import math
 import os
 import re
 
@@ -29,6 +30,7 @@ _S2_FIELDS = "title,authors,year,venue,citationCount,externalIds,abstract,url,op
 _TIMEOUT = 20.0
 _MAX_LIMIT = 100
 _S2_MAX_RETRIES = 2  # retry budget for HTTP 429 from S2
+_LOG_CIT_W = 0.1     # weight for containment*log_cit boost in _rerank_results
 
 # Strip JATS / XML tags from CrossRef abstracts (e.g. <jats:p>, <jats:italic>).
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -112,10 +114,24 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2}
 
 def _rerank_results(query: str, results: list[dict]) -> list[dict]:
-    """Sort results by (descending query/title token-overlap fraction, descending citations).
+    """Sort results by a blended relevance score, descending; ties broken by citations.
 
-    Overlap fraction = |query_tokens & title_tokens| / |query_tokens| (0.0 when query empty).
-    Citations None is treated as -1 so it sorts below any paper with >=0 citations.
+    Score = overlap + containment * log10(1 + max(citations, 0)) * _LOG_CIT_W
+
+    where:
+      overlap    = |query_tokens & title_tokens| / |query_tokens|
+                   (query coverage: how much of the query appears in the title)
+      containment = |query_tokens & title_tokens| / |title_tokens|
+                   (title precision: fraction of title tokens that are in the query;
+                    a short canonical title fully covered by the query scores 1.0,
+                    a verbose derivative with extra tokens scores lower)
+      The product containment * log_cit rewards titles that are BOTH a tight match
+      to the query AND highly cited, while giving zero boost to verbose zero-citation
+      derivatives even when their raw overlap fraction is higher.
+
+    Citations None is treated as -1 (effective_cit) so it sorts below any paper with
+    >= 0 citations when the blended score is equal. log10 uses max(effective_cit, 0)
+    to avoid log(0); the None-vs-0 tiebreak is resolved by the secondary tuple element.
     Original order is preserved on full ties (Python sort is stable).
     """
     qtokens = _tokens(query)
@@ -124,9 +140,13 @@ def _rerank_results(query: str, results: list[dict]) -> list[dict]:
 
     def _key(r: dict) -> tuple[float, int]:
         ttokens = _tokens(r.get("title") or "")
-        overlap = len(qtokens & ttokens) / len(qtokens)
-        citations = r["citations"] if r["citations"] is not None else -1
-        return (-overlap, -citations)
+        inter = len(qtokens & ttokens)
+        overlap = inter / len(qtokens)
+        containment = inter / len(ttokens) if ttokens else 0.0
+        effective_cit = r["citations"] if r["citations"] is not None else -1
+        log_cit = math.log10(1 + max(effective_cit, 0))
+        score = overlap + containment * log_cit * _LOG_CIT_W
+        return (-score, -effective_cit)
 
     return sorted(results, key=_key)
 

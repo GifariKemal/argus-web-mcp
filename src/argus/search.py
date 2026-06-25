@@ -44,6 +44,16 @@ _SEM_FLOOR = 0.3
 # because of the token "manager" in a 5-token query) without touching legitimately
 # diverse result sets where all results have similar scores.
 _REL_FLOOR = 0.25
+# Docker Hub host-penalty (F3): de-prioritise hub.docker.com results when the query has no
+# container intent.  A MULTIPLICATIVE factor is applied to the raw score before the
+# relative-relevance gate, composing cleanly with _REL_FLOOR without changing the gate
+# itself.  Only fires when the query contains NONE of _DOCKER_INTENT_TOKENS (conservative).
+_DOCKER_HUB_DOMAIN = "hub.docker.com"
+_DOCKER_PENALTY = 0.4  # multiply raw score by this; pulls ratio below _REL_FLOOR (0.25)
+_DOCKER_INTENT_TOKENS = frozenset(
+    {"docker", "container", "containers", "image", "dockerfile",
+     "compose", "kubernetes", "k8s", "registry", "oci"}
+)
 
 
 class SearchError(Exception):
@@ -196,6 +206,8 @@ def rerank(
         return []
 
     qtokens = _tokens(query)
+    # Pre-compute once: True when the query has no container/docker intent tokens.
+    _no_docker_intent = not (qtokens & _DOCKER_INTENT_TOKENS)
 
     # Dedup (belt-and-suspenders over search()'s url dedup) + score, preserving order.
     seen_urls: set[str] = set()
@@ -226,6 +238,12 @@ def rerank(
         # so an irrelevant fresh page (dropped below) never benefits - relevance wins.
         if recency and is_fresh and has_overlap:
             score += _RECENCY_BOOST
+        # Docker Hub host-penalty: if no docker intent and result is from hub.docker.com,
+        # apply a multiplicative penalty so generic-token overlap scores sink below
+        # _REL_FLOOR relative to strong results.  Does not affect has_overlap (the result
+        # still counts as overlapping; we only shrink its magnitude for the floor gate).
+        if _no_docker_intent and _host_matches(_host(r.get("url", "")), _DOCKER_HUB_DOMAIN):
+            score *= _DOCKER_PENALTY
         fresh_rank = 0 if is_fresh else 1
         scored.append((score, fresh_rank, has_overlap, idx, r))
 

@@ -1166,3 +1166,90 @@ def test_rel_floor_trims_weak_backfill_on_hybrid_path(monkeypatch):
         assert r["url"] in urls
     for r in weak:
         assert r["url"] not in urls
+
+
+# --------------------------------------------------------------------------- #
+# 17. Docker Hub host-penalty (F3) - de-prioritise docker.com on non-docker queries
+# --------------------------------------------------------------------------- #
+def test_dockerhub_penalised_on_non_docker_it_query():
+    # F3 scenario: moderate-overlap GitHub results + Docker Hub results sharing only
+    # generic tokens ("manager") survive the existing _REL_FLOOR because the ratio
+    # (~0.375) is above _REL_FLOOR (0.25).  The host penalty must push them below it.
+    #
+    # Score maths (6-token query, lexical path):
+    #   GitHub  title={esp,idf,provisioning,component,guide}, 4/6 overlap -> lex=2*(4/6)=1.333
+    #   Docker  title={cert,manager,controller}, 1/6 -> 2*(1/6);
+    #           snip={kubernetes,certificate,manager,image}, 1/6 -> total raw=0.5
+    #   ratio_raw = 0.5/1.333 = 0.375 > 0.25 (gate does NOT fire without penalty)
+    #   With _DOCKER_PENALTY=0.4: penalised_score=0.5*0.4=0.2; ratio=0.2/1.333=0.15 < 0.25
+    #   -> gate fires -> Docker Hub trimmed out of results.
+    query = "ESP-IDF wifi provisioning manager component"
+    strong = [
+        _mapped(
+            f"ESP-IDF provisioning component guide {i}",
+            f"https://github.com/espressif/esp-idf/{i}",
+            "",
+        )
+        for i in range(3)
+    ]
+    weak = [
+        _mapped(
+            "cert-manager-controller",
+            f"https://hub.docker.com/r/cert-manager/{i}",
+            "kubernetes certificate manager image",
+        )
+        for i in range(2)
+    ]
+    out = rerank(query, strong + weak)
+    urls = [r["url"] for r in out]
+    # GitHub results kept
+    for r in strong:
+        assert r["url"] in urls
+    # Docker Hub results demoted out of the top (penalty pushes them below the rel floor)
+    for r in weak:
+        assert r["url"] not in urls
+
+
+def test_dockerhub_not_penalised_on_docker_intent_query():
+    # A query with docker-intent tokens ("docker") must NOT apply the penalty:
+    # Docker Hub results remain ranked by plain lexical score.
+    # query tokens: {docker, image, for, postgres} -> "docker" is a container-intent token
+    # -> no penalty applied -> Docker Hub result with good title coverage ranks high.
+    query = "docker image for postgres"
+    docker_result = _mapped(
+        "postgres Docker Hub image",
+        "https://hub.docker.com/r/_/postgres",
+        "official postgres docker image",
+    )
+    github_result = _mapped(
+        "postgres GitHub repo",
+        "https://github.com/postgres/postgres",
+        "postgres source code",
+    )
+    out = rerank(query, [docker_result, github_result])
+    urls = [r["url"] for r in out]
+    # Docker Hub result must still be present and not demoted to last place
+    assert "https://hub.docker.com/r/_/postgres" in urls
+    # It should rank first or second (not knocked out) - both are relevant, Docker Hub
+    # actually has better title coverage ("docker","image","postgres" vs "postgres" only)
+    assert urls[0] == "https://hub.docker.com/r/_/postgres"
+
+
+def test_dockerhub_penalty_no_regression_without_docker_results():
+    # When there are NO hub.docker.com results, the penalty code-path never fires and
+    # the output is identical to the pure lexical rerank.  Regression safety check.
+    query = "ESP-IDF wifi provisioning manager component"
+    results = [
+        _mapped(
+            f"ESP-IDF provisioning component guide {i}",
+            f"https://github.com/espressif/esp-idf/{i}",
+            "esp idf wifi provisioning manager component",
+        )
+        for i in range(4)
+    ]
+    out_with_penalty_code = rerank(query, results)
+    # All 4 should be kept (strong results, no Docker Hub noise)
+    assert len(out_with_penalty_code) == 4
+    urls = [r["url"] for r in out_with_penalty_code]
+    for r in results:
+        assert r["url"] in urls
