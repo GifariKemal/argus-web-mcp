@@ -4,6 +4,19 @@ Self-hosted, unlimited search engine that Argus' `search` tool queries over its
 JSON API. Bound to **loopback only** (`127.0.0.1:8888`) - it is an internal
 dependency, never exposed to the public internet.
 
+> **Status: LIVE.** This container runs in production on the SURIOTA VPS
+> (`103.172.172.29`) as the search backend for the live Argus at
+> `https://argus.gifariksuryo.xyz/mcp`. The steps below are the standing
+> setup/operations reference (and the recipe to re-provision or run locally).
+
+## Contents
+
+- [1. Set the secret key](#1-set-the-secret-key-required-before-first-run)
+- [2. Start](#2-start)
+- [3. Verify the JSON API](#3-verify-the-json-api)
+- [Notes](#notes)
+- [Reliability - engines + proxy pool](#reliability---engines--proxy-pool-important)
+
 ## 1. Set the secret key (required before first run)
 
 `server.secret_key` in `settings.yml` ships as the placeholder

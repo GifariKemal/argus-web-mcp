@@ -1,10 +1,40 @@
 # Argus VPS Deployment Runbook
 
+> **Status: DEPLOYED-LIVE.** Argus runs in production at
+> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `103.172.172.29`
+> (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker `127.0.0.1:8888`,
+> Let's Encrypt TLS, nginx, fail2ban). `/health` returns 200; `/mcp` returns 401
+> without a bearer token. This runbook is the provisioning + operations reference;
+> the steps below were executed for the live deploy and remain the re-provision
+> recipe. The examples use `argus.gifariksuryo.xyz` (the live host).
+
+## Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Deployment Files](#deployment-files)
+- [Prerequisites](#prerequisites)
+- [Step 1: Copy Files to VPS](#step-1-copy-files-to-vps)
+- [Step 2: Update Domain Placeholder](#step-2-update-domain-placeholder)
+- [Step 3: Run Provision Script](#step-3-run-provision-script)
+- [Step 4: Retrieve Bearer Token](#step-4-retrieve-bearer-token)
+- [Step 5: Verify the Deployment](#step-5-verify-the-deployment)
+- [Step 6: Register in Claude Code (Client Side)](#step-6-register-in-claude-code-client-side)
+- [Step 7: Set Up Hermes Monitoring (Optional)](#step-7-set-up-hermes-monitoring-optional)
+- [Rollback / Recovery](#rollback--recovery)
+- [Security Checklist](#security-checklist)
+- [Environment Variables (Optional Tuning)](#environment-variables-optional-tuning)
+- [Port Map Summary](#port-map-summary)
+- [Troubleshooting](#troubleshooting)
+- [References](#references)
+- [Safe auto-update](#safe-auto-update-poll-main---health-check---auto-rollback)
+- [Contact & Support](#contact--support)
+
 ## Overview
 
-This directory contains **configuration files only** for deploying Argus to the SURIOTA VPS (`103.172.172.29`, Ubuntu 24.04). Argus coexists with Hermes (:80) and SUVA (:8080) - it binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it.
+This directory contains the **configuration files** that provision Argus on the SURIOTA VPS (`103.172.172.29`, Ubuntu 24.04). Argus coexists with Hermes (:80) and SUVA (:8080) - it binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it.
 
-**Do NOT deploy until P1+P2 exit gates pass** (see `docs/02-ROADMAP.md`). Tests must be green locally first.
+The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-ROADMAP.md)). Re-run the steps below to re-provision or to stand up a second instance; tests must be green locally first.
 
 ## Architecture
 
@@ -55,7 +85,7 @@ Before running deployment, ensure:
    sudo su -
    ```
 
-3. **Domain**: Have your actual subdomain ready (e.g., `argus.suriota.com`)
+3. **Domain**: Have your actual subdomain ready (e.g., `argus.gifariksuryo.xyz`)
    - Replace placeholder `argus.<domain>` in `argus.nginx.conf` before running certbot
    - TLS certificate must exist (certbot will generate)
 
@@ -92,8 +122,8 @@ Before running `provision.sh`, replace `argus.<domain>` with your actual domain 
 
 ```bash
 # On the VPS, as root
-sudo sed -i 's/argus\.<domain>/argus.suriota.com/g' /opt/argus-deploy-staging/argus.nginx.conf
-sudo sed -i 's/argus\.<domain>/argus.suriota.com/g' /opt/argus-deploy-staging/provision.sh
+sudo sed -i 's/argus\.<domain>/argus.gifariksuryo.xyz/g' /opt/argus-deploy-staging/argus.nginx.conf
+sudo sed -i 's/argus\.<domain>/argus.gifariksuryo.xyz/g' /opt/argus-deploy-staging/provision.sh
 ```
 
 Or, manually edit:
@@ -168,7 +198,7 @@ curl http://127.0.0.1:8090/health
 
 # 4. Test via nginx + TLS (with auth)
 ARGUS_TOKEN="<token-from-step-4>"
-curl https://argus.suriota.com/health \
+curl https://argus.gifariksuryo.xyz/health \
   -H "Authorization: Bearer $ARGUS_TOKEN"
 # Expected: same JSON response
 
@@ -190,7 +220,7 @@ On your local machine, register the MCP in Claude Code:
 export ARGUS_TOKEN="<token-from-step-4>"
 
 claude mcp add --transport http argus \
-  https://argus.suriota.com/mcp \
+  https://argus.gifariksuryo.xyz/mcp \
   --header "Authorization: Bearer $ARGUS_TOKEN"
 ```
 
@@ -199,7 +229,7 @@ This writes to `~/.claude/mcp.json` (or `.claude/settings.json`):
 {
   "argus": {
     "transport": "http",
-    "url": "https://argus.suriota.com/mcp",
+    "url": "https://argus.gifariksuryo.xyz/mcp",
     "headers": {
       "Authorization": "Bearer <ARGUS_TOKEN>"
     }
@@ -220,7 +250,7 @@ The Hermes watchdog can monitor Argus health every 30 minutes:
 
 ```bash
 # On VPS, add to Hermes crontab or watchdog config
-*/30 * * * * curl -s https://argus.suriota.com/health \
+*/30 * * * * curl -s https://argus.gifariksuryo.xyz/health \
   -H "Authorization: Bearer $ARGUS_TOKEN" \
   | jq -e '.status == "ok"' > /dev/null || alert
 
@@ -235,7 +265,7 @@ scrape_configs:
   - job_name: 'argus'
     bearer_token: '<ARGUS_TOKEN>'
     static_configs:
-      - targets: ['https://argus.suriota.com:443/metrics']
+      - targets: ['https://argus.gifariksuryo.xyz:443/metrics']
 ```
 
 ## Rollback / Recovery
@@ -356,11 +386,11 @@ journalctl -u argus -f  # Verify new settings
 
 Check the bearer token:
 ```bash
-curl -i https://argus.suriota.com/mcp
+curl -i https://argus.gifariksuryo.xyz/mcp
 # Should return 401 (no Authorization header)
 
 ARGUS_TOKEN="..."
-curl -i https://argus.suriota.com/mcp \
+curl -i https://argus.gifariksuryo.xyz/mcp \
   -H "Authorization: Bearer $ARGUS_TOKEN"
 # Should return 200 (or a streaming response)
 ```
@@ -415,21 +445,38 @@ fail2ban-client status argus
 
 ## References
 
-- **Design**: `docs/00-DESIGN.md` sec  9 (Deploy topology)
-- **Roadmap**: `docs/02-ROADMAP.md` P3 (Productionize the MCP)
-- **Tool specs**: `docs/03-TOOL-SPECS.md`
-- **Hermes coexistence**: `../08. Hermes AI Server/docs/ARSITEKTUR-HERMES-SUVA.md`
+- **Design**: [docs/00-DESIGN.md](../docs/00-DESIGN.md) sec 9 (Deploy topology)
+- **Roadmap**: [docs/02-ROADMAP.md](../docs/02-ROADMAP.md) P3 (Productionize the MCP)
+- **Tool specs**: [docs/03-TOOL-SPECS.md](../docs/03-TOOL-SPECS.md)
+- **Security audit**: [SECURITY-AUDIT.md](SECURITY-AUDIT.md)
+- **SearXNG backend**: [searxng/README.md](searxng/README.md)
+- **Hermes coexistence**: `../../08. Hermes AI Server/docs/ARSITEKTUR-HERMES-SUVA.md`
 
 ## Safe auto-update (poll main -> health-check -> auto-rollback)
 
 When an approved change lands on `main` (PR-reviewed), the live server self-updates
 within ~5 min. The model is **pull-only** (no inbound webhook port): a systemd timer
-runs `argus-update.sh`, which fast-forwards `main`, reinstalls deps only if the
-manifest changed, restarts `argus`, then polls `/health`. If health does not come
-up it **auto-rolls-back** to the prior commit and restarts. A no-change cycle is a
-silent no-op.
+(`argus-update.timer`) polls `main` every 5 min and runs `argus-update.sh`, which:
 
-One-time install on the VPS (run as root, after the repo is at `/opt/argus/app`):
+1. **fast-forwards** `main` (ff-only - a force-pushed / divergent `main` is logged and
+   skipped, never silently reset);
+2. **skips the restart + health-gate for docs/benchmark-only commits** - a change that
+   touches none of `src/`, `pyproject.toml`, `uv.lock`, `deploy/argus.service`, or
+   `deploy/argus.env` does not affect the running service, so a README edit never
+   triggers a prod restart;
+3. reinstalls deps **only if the manifest changed**;
+4. restarts `argus`, then **health-gates** by polling `/health` for ~30s;
+5. **auto-rolls-back** to the prior commit (and reinstalls / restarts) if health does
+   not come up.
+
+It runs git as the `argus` user with `core.fileMode=false`, so executable-bit drift
+(e.g. a `chmod +x` at install time) can never abort the ff-merge - this was a real
+incident, now hardened. A no-change cycle is a silent no-op. The timer is independent
+of `argus.service`; pausing it does not stop the server. Trust boundary is the GitHub
+`main` branch, kept PR-gated.
+
+This is **live** on the VPS. One-time install (run as root, after the repo is at
+`/opt/argus/app`):
 
 ```bash
 install -m 0755 /opt/argus/app/deploy/argus-update.sh /opt/argus/app/deploy/argus-update.sh
@@ -468,4 +515,4 @@ If stuck, contact the owner (Gifari) with:
 - Full error log (journalctl + nginx error log)
 - Output of `systemctl status argus`
 - Result of `curl http://127.0.0.1:8090/health` (local)
-- Result of `curl https://argus.suriota.com/health` (remote, with token)
+- Result of `curl https://argus.gifariksuryo.xyz/health` (remote, with token)

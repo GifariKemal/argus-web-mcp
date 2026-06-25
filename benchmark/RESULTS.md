@@ -1,15 +1,29 @@
 # Argus benchmark RESULTS (durable summary)
 
-_Run 2026-06-24. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked record._
-Harness: `benchmark/run_compare.py` + `benchmark/scenarios.py` (200 queries x 10 categories, 50 stratified compare ids) + `benchmark/run_codex.sh` + `benchmark/burst_test.py`.
+_Run 2026-06-24/25. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked record._
+
+Harness: `benchmark/run_compare.py` (3-arm) + `benchmark/run_4way.py` (4-condition + token/cost/speed) + `benchmark/scenarios.py` (200 queries x 10 categories, 50 stratified compare ids) + `benchmark/run_codex.sh` + `benchmark/burst_test.py`. See [README.md](README.md) for harness usage.
+
+## Contents
+
+- [Argus search - 200 scenarios](#argus-search---200-scenarios-paced-4s)
+- [3-way: Argus vs Claude WebSearch vs Codex CLI](#3-way-argus-vs-claude-websearch-vs-codex-cli-n25-then-n50)
+- [Burst re-validation](#burst-re-validation-un-paced-15-queries)
+- [Findings -> actions taken](#findings---actions-taken)
+- [Competitor feature gap -> adopted](#competitor-feature-gap---adopted-see-docs05-competitive-gapmd)
+- [Semantic rerank A/B](#semantic-rerank-ab---quantified-gain-2026-06-24)
+- [4-way: Claude/Codex x WITH vs WITHOUT Argus](#4-way-claudecodex-x-with-vs-without-argus-n25-stratified-2026-06-25)
+- [Controlled re-measure (post-fix)](#controlled-re-measure-2026-06-25-post-fix---supersedes-finding-3-above)
 
 ## Argus search - 200 scenarios (paced 4s)
+
 - **100% success / 0% throttle / 0 no-results** across all 200 / 10 categories.
 - Latency p50 1.42s / p95 2.51s / mean 9.66 results / relevance proxy (top-1 title overlap) 0.70.
 - Engine answer distribution: **duckduckgo 189/200**, bing 55, brave 16, mojeek 7.
 - No category breached the auto-flag thresholds (success<80 / overlap<0.3 / throttle>30).
 
 ## 3-way: Argus vs Claude WebSearch vs Codex CLI (n=25, then n=50)
+
 Identical queries through each system's native path. Both N agree:
 
 | arm | found | mean breadth | depth (content) |
@@ -22,16 +36,20 @@ Identical queries through each system's native path. Both N agree:
 - **Depth = Argus's decisive edge** - one call returns ~5 sources of full extracted markdown (~7.3k words); competitors return hits / a summary. Argus research at n=50: **all 50 returned sources, 0 failures**.
 
 ## Burst re-validation (un-paced, 15 queries)
+
 Engines were healthy this run: both Argus-resilient (backoff + multi-engine) and a naive raw client hit **100% success / 0% throttle** -> no throttle to recover from, so **no measurable delta today**. Redundancy was observably active (Argus pulled bing+ddg; naive only bing). The earlier ~5-10-query burst-throttle was not reproducible under current engine health. Honest read: backoff/redundancy are wired and active but not load-bearing on a healthy run; the durable fix for datacenter-IP throttle remains the deploy-time proxy pool.
 
 ## Findings -> actions taken
+
 1. **Engine concentration risk** (ddg 189/200). -> multi-engine redundancy (default engine set) + auto-backoff retry on transient throttle (committed); proxy pool wired for deploy.
 2. **Relevance-proxy artifact** on how-to/conceptual queries (title-only overlap). -> rerank v2 keeps snippet contribution; metric noted as a proxy artifact (3-way shows those queries still find good sources).
 3. **Breadth vs depth** - research capped at 5 sources. -> `max_sources` exposed + `mode` (quick/deep/answer).
 4. **No new Argus bugs** across 200 + 50 + 50 runs (0 errors). Harness build caught 1 real wiring bug (SSRF client on the trusted loopback search backend - fixed).
 
 ## Competitor feature gap -> adopted (see docs/05-COMPETITIVE-GAP.md)
+
 Researched Jina / Brave / Firecrawl / Exa / Tavily / Bright Data. Adopted the top self-hostable gaps:
+
 - **`map_urls`** - sitemap.xml / robots.txt / 1-hop link URL discovery (Firecrawl/Exa `map`).
 - **`research(mode='answer')`** - cited LLM answer over the bundle (Exa/Tavily/Jina `answer`).
 - **search `include_domains`/`exclude_domains` + `safesearch` + recency-v2** (Exa/Tavily/Brave filters).
@@ -40,6 +58,7 @@ Researched Jina / Brave / Firecrawl / Exa / Tavily / Bright Data. Adopted the to
 **Argus already matches/beats the field on:** full content (no truncation) vs lossy summaries/hits, unlimited+owned vs metered, self-hosted JS+stealth render, transparent archive egress-fallback, content-addressed persistent cache, and the trading-extractor moat.
 
 ## Semantic rerank A/B - quantified gain (2026-06-24)
+
 Same SearXNG candidate pool reranked two ways via `argus.search.rerank` (lexical vs hybrid),
 scored nDCG@5. Judge = an INDEPENDENT embedding model (all-MiniLM, different family from the
 reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quota (see finding).
@@ -55,6 +74,7 @@ reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quot
 - **Caveat:** the embedding judge leans semantic, so treat the magnitude as an upper-ish bound; a neutral LLM judge would tighten it. Direction (hybrid > lexical, biggest on conceptual) is robust.
 
 ### Finding: OpenAI key has no quota (429 insufficient_quota)
+
 `OPENAI_API_KEY` is set but the account is out of credit. Impact: Argus's LLM-dependent features
 (`research(mode='answer')`, `extract_structured` llm/auto) will FAIL at runtime with this key even
 though `llm_available()` returns True (it checks key presence, not quota). FIX before relying on
@@ -62,7 +82,8 @@ LLM features: top up OpenAI, OR point `ARGUS_LLM_BASE_URL`/`ARGUS_LLM_API_KEY` a
 (VPS Kimi) / Groq OpenAI-compatible endpoint (the provider-agnostic path already supports this).
 
 ## 4-way: Claude/Codex x WITH vs WITHOUT Argus (n=25 stratified, 2026-06-25)
-Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per scenario, 4 conditions. Claude cost = CLI-reported ACTUAL; Codex cost = ESTIMATE (subscription auth reports only total tokens; blended gpt-5.5 $10/1M, ~20% output). Per-call hard-cap 180s.
+
+Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per scenario, 4 conditions. Claude cost = CLI-reported ACTUAL; Codex cost = ESTIMATE (subscription auth reports only total tokens; blended gpt-5.5 $10/1M, ~20% output, marked `*`). Per-call hard-cap 180s.
 
 | condition | success% | mean_tok | median_tok | cost/query | lat p50 | lat p95 | urls | words |
 |---|---|---|---|---|---|---|---|---|
@@ -74,12 +95,14 @@ Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per 
 **WITH vs WITHOUT Argus:** Claude tokens -3.3% (median slightly up), cost +8%, synthesis +17 words (deeper), latency ~2x, 2/25 timeouts. Codex tokens **+72%**, cost +72%*, words -9, latency ~1.7x.
 
 **Findings:**
+
 1. **Claude leverages Argus efficiently** - token-neutral while producing the deepest synthesis (one `research` call returns full clean extracted content vs many native WebSearch hits). The right consumer for Argus.
 2. **Codex does NOT** - +72% tokens, no quality gain; it makes many MCP round-trips that balloon context.
-3. **Latency tail is the real cost** - the `*-argus` path adds latency and produced 2 claude-argus timeouts (p95 169s) because the single-uvicorn-worker deployed server + courtesy throttle serialize an agent's many tool calls. Normal single-user Argus latency is far lower (search ~1.4s, see above); these numbers are under one agent's burst. **Action: scale Argus to a worker pool / raise per-host concurrency for multi-call agent sessions.**
+3. **Latency tail is the real cost** - the `*-argus` path adds latency and produced 2 claude-argus timeouts (p95 169s) because the single-uvicorn-worker deployed server + courtesy throttle serialize an agent's many tool calls. Normal single-user Argus latency is far lower (search ~1.4s, see above); these numbers are under one agent's burst. **Action (later SUPERSEDED - see [Controlled re-measure](#controlled-re-measure-2026-06-25-post-fix---supersedes-finding-3-above)): scale Argus to a worker pool / raise per-host concurrency for multi-call agent sessions.**
 4. **Cost:** Argus adds ~8% $/query for Claude (full-content input vs hit lists); for Codex the estimate is +72% (token-driven).
 
 ## Controlled re-measure (2026-06-25, post-fix) - SUPERSEDES finding #3 above
+
 A post-fix CLI re-run (v2) showed NO latency improvement and the native (no-Argus) control slowed too -> the v1->v2 difference was environmental noise, not the fixes. Two clean isolations explain it:
 
 1. **`research()` bypasses the host throttle.** `research._read_one` calls `fetch(url, client, browser, timeout)` with NO `throttle=` (research.py:63; `fetch(throttle=None)`=no throttle). The server wires the throttle into `read`/`crawl`/`news` but NOT `research`. So **S1 (ARGUS_COURTESY_DELAY 1.0->0.25) has ZERO effect on deep research** - it was the wrong lever for the `*-argus` path.
