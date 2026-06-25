@@ -14,6 +14,7 @@ import contextlib
 import logging
 import os
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from . import semantic
 from .cache import Cache, ttl_for
+from .config import HEALTH_LATENCY_BUCKETS, RATE_LIMIT_ENABLED, RATE_LIMIT_LOCAL_BYPASS, TIMEOUTS
 from .extract.article import extract_article
 from .extract.links import extract_links_images
 from .extract.llm import extract_llm, llm_available
@@ -38,6 +40,7 @@ from .gh_search import GitHubSearchError
 from .gh_search import github_search as _gh_search
 from .mapsite import MapError, map_site
 from .models import err
+from .rate_limit import RateLimiter
 from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
@@ -74,6 +77,26 @@ MAX_PDF_BYTES = 64 * 1024 * 1024
 
 logger = logging.getLogger("argus.server")
 
+# Per-tool latency samples (deque maxlen for bounded memory). Filled by _MetricsMiddleware.
+_tool_latencies: dict[str, deque[float]] = {}
+
+
+_STARTUP_TIME: float | None = None
+
+
+def _latency_percentiles(name: str) -> dict:
+    """Return p50/p90/p99 for a tool, or empty dict if no samples."""
+    samples = _tool_latencies.get(name)
+    if not samples:
+        return {}
+    s = sorted(samples)
+    n = len(s)
+    def _p(k: float) -> float:
+        idx = int(n * k)
+        idx = min(idx, n - 1)
+        return round(s[max(0, idx)], 3)
+    return {"p50": _p(0.50), "p90": _p(0.90), "p99": _p(0.99), "count": n, "min": round(s[0], 3), "max": round(s[-1], 3)}
+
 
 def _safe_detail(exc: Exception) -> str:
     """Sanitized error detail for the client. The full exception (which may carry internal
@@ -88,8 +111,9 @@ class State:
     client: object
     cache: Cache
     browser: BrowserPool | None
-    throttle: object | None = None  # HostThrottle (per-host courtesy + circuit breaker); None = off
-    watch_store: object | None = None  # WatchStore for the `watch` poller
+    throttle: object | None = None
+    watch_store: object | None = None
+    rate_limiter: RateLimiter | None = None
 
 
 _S: State | None = None
@@ -103,21 +127,23 @@ def _state() -> State:
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP):
-    global _S
+    global _S, _STARTUP_TIME
     from .fetch.throttle import HostThrottle
+    from .config import RATE_LIMIT_RPM, RATE_LIMIT_BURST
 
+    _STARTUP_TIME = time.monotonic()
     courtesy = float(os.environ.get("ARGUS_COURTESY_DELAY", "1.0"))
-    # ARGUS_MAX_CONCURRENT_CONTEXTS was documented (deploy/README) but never read -
-    # the browser concurrency was hardcoded to the pool default. Wire it so the
-    # documented scaling knob actually works (raise to lift multi-call throughput;
-    # each Chromium context costs RAM - watch argus_active_contexts vs MemoryMax).
     max_ctx = int(os.environ.get("ARGUS_MAX_CONCURRENT_CONTEXTS", "4"))
+    # httpx client timeout: use the largest configured tool timeout so no tool is capped
+    # by the underlying client before its own timeout fires.
+    client_timeout = max(TIMEOUTS.values(), default=60) + 15
     _S = State(
-        client=build_safe_async_client(timeout=30),
+        client=build_safe_async_client(timeout=client_timeout),
         cache=Cache(),
         browser=BrowserPool(concurrency=max_ctx),
         throttle=HostThrottle(min_interval=courtesy),
         watch_store=WatchStore(),
+        rate_limiter=RateLimiter(rpm=RATE_LIMIT_RPM, burst=RATE_LIMIT_BURST),
     )
     await _S.browser.start()
     # Pre-warm the local embedding model off the event loop so the FIRST research/find_similar
@@ -181,7 +207,7 @@ async def read(
     clean: bool = True,
     include_links: bool = False,
     extract_media: bool = False,
-    timeout: int = 30,
+    timeout: int = TIMEOUTS["read"],
 ) -> dict:
     """Fetch a URL -> clean main content (no truncation). `extract_media`=True also returns the
     page's links + images lists."""
@@ -271,7 +297,7 @@ async def search(
 
 
 async def read_pdf(
-    url_or_path: str, pages: str | None = None, mode: str = "text", timeout: int = 60
+    url_or_path: str, pages: str | None = None, mode: str = "text", timeout: int = TIMEOUTS["read_pdf"]
 ) -> dict:
     """PDF (URL or local path) -> markdown + tables."""
     s = _state()
@@ -314,7 +340,7 @@ async def scrape(
     actions: list | None = None,
     screenshot: bool = False,
     format: str = "markdown",
-    timeout: int = 45,
+    timeout: int = TIMEOUTS["scrape"],
 ) -> dict:
     """JS-rendered fetch (+ optional screenshot/interactions) via the browser tier."""
     s = _state()
@@ -460,7 +486,7 @@ async def crawl(
         return err("fetch_failed", "crawl failed", _safe_detail(e))
 
 
-async def screenshot(url: str, timeout: int = 45) -> dict:
+async def screenshot(url: str, timeout: int = TIMEOUTS["screenshot"]) -> dict:
     """Full-page PNG screenshot (base64) of a JS-rendered page."""
     s = _state()
     try:
@@ -544,7 +570,7 @@ def _build_auth():
 
 async def research(
     query: str, mode: str = "deep", max_sources: int = 5, highlights: bool = False,
-    max_chars_per_source: int | None = None, timeout: int = 30,
+    max_chars_per_source: int | None = None, timeout: int = TIMEOUTS["research"],
 ) -> dict:
     """Deep research in one call. mode='deep' (default) = search + parallel FULL read of the top
     sources -> consolidated complete content (replaces search->fetch->repeat). mode='quick' = ranked
@@ -786,12 +812,53 @@ _TOOL_CALLS: dict[str, int] = {}
 
 
 class _MetricsMiddleware(Middleware):
-    """Count MCP tool invocations per tool name (for /metrics). Signature-safe (no wrapping)."""
+    """Count MCP tool invocations, track latencies, and enforce per-IP rate limiting.
+    Signature-safe (no wrapping)."""
 
     async def on_call_tool(self, context, call_next):
         name = getattr(getattr(context, "message", None), "name", "unknown")
         _TOOL_CALLS[name] = _TOOL_CALLS.get(name, 0) + 1
-        return await call_next(context)
+
+        # --- Rate limiting (best-effort IP extraction) ---
+        s = _state()
+        if RATE_LIMIT_ENABLED and s.rate_limiter is not None:
+            identity = _extract_identity(context)
+            if not (RATE_LIMIT_LOCAL_BYPASS and identity in {"127.0.0.1", "localhost", "::1", "local"}):
+                allowed, info = s.rate_limiter.check(identity)
+                if not allowed:
+                    logger.warning("rate_limit: %s blocked on %s", identity, name)
+                    return err("rate_limited", f"Rate limit exceeded. Retry after {info['retry_after_seconds']}s.", f"current={info['current']} limit={info['limit']}")
+
+        # --- Latency tracking ---
+        t0 = time.perf_counter()
+        try:
+            result = await call_next(context)
+        finally:
+            elapsed = time.perf_counter() - t0
+            lat = _tool_latencies.setdefault(name, deque(maxlen=HEALTH_LATENCY_BUCKETS))
+            lat.append(elapsed)
+        return result
+
+
+def _extract_identity(context) -> str:
+    """Extract client identity (IP) from FastMCP context if available."""
+    try:
+        req = getattr(context, "request", None)
+        if req is None:
+            return "local"
+        # Starlette Request
+        xf = getattr(req, "headers", {}).get("x-forwarded-for")
+        if xf:
+            return xf.split(",")[0].strip()
+        real_ip = getattr(req, "headers", {}).get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+        client = getattr(req, "client", None)
+        if client:
+            return client[0] if isinstance(client, (tuple, list)) else getattr(client, "host", "unknown")
+        return "unknown"
+    except Exception:
+        return "unknown"
 
 
 # The registered tool set (20 tools). Exposed as a module constant so the offline test
@@ -815,18 +882,42 @@ def _healthy() -> bool:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
-    """Liveness for the Hermes watchdog cron - unauthenticated, cheap (no render)."""
+    """Liveness + readiness probe. Unauthenticated, cheap (no render)."""
     ok = _healthy()
-    return JSONResponse(
-        {"status": "ok" if ok else "degraded", "browser": ok},
-        status_code=200 if ok else 503,
-    )
+    body = {
+        "status": "ok" if ok else "degraded",
+        "browser": ok,
+        "uptime_seconds": round(time.monotonic() - _STARTUP_TIME, 1) if _STARTUP_TIME else None,
+    }
+    s = _S
+    if s is not None:
+        # cache stats
+        try:
+            cur = s.cache.conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            body["cache_entries"] = cur[0] if cur else 0
+        except Exception:
+            body["cache_entries"] = None
+        # watch count
+        try:
+            body["watch_count"] = len(s.watch_store.list()) if s.watch_store else 0
+        except Exception:
+            body["watch_count"] = None
+        # rate limit config
+        if s.rate_limiter is not None:
+            body["rate_limit_rpm"] = s.rate_limiter._rpm
+            body["rate_limit_burst"] = s.rate_limiter._burst
+        # per-tool latency percentiles (last N samples)
+        body["tool_latencies"] = {
+            name: _latency_percentiles(name) for name in _TOOL_CALLS
+        }
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 @mcp.custom_route("/metrics", methods=["GET"])
 async def metrics(_request):
-    """Minimal Prometheus exposition. active_contexts = browser-tier OOM early-warning."""
-    active = _S.browser.active_contexts if (_S and _S.browser) else 0
+    """Prometheus exposition format."""
+    s = _S
+    active = s.browser.active_contexts if (s and s.browser) else 0
     lines = [
         "# HELP argus_up 1 if the server process is up",
         "# TYPE argus_up gauge",
@@ -845,6 +936,18 @@ async def metrics(_request):
         lines.append(f'argus_tool_requests_total{{tool="{name}"}} {n}')
         total += n
     lines.append(f"argus_tool_requests_total{{tool=\"_all\"}} {total}")
+
+    # Latency histogram buckets (Prometheus-style)
+    lines.append("# HELP argus_tool_latency_seconds MCP tool call latency")
+    lines.append("# TYPE argus_tool_latency_seconds summary")
+    for name in sorted(_TOOL_CALLS):
+        pct = _latency_percentiles(name)
+        if pct:
+            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.5"}} {pct["p50"]}')
+            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.9"}} {pct["p90"]}')
+            lines.append(f'argus_tool_latency_seconds{{tool="{name}",quantile="0.99"}} {pct["p99"]}')
+            lines.append(f'argus_tool_latency_seconds_count{{tool="{name}"}} {pct["count"]}')
+
     return PlainTextResponse("\n".join(lines) + "\n")
 
 

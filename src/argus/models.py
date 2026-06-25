@@ -19,6 +19,7 @@ ERROR_CODES = frozenset(
         "extraction_failed",
         "render_failed",
         "blocked_by_antibot",
+        "rate_limited",
     }
 )
 
