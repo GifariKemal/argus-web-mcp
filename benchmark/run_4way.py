@@ -44,7 +44,11 @@ import scenarios as scen_mod  # noqa: E402
 
 DEFAULT_REPORT = BENCH_DIR / "compare-4way-report.md"
 _URL_RE = re.compile(r"https?://[^\s<>()\]]+", re.IGNORECASE)
-SUBPROCESS_TIMEOUT_S = 240
+# Hard per-call wall-clock cap. A claude-argus session can make many throttled
+# Argus tool calls and run for 10+ min; we cap it so the sweep stays bounded and
+# a hung CLI can never stall the run. Calls exceeding this are recorded as
+# "timeout" (itself a data point) with whatever partial output was captured.
+SUBPROCESS_TIMEOUT_S = 180
 
 # gpt-5.5 public API pricing per 1M tokens (looked up 2026-06-25):
 # input $5, output $30, cached-input $0.50. Codex (subscription auth) reports
@@ -469,6 +473,36 @@ def _build_command(condition: str, prompt: str, argus: dict | None) -> list[str]
     raise ValueError(f"unknown condition: {condition}")
 
 
+def _run_capture(cmd: list[str], env: dict | None, timeout: int):
+    """Run cmd, hard-killing the whole process tree on timeout (Windows-safe).
+
+    Returns (stdout, stderr, returncode, timed_out). subprocess.run's timeout only
+    signals the direct child; an npm `.CMD` shim spawns node that survives and holds
+    the pipes, so on timeout we kill the tree via `taskkill /T` (nt) / proc.kill()
+    (posix), then drain whatever partial output exists.
+    """
+    proc = subprocess.Popen(  # noqa: S603 - argv list, no shell
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", env=env,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return out, err, proc.returncode, False
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            killer = shutil.which("taskkill") or "taskkill"
+            subprocess.run(  # noqa: S603 - fixed argv (resolved path + own pid)
+                [killer, "/PID", str(proc.pid), "/T", "/F"], capture_output=True
+            )
+        else:
+            proc.kill()
+        try:
+            out, err = proc.communicate(timeout=15)
+        except Exception:  # noqa: BLE001 - best-effort drain after kill
+            out, err = "", ""
+        return out or "", err or "", proc.returncode, True
+
+
 def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
     """Execute a single CLI run and return a parsed record (I/O, never raises).
 
@@ -509,19 +543,7 @@ def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
 
     t0 = time.perf_counter()
     try:
-        proc = subprocess.run(  # noqa: S603 - argv list, no shell
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=SUBPROCESS_TIMEOUT_S,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        rec["latency_s"] = round(time.perf_counter() - t0, 3)
-        rec["error"] = "timeout"
-        return rec
+        out, err, returncode, timed_out = _run_capture(cmd, env, SUBPROCESS_TIMEOUT_S)
     except Exception as e:  # noqa: BLE001 - missing binary etc.; never crash sweep
         rec["latency_s"] = round(time.perf_counter() - t0, 3)
         rec["error"] = f"exec:{type(e).__name__}:{e}"
@@ -530,23 +552,26 @@ def _run_one(condition: str, scenario: dict, argus: dict | None) -> dict:
 
     family = CONDITIONS.get(condition, "")
     if family == "claude":
-        parsed = parse_claude_usage(proc.stdout)
+        parsed = parse_claude_usage(out)
         rec["total_tokens"] = parsed["total_tokens"]
         rec["cost_usd"] = parsed["cost_usd"]
         answer = parsed["answer_text"]
     else:
-        # Codex prints the clean answer to STDOUT and the "tokens used" line to
-        # STDERR; parse tokens from both streams, prefer stdout for the answer.
-        parsed = parse_codex_tokens((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        # Codex prints the clean answer to STDOUT and "tokens used" to STDERR;
+        # parse tokens from both streams, prefer stdout for the answer.
+        parsed = parse_codex_tokens((out or "") + "\n" + (err or ""))
         rec["total_tokens"] = parsed["total_tokens"]
-        answer = (proc.stdout or "").strip() or parsed["answer_text"]
+        answer = (out or "").strip() or parsed["answer_text"]
 
     rec["urls"] = count_urls(answer)
     rec["words"] = len(answer.split())
     rec["found"] = found(answer)
-    if proc.returncode != 0 and not answer:
+    if timed_out:
+        # Cut at the hard cap; keep any partial answer/tokens but flag the record.
+        rec["error"] = "timeout"
+    elif returncode != 0 and not answer:
         # surface a snippet of stderr so wiring failures are diagnosable.
-        rec["error"] = (proc.stderr or "").strip()[:500] or f"exit:{proc.returncode}"
+        rec["error"] = (err or "").strip()[:500] or f"exit:{returncode}"
     return rec
 
 
