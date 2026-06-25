@@ -79,4 +79,12 @@ Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per 
 3. **Latency tail is the real cost** - the `*-argus` path adds latency and produced 2 claude-argus timeouts (p95 169s) because the single-uvicorn-worker deployed server + courtesy throttle serialize an agent's many tool calls. Normal single-user Argus latency is far lower (search ~1.4s, see above); these numbers are under one agent's burst. **Action: scale Argus to a worker pool / raise per-host concurrency for multi-call agent sessions.**
 4. **Cost:** Argus adds ~8% $/query for Claude (full-content input vs hit lists); for Codex the estimate is +72% (token-driven).
 
+## Controlled re-measure (2026-06-25, post-fix) - SUPERSEDES finding #3 above
+A post-fix CLI re-run (v2) showed NO latency improvement and the native (no-Argus) control slowed too -> the v1->v2 difference was environmental noise, not the fixes. Two clean isolations explain it:
+
+1. **`research()` bypasses the host throttle.** `research._read_one` calls `fetch(url, client, browser, timeout)` with NO `throttle=` (research.py:63; `fetch(throttle=None)`=no throttle). The server wires the throttle into `read`/`crawl`/`news` but NOT `research`. So **S1 (ARGUS_COURTESY_DELAY 1.0->0.25) has ZERO effect on deep research** - it was the wrong lever for the `*-argus` path.
+2. **In-process `research()` on the VPS is FAST** (local SearXNG, no agent, no client transport): MQL5 query median **5.5s** (3.5-11.1s; first rep includes a one-time embed-model download), MQTT query median **3.6s** (3.3-5.3s). All returned 5 sources (backfill works: 1-2 per-query failures still yield 5).
+
+**Conclusion:** Argus is NOT the latency bottleneck. The 50-180s `claude-argus` benchmark latencies are agent overhead (`claude -p` system prompt + reasoning + multi-turn) + MCP-over-HTTPS round-trips from the client + the agent making research()+many read() calls serially. There is **no Argus scaling fix to make** - the earlier "worker pool" action item is moot (and `--workers>1` would still be unsafe with the stateful pool). If end-to-end agent latency matters, the lever is the CONSUMING agent's pattern (one `research` call + synthesize, not research + many reads), not Argus. S2 (wiring ARGUS_MAX_CONCURRENT_CONTEXTS) remains a valid correctness fix for the dead doc'd knob, just not load-bearing here.
+
 **Caveat:** claude-argus mean_tok is dragged by the 2 timeout records (partial, 0 tokens parsed); median (33.0k) is the robust central value. Codex $ is an estimate (no per-call billing exposed).
