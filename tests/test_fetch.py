@@ -3,7 +3,7 @@ import socket
 import httpx
 import pytest
 
-from argus.fetch.core import _visible_text_len, fetch
+from argus.fetch.core import ESCALATE_BELOW_CHARS, _visible_text_len, fetch
 from argus.fetch.fallback import fetch_via_archive
 from argus.fetch.render import BrowserPool
 from argus.fetch.static import FetchError, fetch_static
@@ -31,7 +31,7 @@ class _FakeBrowser:
         self.calls = 0
 
     async def render(self, url, *, wait_for=None, actions=None, screenshot=False,
-                     full_page=True, timeout=45, stealth=False):
+                     timeout=45, stealth=False):
         self.calls += 1
         return {"final_url": url, "html": self.html, "screenshot": "b64" if screenshot else None}
 
@@ -216,6 +216,57 @@ async def test_thin_static_escalates_to_browser(monkeypatch):
     assert "rich" in res["html"]
 
 
+async def test_just_above_threshold_does_not_escalate(monkeypatch):
+    # visible text >= ESCALATE_BELOW_CHARS -> keep the static result, never call browser.
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    body = "<html><body>" + ("a " * ESCALATE_BELOW_CHARS) + "</body></html>"
+    assert _visible_text_len(body) >= ESCALATE_BELOW_CHARS
+
+    def h(req):
+        return httpx.Response(200, text=body)
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/", client=c, browser=fake)
+    assert res["render_path"] == "static"
+    assert fake.calls == 0
+
+
+async def test_just_below_threshold_escalates(monkeypatch):
+    # visible text < ESCALATE_BELOW_CHARS -> escalate to the browser tier.
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    body = "<html><body>" + ("a" * (ESCALATE_BELOW_CHARS - 1)) + "</body></html>"
+    assert _visible_text_len(body) < ESCALATE_BELOW_CHARS
+
+    def h(req):
+        return httpx.Response(200, text=body)
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/", client=c, browser=fake)
+    assert res["render_path"] == "browser"
+    assert fake.calls == 1
+
+
+async def test_thin_static_kept_when_escalation_render_raises(monkeypatch):
+    # The escalation render itself raises FetchError -> the thin STATIC result is
+    # returned (not an error); content/status come from the static hop.
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    class _Broken(_FakeBrowser):
+        async def render(self, *a, **k):
+            raise FetchError("render_failed", "render crashed")
+
+    def h(req):
+        return httpx.Response(200, text=THIN)
+
+    async with _client(h) as c:
+        res = await fetch("http://example.com/", client=c, browser=_Broken())
+    assert res["render_path"] == "static"
+    assert res["status"] == 200
+    assert "root" in res["html"]  # the thin static body, not a browser render
+
+
 async def test_browser_escalation_failure_falls_back_to_static(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
 
@@ -381,3 +432,23 @@ async def test_browserpool_real_render():
         assert "Example Domain" in r["html"]
     finally:
         await pool.stop()
+
+
+async def test_fetch_via_archive_percent_encodes_target_url(monkeypatch):
+    """The target URL is percent-encoded into the availability query so its own `&`
+    cannot inject extra query params into the archive.org request (Sec hardening)."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = {}
+
+    def h(req):
+        if req.url.host == "archive.org":
+            seen["raw"] = str(req.url)
+            return httpx.Response(200, text='{"archived_snapshots":{}}')
+        return httpx.Response(200, text=SNAPSHOT_HTML)
+
+    target = "http://blocked.example/?a=1&b=2"
+    async with _client(h) as c:
+        await fetch_via_archive(target, client=c)
+    # The raw `&` from the target must NOT appear unencoded; it is %26-encoded.
+    assert "%26b%3D2" in seen["raw"]
+    assert "blocked.example/?a=1&b=2" not in seen["raw"]

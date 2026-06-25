@@ -788,3 +788,15 @@ async def test_deep_backfill_no_waste_on_happy_path():
     assert out["failed"] == []
     # Exactly 3 fetches -- spares 4,5,6 must NOT be touched
     assert rec_fetch["calls"] == 3
+
+
+def test_build_answer_context_escapes_url_quotes():
+    """A source URL with a `"` must be HTML-escaped so it can't break out of the
+    url="..." attribute in the <source> tag (Sec: attribute-injection hardening)."""
+    from argus.research import _build_answer_context
+
+    evil = 'https://x/?a="><inject>'
+    ctx = _build_answer_context("q", [{"url": evil, "content": "body"}])
+    # The raw quote must not appear inside the attribute verbatim; it is &quot;-escaped.
+    assert 'url="https://x/?a=&quot;&gt;&lt;inject&gt;"' in ctx
+    assert '"><inject>' not in ctx

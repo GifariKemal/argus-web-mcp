@@ -51,7 +51,7 @@ URL(s) -> schema-validated JSON.
 
 ## Later phases
 - `crawl(seed_url, depth=2, max_pages=50, include=[], exclude=[], sitemap=true)` - **P2** - Crawl4AI deep-crawl, robots-respecting -> `{pages:[read...], link_graph}`.
-- `screenshot(url, full_page=true, viewport=null, format="png")` - **P2** - Playwright -> image bytes.
+- `screenshot(url, format="png")` - **P2** - Playwright -> image bytes (always full-page).
 - `watch(url, selector, interval, webhook)` - **P3** - poll+diff -> change events (calendar/COT -> Telegram). No paid equivalent.
 - `map(url)` - **P3** - sitemap/link discovery -> URL list.
 
