@@ -587,3 +587,82 @@ async def test_rerank_none_citations_treated_as_minus_one():
         out = await scholar_search(query, client=client)
     assert out["results"][0]["citations"] == 0
     assert out["results"][1]["citations"] is None
+
+
+# --------------------------------------------------------------------------- #
+# F2 -- citation-aware rerank: canonical short titles beat verbose derivatives
+# --------------------------------------------------------------------------- #
+@respx.mock
+async def test_rerank_canonical_beats_verbose_token_superset():
+    # F2 finding: verbose titles whose token set is a SUPERSET of the query
+    # tokens score higher on plain overlap than the short canonical paper.
+    # After the fix the canonical (short title, high citations) must rank first.
+    query = "attention is all you need transformer paper"
+    papers = [
+        # derivative titles: token supersets of the query -> win on plain overlap
+        _s2_paper_titled(
+            "Attention is All You Need... Unless You Are a CISO: Transformer Security",
+            citations=0,
+        ),
+        _s2_paper_titled(
+            "Why Attention is All You Need: A Survey of Transformer-based Architectures",
+            citations=0,
+        ),
+        _s2_paper_titled(
+            "Attention is All You Need for Visual Recognition Tasks in Biomedical Imaging",
+            citations=0,
+        ),
+        # canonical: short title (subset of query tokens), many citations
+        _s2_paper_titled("Attention Is All You Need", citations=80000),
+    ]
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    assert out["results"][0]["title"] == "Attention Is All You Need", (
+        "canonical highly-cited paper must rank #1 over zero-citation verbose derivatives"
+    )
+
+
+@respx.mock
+async def test_rerank_identical_relevance_higher_citations_first():
+    # When two papers have the same blended relevance score, the one with more
+    # citations ranks first. (Pins the citations-as-tiebreaker behavior for the
+    # new scoring formula.)
+    query = "deep reinforcement learning games"
+    papers = [
+        _s2_paper_titled("Deep Reinforcement Learning for Games", citations=300),
+        _s2_paper_titled("Deep Reinforcement Learning in Games", citations=1200),
+    ]
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    # Both titles have the same set of meaningful tokens relative to the query;
+    # the higher-citation paper must rank first.
+    assert out["results"][0]["citations"] == 1200
+    assert out["results"][1]["citations"] == 300
+
+
+@respx.mock
+async def test_rerank_high_overlap_beats_high_citation_low_overlap():
+    # Citations must NOT override a clearly more relevant result.
+    # A paper that matches the query closely (high overlap) must rank above
+    # a blockbuster paper on a different topic, even if citations >> .
+    query = "quantum error correction surface codes"
+    papers = [
+        # Highly relevant, few citations
+        _s2_paper_titled("Quantum Error Correction with Surface Codes", citations=20),
+        # Extremely popular but unrelated
+        _s2_paper_titled("ImageNet Large Scale Visual Recognition Challenge", citations=70000),
+    ]
+    respx.get(_S2_SEARCH).mock(
+        return_value=httpx.Response(200, json={"data": papers})
+    )
+    async with _client() as client:
+        out = await scholar_search(query, client=client)
+    assert out["results"][0]["title"] == "Quantum Error Correction with Surface Codes", (
+        "relevance must dominate; citations alone must not override a clearly better match"
+    )
