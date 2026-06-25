@@ -1,6 +1,6 @@
 # Argus - Design Document
 
-_Status: design complete (autonomous brainstorm, 2026-06-24). Self-directed per owner's "full autonomous, no questions" directive - decisions documented here in lieu of an interactive approval gate._
+> _Status: design complete (autonomous brainstorm, 2026-06-24); **fully built and DEPLOYED LIVE** 2026-06-25 at `https://argus.gifariksuryo.xyz/mcp` - 20 MCP tools (this doc captures the original design; the shipped tool surface grew past the P1 table below - see `docs/03-TOOL-SPECS.md` and `CHANGELOG.md` for the live 20-tool set). Self-directed per owner's "full autonomous, no questions" directive - decisions documented here in lieu of an interactive approval gate._
 
 ## 1. Goal & constraints
 
@@ -15,7 +15,7 @@ Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape /
 ## 2. Architecture (layers)
 
 ```
-Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.<domain>, TLS, fail2ban)
+Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.gifariksuryo.xyz, TLS, fail2ban)
                                          |  proxy_buffering off
                                          v
                               uvicorn  127.0.0.1:8090
@@ -58,7 +58,7 @@ Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.<domain>, TLS, fail2ban)
 ## 4. MCP framework & transport
 - **FastMCP** (standalone `fastmcp` pkg, v3.x; floor 2.11+ for auth), Python 3.11. Tools via `@mcp.tool`. Keep server `instructions` < 2 KB (Tool Search uses them).
 - **Streamable HTTP** transport (`mcp.http_app(path="/mcp")` under uvicorn). SSE deprecated - not used.
-- Client adds: `claude mcp add --transport http argus https://argus.<domain>/mcp --header "Authorization: Bearer ${ARGUS_TOKEN}"`. `.mcp.json` entry = `{type:"http", url, headers}` -> **no local process**.
+- Client adds: `claude mcp add --transport http argus https://argus.gifariksuryo.xyz/mcp --header "Authorization: Bearer ${ARGUS_TOKEN}"`. `.mcp.json` entry = `{type:"http", url, headers}` -> **no local process**.
 - Per-server `timeout` high (slow scrapes); raise `MAX_MCP_OUTPUT_TOKENS` / annotate `anthropic/maxResultSizeChars` (<=500k) so big scrapes aren't truncated.
 
 ## 5. Concurrency
@@ -85,7 +85,7 @@ Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.<domain>, TLS, fail2ban)
 ## 9. Deploy topology (VPS)
 - Bare systemd (matches Hermes/SUVA), not Docker (avoids Chromium-in-container pain) - except SearXNG runs as its official Docker image on `127.0.0.1:8888`.
 - `argus.service`: `uvicorn argus.server:app --host 127.0.0.1 --port 8090`, unprivileged `User=argus`, `EnvironmentFile` secret, `Restart=on-failure`, `--workers 1`.
-- nginx `argus.<domain>` -> `127.0.0.1:8090`, **`proxy_buffering off`**, `proxy_read_timeout 300s`, TLS (certbot), fail2ban.
+- nginx `argus.gifariksuryo.xyz` -> `127.0.0.1:8090`, **`proxy_buffering off`**, `proxy_read_timeout 300s`, TLS (certbot), fail2ban.
 - Playwright/Chromium installed **once as the `argus` user** (`crawl4ai-setup` + `crawl4ai-doctor`); browser cache under `argus`'s `~/.cache/ms-playwright` (mismatched-user cache = #1 systemd failure).
 - Ports: SearXNG 8888, Argus 8090 (avoid Hermes :80 / SUVA :8080).
 
