@@ -219,6 +219,32 @@ def test_short_real_content_preserved_across_formats(fmt):
     assert "documentation examples" in res["content"]
 
 
+def test_html_format_falls_back_when_readability_raises(monkeypatch):
+    # fmt='html' converts via readability Document(html).summary(); if that raises on
+    # malformed input, _to_format must fall back to the markdown content (no crash).
+    monkeypatch.setattr(art.trafilatura, "extract",
+                        lambda *a, **k: "Recovered article body of real text here.")
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            raise ValueError("malformed document")
+
+    monkeypatch.setattr(art, "Document", _Boom)
+
+    res = extract_article("<html><body><<broken>>", "http://x.test/m", fmt="html")
+    assert res["format"] == "html"
+    # falls back to the markdown content rather than raising.
+    assert "Recovered article body" in res["content"]
+
+
+def test_html_format_malformed_input_does_not_crash():
+    # End-to-end: genuinely malformed markup through the html path must not raise.
+    res = extract_article("<html><body><p>unterminated <b>bold", "http://x.test/m2",
+                          fmt="html")
+    assert res["format"] == "html"
+    assert isinstance(res["content"], str)
+
+
 @pytest.mark.parametrize("fmt", ["markdown", "text", "html"])
 def test_truly_empty_blank_across_formats(fmt):
     res = extract_article("<html><body></body></html>", "http://x/t", fmt=fmt)

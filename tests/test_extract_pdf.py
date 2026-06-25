@@ -76,6 +76,38 @@ def test_tables_mode_still_returns_content(two_page_pdf):
     assert isinstance(res["tables"], list)
 
 
+def _make_ruled_table_pdf() -> bytes:
+    """A single-page PDF with a 2x2 ruled grid so find_tables() detects a real table."""
+    doc = fitz.open()
+    page = doc.new_page()
+    x0, y0, x1, y1 = 72, 72, 272, 172
+    page.draw_rect(fitz.Rect(x0, y0, x1, y1))
+    page.draw_line(fitz.Point((x0 + x1) / 2, y0), fitz.Point((x0 + x1) / 2, y1))
+    page.draw_line(fitz.Point(x0, (y0 + y1) / 2), fitz.Point(x1, (y0 + y1) / 2))
+    page.insert_text((80, 95), "Name")
+    page.insert_text((180, 95), "Score")
+    page.insert_text((80, 145), "Gold")
+    page.insert_text((180, 145), "42")
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_tables_mode_extracts_table_rows():
+    # Moat feature: mode='tables' must populate tables[].rows with the cell grid.
+    res = extract_pdf(_make_ruled_table_pdf(), mode="tables")
+    assert len(res["tables"]) >= 1
+    table = res["tables"][0]
+    assert table["page"] == 1
+    assert table["rows"] == [["Name", "Score"], ["Gold", "42"]]
+
+
+def test_text_mode_does_not_populate_tables():
+    # Default mode must skip the find_tables() pass entirely.
+    res = extract_pdf(_make_ruled_table_pdf(), mode="text")
+    assert res["tables"] == []
+
+
 def test_not_a_pdf_raises():
     with pytest.raises(ValueError, match="not_pdf"):
         extract_pdf(b"not a pdf")
