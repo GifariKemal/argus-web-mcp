@@ -9,6 +9,7 @@ live network.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,16 @@ from argus.trading import cot, forexfactory, news
 FIXTURES = Path(__file__).parent / "fixtures"
 FF_FIXTURE = FIXTURES / "ff_calendar_sample.json"
 COT_FIXTURE = FIXTURES / "cot_sample.txt"
+
+
+@pytest.fixture(autouse=True)
+def _reset_ff_last_good():
+    """Reset the module-global stale-fallback store before/after each test so the
+    forexfactory tests are order-independent (a prior success must not leak stale
+    data into a later failure test)."""
+    forexfactory._last_good = None
+    yield
+    forexfactory._last_good = None
 
 
 # --------------------------------------------------------------------------- #
@@ -147,10 +158,57 @@ async def test_forexfactory_calendar_excludes_empty_time_event():
 
 
 async def test_forexfactory_calendar_fetch_failure_raises_coded():
+    # No last-good to fall back on -> a hard fetch failure still raises.
     async with _mock_client(b"err", status=503) as client:
         with pytest.raises(forexfactory.ForexFactoryError) as ei:
             await forexfactory.forexfactory_calendar(client=client)
     assert ei.value.code == "ff_fetch_failed"
+
+
+async def test_forexfactory_fresh_marks_stale_false():
+    body = FF_FIXTURE.read_bytes()
+    async with _mock_client(body) as client:
+        out = await forexfactory.forexfactory_calendar(client=client)
+    assert out["stale"] is False
+
+
+async def test_forexfactory_serves_stale_flagged_on_failure():
+    # A recent last-good IS served when the live fetch fails - but FLAGGED, never silent.
+    forexfactory._last_good = {"events": FF_GOLDEN, "ts": time.time() - 120}
+    async with _mock_client(b"err", status=503) as client:
+        out = await forexfactory.forexfactory_calendar(client=client)
+    assert out["stale"] is True
+    assert out["count"] == 12
+    assert out["events"] == FF_GOLDEN
+    assert out["stale_age_seconds"] >= 0
+    assert "fetched_at" in out
+
+
+async def test_forexfactory_stale_too_old_raises():
+    # Last-good older than the 6h window -> do NOT serve it; raise instead.
+    forexfactory._last_good = {"events": FF_GOLDEN, "ts": time.time() - 7 * 3600}
+    async with _mock_client(b"err", status=503) as client:
+        with pytest.raises(forexfactory.ForexFactoryError) as ei:
+            await forexfactory.forexfactory_calendar(client=client)
+    assert ei.value.code == "ff_fetch_failed"
+
+
+async def test_forexfactory_retries_then_succeeds():
+    # First attempt fails (transient), retry succeeds -> fresh result, 2 attempts.
+    body = FF_FIXTURE.read_bytes()
+    calls = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(503, content=b"transient")
+        return httpx.Response(200, content=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        out = await forexfactory.forexfactory_calendar(client=client)
+    assert calls["n"] == 2
+    assert out["stale"] is False
+    assert out["count"] == 12
 
 
 # --------------------------------------------------------------------------- #
