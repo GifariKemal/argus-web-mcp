@@ -15,10 +15,10 @@ A FastMCP (Python) server, deployed remote-HTTP on the SURIOTA VPS, that every C
 4. `docs/04-REFERENCES.md` - OSS study guide (Crawl4AI/SearXNG/FastMCP/trafilatura - what to learn + URLs).
 5. `docs/01-RESEARCH.md` - research findings + sources. `benchmark/testset.yaml` - benchmark set.
 
-## Status (2026-06-24)
-P0/P1/P2 DONE. **P3 local productionization DONE; actual VPS deploy (paused) awaiting owner inputs.** Run locally: `./.venv/Scripts/python.exe -m argus.server` (stdio) or `uvicorn argus.server:app` (HTTP). Plans in `docs/superpowers/plans/`.
+## Status (2026-06-25)
+P0/P1/P2/P3 DONE. **DEPLOYED LIVE** at `https://argus.gifariksuryo.xyz/mcp` (bearer auth) on VPS `103.172.172.29` (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker `:8888`, LE TLS, nginx, fail2ban). Safe auto-update timer polls `main` every 5 min (ff-only -> health-gate -> auto-rollback; skips restart for docs/benchmark-only commits). Run locally: `./.venv/Scripts/python.exe -m argus.server` (stdio) or `uvicorn argus.server:app` (HTTP). Plans in `docs/superpowers/plans/`.
 
-**Built & verified:** 20 MCP tools; **526 offline tests (+3 browser, +2 slow) green; SSRF 100%; ruff clean**; core coverage ~87%. HTTP transport live (`/health`,`/metrics` per-tool counters, JWT/static bearer -> /mcp 401 without token). Deploy artifacts in `deploy/` (systemd/nginx/provision/fail2ban + SECURITY-AUDIT). Local load test passed (no OOM/leak). Multi-agent QA/QC end-to-end clean (security Round-2: no Critical/High). Hardening: streaming body-cap, per-host throttle+circuit-breaker, archive egress-fallback, full caching.
+**Built & verified:** 20 MCP tools; **600 offline tests (+browser, +slow) green; SSRF 100%; ruff clean**; core coverage ~87%. HTTP transport live (`/health`,`/metrics` per-tool counters, JWT/static bearer -> /mcp 401 without token). Deploy artifacts in `deploy/` (systemd/nginx/provision/fail2ban + SECURITY-AUDIT). Local load test passed (no OOM/leak). Multi-agent QA/QC end-to-end clean (security Round-2: no Critical/High). Hardening: streaming body-cap, per-host throttle+circuit-breaker, archive egress-fallback, full caching.
 
 **No LLM needed (architecture):** Argus is tools-not-brain - the consuming agent (Claude Code Opus 4.8 / Codex) does synthesis from `research(deep)`/`quick` raw-content bundles. Argus's LLM tier (research `answer`, extract_structured `llm`) is OPTIONAL, **off by default** (requires `ARGUS_ENABLE_LLM=1` + endpoint), so Argus is fully functional with zero LLM. Not a deploy dependency.
 
@@ -26,7 +26,7 @@ P0/P1/P2 DONE. **P3 local productionization DONE; actual VPS deploy (paused) awa
 
 **Competitive position (benchmark vs Claude Code & Codex native, n=50):** discovery parity, Argus wins on full-content depth (~7k words/query), freshness, owned/unlimited. Adopted competitor features: `map_urls`, `research(answer)`, `find_similar` (Exa-style semantic), domain filters, `github_search`.
 
-**OPEN before/at deploy (owner inputs):** (1) **subdomain + DNS A -> 103.172.172.29** + go-ahead. (2) **`ARGUS_TOKEN`** (provision generates) + optional **SearXNG `outgoing.proxies`** (free engines throttle per-IP under bursts; broadened engine set mitigates, proxy is the durable fix on a datacenter IP). (3) `read_pdf` local-path LFI is disabled-by-default on remote (gated by `ARGUS_ALLOW_LOCAL_PDF`). **No LLM needed** - leave `ARGUS_ENABLE_LLM` unset; the consuming agent synthesizes. Aurix calendar field-map (`time->date`,`event->name`) noted in `trading/forexfactory.py`. **Do NOT deploy until (1)+(2) set.**
+**OPEN (owner inputs):** **F1** - set `ARGUS_S2_API_KEY` in `/etc/argus/argus.env` (free Semantic Scholar signup) so `scholar_search` uses the richer S2 backend instead of the CrossRef fallback. Optional/durable: SearXNG `outgoing.proxies` (free engines throttle per-IP on a datacenter IP under bursts; the broadened engine set mitigates). `read_pdf` local-path LFI stays disabled on remote (`ARGUS_ALLOW_LOCAL_PDF` unset). **No LLM needed** - leave `ARGUS_ENABLE_LLM` unset; the consuming agent synthesizes. Aurix calendar field-map (`time->date`,`event->name`) noted in `trading/forexfactory.py`.
 
 ## Stack (decided)
 Crawl4AI (Apache-2.0, clone&improve core) / trafilatura (article extract) / **SearXNG** (self-host, unlimited search, JSON API) / Playwright / Docling(MIT)/pymupdf4llm (PDF) / Patchright->Nodriver (anti-bot, lazy) / **FastMCP** Python, **Streamable-HTTP** transport. Deploy: systemd+uvicorn `127.0.0.1:8090` + nginx subdomain+TLS+bearer/JWT+fail2ban on VPS `103.172.172.29`; SearXNG docker `:8888`.
