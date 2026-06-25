@@ -494,13 +494,18 @@ async def test_map_urls_error_not_cached(app_state, monkeypatch):
 
 
 async def test_news_feed_delegates(app_state, monkeypatch):
+    seen = {}
+
     async def fake_feed(query, since=None, sentiment=False, client=None):
+        seen["client"] = client
         return {"query": query, "items": [{"title": "n", "url": "http://x/1", "snippet": "s"}],
                 "count": 1}
 
     monkeypatch.setattr(server, "_news_feed", fake_feed)
     r = await server.news_sentiment_feed("gold")
     assert r["count"] == 1
+    # R3: the SSRF-safe shared client must be threaded through (no plain-httpx fallback).
+    assert seen["client"] is app_state.client
 
 
 @pytest.mark.slow
@@ -547,6 +552,46 @@ async def test_watch_register_list_unwatch(app_state):
 async def test_watch_bad_webhook_scheme(app_state):
     r = await server.watch("https://example.com/", "file:///etc/passwd")
     assert r["code"] == "ssrf_blocked"
+
+
+async def test_watch_store_oserror_returns_err_not_raise(app_state, monkeypatch):
+    """R1: a watch-store persistence failure (OSError) must come back as a structured
+    err(...) dict, never propagate to the client."""
+    def boom_add(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_state.watch_store, "add", boom_add)
+    r = await server.watch("https://example.com/", "https://hooks.example/abc")
+    assert isinstance(r, dict)
+    assert r["code"] == "fetch_failed"
+    # Sec-F2: the internal exception message ("disk full") must NOT leak to the client.
+    assert "disk full" not in (r.get("detail") or "")
+
+
+async def test_unwatch_store_oserror_returns_err_not_raise(app_state, monkeypatch):
+    def boom_remove(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_state.watch_store, "remove", boom_remove)
+    r = await server.unwatch("someid")
+    assert r["code"] == "fetch_failed"
+
+
+async def test_list_watches_oserror_returns_err_not_raise(app_state, monkeypatch):
+    def boom_list(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_state.watch_store, "list", boom_list)
+    r = await server.list_watches()
+    assert r["code"] == "fetch_failed"
+
+
+def test_registered_tool_set_is_twenty():
+    """Offline guard (no `browser` marker): the registration tuple holds exactly 20 tools,
+    so the offline suite enforces the count even though the in-memory MCP listing is
+    browser-marked."""
+    assert len(server.TOOLS) == 20
+    assert len({fn.__name__ for fn in server.TOOLS}) == 20
 
 
 async def test_scholar_search_delegates(app_state, monkeypatch):

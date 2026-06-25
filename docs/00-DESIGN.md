@@ -49,7 +49,7 @@ Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.<domain>, TLS, fail2ban)
 | `batch_read(urls[], concurrency)` | P1 | asyncio + httpx pool | partial-failure tolerant |
 | `extract_structured(url, schema)` | P1 sel / P2 LLM | parsel (CSS/XPath) -> Instructor+Pydantic+owned LLM | deterministic first, LLM only if needed |
 | `crawl(seed, depth, max_pages, globs)` | P2 | Crawl4AI deep-crawl | robots-respecting |
-| `screenshot(url, full_page)` | P2 | Playwright | |
+| `screenshot(url)` | P2 | Playwright | always full-page |
 | `watch(url, selector, interval, webhook)` | P3 | Playwright + diff + APScheduler | calendar/COT monitoring -> Telegram |
 | `map(url)` | P3 | sitemap + link extraction | |
 

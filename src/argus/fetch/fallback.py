@@ -13,6 +13,7 @@ IP is rejected just like any other URL.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from .static import fetch_static
 
@@ -31,7 +32,11 @@ async def fetch_via_archive(url: str, *, client, timeout: float = 30) -> dict | 
     original error.
     """
     try:
-        avail = await fetch_static(_AVAILABILITY_API + url, client=client, timeout=timeout)
+        # Percent-encode the target URL into the query string so its own `&`/`?`/`#`
+        # cannot inject extra query params into the availability request.
+        avail = await fetch_static(
+            _AVAILABILITY_API + quote(url, safe=""), client=client, timeout=timeout
+        )
         data = json.loads(avail["html"])
         snapshot = data["archived_snapshots"]["closest"]["url"]
         snap = await fetch_static(snapshot, client=client, timeout=timeout)

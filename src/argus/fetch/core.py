@@ -59,7 +59,6 @@ async def _do_fetch(
     wait_for: str | None = None,
     actions: list | None = None,
     screenshot: bool = False,
-    full_page: bool = True,
     timeout: float = 30,
     client=None,
     browser: BrowserPool | None = None,
@@ -76,7 +75,7 @@ async def _do_fetch(
         _guard(url)  # SSRF resolve-then-validate before navigating (browser tier too)
         r = await browser.render(
             url, wait_for=wait_for, actions=actions, screenshot=screenshot,
-            full_page=full_page, timeout=max(timeout, 45),
+            timeout=max(timeout, 45),
         )
         return {
             "final_url": r["final_url"],

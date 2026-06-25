@@ -21,6 +21,7 @@ A SearXNG backend failure re-raises SearchError for the server tool to map.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 
 from .extract.article import extract_article
@@ -138,8 +139,11 @@ def _build_answer_context(query: str, sources: list[dict]) -> str:
                 i, s.get("url"), len(content), ANSWER_SOURCE_BUDGET,
             )
             content = content[:ANSWER_SOURCE_BUDGET]
+        # Escape the URL: it is attacker-influenced (a fetched page's final_url) and goes
+        # into a quoted XML-ish attribute - a raw `"` would break out of the attribute.
+        safe_url = html.escape(s.get("url") or "", quote=True)
         blocks.append(
-            f'[{i}] <source id="{i}" url="{s.get("url")}">\n{content}\n</source>'
+            f'[{i}] <source id="{i}" url="{safe_url}">\n{content}\n</source>'
         )
     return "\n\n".join(blocks)
 

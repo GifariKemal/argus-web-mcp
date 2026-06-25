@@ -1,4 +1,4 @@
-"""Argus FastMCP server - 6 web tools over a tiered, SSRF-guarded, cached fetch core.
+"""Argus FastMCP server - 20 web tools over a tiered, SSRF-guarded, cached fetch core.
 
 Run locally (P1) over stdio:  python -m argus.server
 Tools NEVER raise to the client - they return structured ``err(...)`` dicts.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -70,6 +71,16 @@ INSTRUCTIONS = (
 
 BATCH_CAP = 200
 MAX_PDF_BYTES = 64 * 1024 * 1024
+
+logger = logging.getLogger("argus.server")
+
+
+def _safe_detail(exc: Exception) -> str:
+    """Sanitized error detail for the client. The full exception (which may carry internal
+    URLs/paths/keys) is LOGGED; the client only gets the exception class name, never its
+    message text. Keeps err() detail non-empty without leaking internals (Sec-F2)."""
+    logger.warning("tool error: %s: %s", type(exc).__name__, exc)
+    return type(exc).__name__
 
 
 @dataclass
@@ -171,7 +182,7 @@ async def read(
     try:
         validate_url(url)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
 
     opts = {"format": format, "clean": clean, "include_links": include_links,
             "media": extract_media}
@@ -184,12 +195,12 @@ async def read(
         res = await fetch(url, client=s.client, browser=s.browser, timeout=timeout,
                           throttle=s.throttle)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
         stale = s.cache.get_stale(ck)
         if stale is not None:
             return {**stale, "from_cache": True}
-        return err("fetch_failed", "fetch failed", str(e))
+        return err("fetch_failed", "fetch failed", _safe_detail(e))
 
     art = extract_article(res["html"], res["final_url"], fmt=format, clean=clean,
                           include_links=include_links)
@@ -245,7 +256,7 @@ async def search(
     except SearchError as e:
         if e.code == "no_results":
             return err("no_results", "no search results", qkey)
-        return err("search_backend_down", "search backend unavailable", str(e))
+        return err("search_backend_down", "search backend unavailable", _safe_detail(e))
 
     res["from_cache"] = False
     s.cache.put(ck, res, source="search")
@@ -270,9 +281,9 @@ async def read_pdf(
             if data is None:
                 return err("fetch_failed", "file not found", url_or_path)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
-        return err("fetch_failed", "fetch failed", str(e))
+        return err("fetch_failed", "fetch failed", _safe_detail(e))
 
     if len(data) > MAX_PDF_BYTES:
         return err("parse_failed", "PDF too large", f"{len(data)} bytes")
@@ -285,7 +296,7 @@ async def read_pdf(
     except ValueError:
         return err("not_pdf", "not a valid PDF", url_or_path)
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("parse_failed", "PDF parse failed", str(e))
+        return err("parse_failed", "PDF parse failed", _safe_detail(e))
 
     return {"source": url_or_path, **result}
 
@@ -303,7 +314,7 @@ async def scrape(
     try:
         validate_url(url)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     if s.browser is None:
         return err("render_failed", "browser tier unavailable")
 
@@ -313,10 +324,10 @@ async def scrape(
             timeout=timeout, browser=s.browser, client=s.client, throttle=s.throttle,
         )
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
         code = "blocked_by_antibot" if "antibot" in str(e).lower() else "render_failed"
-        return err(code, "render failed", str(e))
+        return err(code, "render failed", _safe_detail(e))
 
     art = extract_article(res["html"], res["final_url"], fmt=format)
     return {
@@ -382,10 +393,12 @@ async def extract_structured(
             # (escalation would replace the page with rendered content and lose the targets).
             res = await fetch(u, client=s.client, browser=None, throttle=s.throttle)
         except SSRFError as e:
-            out.append({"url": u, **err("ssrf_blocked", "URL blocked by SSRF guard", str(e))})
+            out.append(
+                {"url": u, **err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))}
+            )
             continue
         except FetchError as e:
-            out.append({"url": u, **err("fetch_failed", "fetch failed", str(e))})
+            out.append({"url": u, **err("fetch_failed", "fetch failed", _safe_detail(e))})
             continue
 
         result = None
@@ -395,7 +408,9 @@ async def extract_structured(
                 result = {"url": u, "data": r["data"], "valid": r["valid"], "mode_used": "selector"}
             except Exception as e:  # noqa: BLE001 - never raise to client
                 if mode == "selector":
-                    out.append({"url": u, **err("extraction_failed", "selector failed", str(e))})
+                    out.append(
+                        {"url": u, **err("extraction_failed", "selector failed", _safe_detail(e))}
+                    )
                     continue
 
         need_llm = mode == "llm" or (
@@ -410,7 +425,9 @@ async def extract_structured(
                 result = {"url": u, "data": lr["data"], "valid": lr["valid"], "mode_used": "llm"}
             except Exception as e:  # noqa: BLE001 - LLMUnavailable/parse errors; never raise to client
                 if result is None:
-                    out.append({"url": u, **err("extraction_failed", "LLM failed", str(e))})
+                    out.append(
+                        {"url": u, **err("extraction_failed", "LLM failed", _safe_detail(e))}
+                    )
                     continue
         out.append(result)
 
@@ -431,30 +448,30 @@ async def crawl(
             same_domain=same_domain, respect_robots=respect_robots, browser=s.browser,
         )
     except SSRFError as e:
-        return err("ssrf_blocked", "seed URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "seed URL blocked by SSRF guard", _safe_detail(e))
     except CrawlError as e:
-        return err("fetch_failed", "crawl failed", str(e))
+        return err("fetch_failed", "crawl failed", _safe_detail(e))
 
 
-async def screenshot(url: str, full_page: bool = True, timeout: int = 45) -> dict:
+async def screenshot(url: str, timeout: int = 45) -> dict:
     """Full-page PNG screenshot (base64) of a JS-rendered page."""
     s = _state()
     try:
         validate_url(url)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     if s.browser is None:
         return err("render_failed", "browser tier unavailable")
     try:
         res = await fetch(
-            url, render=True, screenshot=True, full_page=full_page, timeout=timeout,
+            url, render=True, screenshot=True, timeout=timeout,
             browser=s.browser, client=s.client, throttle=s.throttle,
         )
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
         code = "blocked_by_antibot" if "antibot" in str(e).lower() else "render_failed"
-        return err(code, "screenshot failed", str(e))
+        return err(code, "screenshot failed", _safe_detail(e))
     return {"url": url, "final_url": res["final_url"], "screenshot": res.get("screenshot"),
             "format": "png"}
 
@@ -465,7 +482,7 @@ async def forexfactory_calendar(date_range: list | None = None) -> dict:
     try:
         return await _ff_calendar(date_range, client=s.client)
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("fetch_failed", "forexfactory calendar failed", str(e))
+        return err("fetch_failed", "forexfactory calendar failed", _safe_detail(e))
 
 
 async def cot_report(report_type: str = "legacy_futures", date: str | None = None) -> dict:
@@ -474,20 +491,21 @@ async def cot_report(report_type: str = "legacy_futures", date: str | None = Non
     try:
         return await _cot_report(report_type=report_type, date=date, client=s.client)
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("fetch_failed", "COT report failed", str(e))
+        return err("fetch_failed", "COT report failed", _safe_detail(e))
 
 
 async def news_sentiment_feed(
     query: str, since: str | None = None, sentiment: bool = False
 ) -> dict:
     """Ranked news feed (+ optional owned-LLM sentiment score)."""
+    s = _state()
     try:
-        return await _news_feed(query, since=since, sentiment=sentiment)
+        return await _news_feed(query, since=since, sentiment=sentiment, client=s.client)
     except SearchError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
-        return err(code, "news feed failed", str(e))
+        return err(code, "news feed failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("extraction_failed", "news feed failed", str(e))
+        return err("extraction_failed", "news feed failed", _safe_detail(e))
 
 
 def _build_auth():
@@ -538,12 +556,12 @@ async def research(
             client=s.client, browser=s.browser,
         )
     except ValueError as e:  # invalid mode
-        return err("schema_invalid", "invalid research mode", str(e))
+        return err("schema_invalid", "invalid research mode", _safe_detail(e))
     except SearchError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
-        return err(code, "research search failed", str(e))
+        return err(code, "research search failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("extraction_failed", "research failed", str(e))
+        return err("extraction_failed", "research failed", _safe_detail(e))
 
     # Optional per-source highlights (top query-relevant sentences) - deep bundle + semantic on.
     if highlights and isinstance(res, dict) and semantic.available():
@@ -571,11 +589,11 @@ async def map_urls(url: str, max_urls: int = 500, include_subdomains: bool = Tru
         res = await map_site(url, max_urls=max_urls, include_subdomains=include_subdomains,
                              client=s.client)
     except SSRFError as e:
-        return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+        return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except MapError as e:
-        return err("fetch_failed", "site map failed", str(e))
+        return err("fetch_failed", "site map failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("fetch_failed", "map failed", str(e))
+        return err("fetch_failed", "map failed", _safe_detail(e))
 
     if isinstance(res, dict) and "code" not in res:
         res["from_cache"] = False
@@ -600,9 +618,9 @@ async def find_similar(url_or_text: str, count: int = 10) -> dict:
                 res = await fetch(url_or_text, client=s.client, browser=s.browser,
                                   throttle=s.throttle)
             except SSRFError as e:
-                return err("ssrf_blocked", "URL blocked by SSRF guard", str(e))
+                return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
             except FetchError as e:
-                return err("fetch_failed", "fetch failed", str(e))
+                return err("fetch_failed", "fetch failed", _safe_detail(e))
             art = extract_article(res["html"], res["final_url"])
             seed_text = f"{art['title'] or ''} {(art['content'] or res['html'])[:3000]}"
             query = art["title"] or (art["content"] or "")[:120] or url_or_text
@@ -615,7 +633,7 @@ async def find_similar(url_or_text: str, count: int = 10) -> dict:
             found = await searxng_search(query, count=max(count * 2, 10))
         except SearchError as e:
             code = "no_results" if e.code == "no_results" else "search_backend_down"
-            return err(code, "find_similar search failed", str(e))
+            return err(code, "find_similar search failed", _safe_detail(e))
 
         cands = [r for r in found["results"] if r.get("url") not in seed_urls]
         if not cands:
@@ -630,7 +648,7 @@ async def find_similar(url_or_text: str, count: int = 10) -> dict:
             "count": len(ranked),
         }
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("extraction_failed", "find_similar failed", str(e))
+        return err("extraction_failed", "find_similar failed", _safe_detail(e))
 
 
 async def github_search(
@@ -656,9 +674,9 @@ async def github_search(
     except GitHubSearchError as e:
         code = e.code if e.code in {"search_backend_down", "no_results", "schema_invalid"} \
             else "search_backend_down"
-        return err(code, "github search failed", str(e))
+        return err(code, "github search failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("search_backend_down", "github search failed", str(e))
+        return err("search_backend_down", "github search failed", _safe_detail(e))
 
     if isinstance(res, dict) and "code" not in res:
         res["from_cache"] = False
@@ -686,9 +704,9 @@ async def scholar_search(
         )
     except ScholarError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
-        return err(code, "scholar search failed", str(e))
+        return err(code, "scholar search failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
-        return err("search_backend_down", "scholar search failed", str(e))
+        return err("search_backend_down", "scholar search failed", _safe_detail(e))
 
     if isinstance(res, dict) and "code" not in res:
         res["from_cache"] = False
@@ -724,8 +742,11 @@ async def watch(
         validate_url(url)
         validate_url(webhook)
     except SSRFError as e:
-        return err("ssrf_blocked", "url/webhook blocked by SSRF guard", str(e))
-    w = s.watch_store.add(url, selector, max(60, int(interval_minutes * 60)), webhook)
+        return err("ssrf_blocked", "url/webhook blocked by SSRF guard", _safe_detail(e))
+    try:
+        w = s.watch_store.add(url, selector, max(60, int(interval_minutes * 60)), webhook)
+    except Exception as e:  # noqa: BLE001 - watch-store persistence (OSError) must not raise
+        return err("fetch_failed", "could not register watch", _safe_detail(e))
     return {"id": w.id, "url": w.url, "selector": w.selector, "interval_s": w.interval_s,
             "webhook": w.webhook}
 
@@ -733,14 +754,21 @@ async def watch(
 async def list_watches() -> dict:
     """List registered watches."""
     s = _state()
-    watches = [asdict(w) for w in s.watch_store.list()]
+    try:
+        watches = [asdict(w) for w in s.watch_store.list()]
+    except Exception as e:  # noqa: BLE001 - never raise to client
+        return err("fetch_failed", "could not list watches", _safe_detail(e))
     return {"watches": watches, "count": len(watches)}
 
 
 async def unwatch(watch_id: str) -> dict:
     """Remove a watch by id."""
     s = _state()
-    return {"id": watch_id, "removed": s.watch_store.remove(watch_id)}
+    try:
+        removed = s.watch_store.remove(watch_id)
+    except Exception as e:  # noqa: BLE001 - watch-store persistence (OSError) must not raise
+        return err("fetch_failed", "could not remove watch", _safe_detail(e))
+    return {"id": watch_id, "removed": removed}
 
 
 _TOOL_CALLS: dict[str, int] = {}
@@ -755,14 +783,18 @@ class _MetricsMiddleware(Middleware):
         return await call_next(context)
 
 
-mcp = FastMCP(name="argus", instructions=INSTRUCTIONS, lifespan=lifespan, auth=_build_auth(),
-              middleware=[_MetricsMiddleware()])
-for _fn in (
+# The registered tool set (20 tools). Exposed as a module constant so the offline test
+# suite can assert the count without spinning up the in-memory MCP client (browser-marked).
+TOOLS = (
     read, search, smart_search, read_pdf, scrape, batch_read, extract_structured,
     crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search,
     watch, list_watches, unwatch,
     forexfactory_calendar, cot_report, news_sentiment_feed,
-):
+)
+
+mcp = FastMCP(name="argus", instructions=INSTRUCTIONS, lifespan=lifespan, auth=_build_auth(),
+              middleware=[_MetricsMiddleware()])
+for _fn in TOOLS:
     mcp.tool(_fn)
 
 

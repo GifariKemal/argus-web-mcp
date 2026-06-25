@@ -79,14 +79,14 @@ class BrowserPool:
         wait_for: str | None = None,
         actions: list | None = None,
         screenshot: bool = False,
-        full_page: bool = True,
         timeout: float = 45,
         stealth: bool = False,
     ) -> dict:
         """Render ``url`` in a fresh page. Escalates to the stealth tier on an anti-bot block.
 
-        Returns ``{final_url, html, screenshot, render_tier}``. ``viewport`` is intentionally
-        not wired (ponytail: add when a concrete need appears; Crawl4AI viewport is browser-level).
+        Returns ``{final_url, html, screenshot, render_tier}``. Screenshots are full-page
+        (Crawl4AI default); a viewport-clip path is intentionally not wired (ponytail: add when
+        a concrete need appears; Crawl4AI viewport is browser-level).
         """
         from crawl4ai import CacheMode, CrawlerRunConfig
 
@@ -97,9 +97,6 @@ class BrowserPool:
         if self._crawler is None:
             raise FetchError("render_failed", "browser pool not started")
 
-        # ponytail: Crawl4AI screenshots are full-page by default; full_page is accepted for
-        # API completeness (TOOL-SPECS) - wire a viewport-clip path only if a need appears.
-        _ = full_page
         cfg = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             screenshot=screenshot,

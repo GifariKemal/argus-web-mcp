@@ -31,7 +31,7 @@ class _FakeBrowser:
         self.calls = 0
 
     async def render(self, url, *, wait_for=None, actions=None, screenshot=False,
-                     full_page=True, timeout=45, stealth=False):
+                     timeout=45, stealth=False):
         self.calls += 1
         return {"final_url": url, "html": self.html, "screenshot": "b64" if screenshot else None}
 
@@ -381,3 +381,23 @@ async def test_browserpool_real_render():
         assert "Example Domain" in r["html"]
     finally:
         await pool.stop()
+
+
+async def test_fetch_via_archive_percent_encodes_target_url(monkeypatch):
+    """The target URL is percent-encoded into the availability query so its own `&`
+    cannot inject extra query params into the archive.org request (Sec hardening)."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = {}
+
+    def h(req):
+        if req.url.host == "archive.org":
+            seen["raw"] = str(req.url)
+            return httpx.Response(200, text='{"archived_snapshots":{}}')
+        return httpx.Response(200, text=SNAPSHOT_HTML)
+
+    target = "http://blocked.example/?a=1&b=2"
+    async with _client(h) as c:
+        await fetch_via_archive(target, client=c)
+    # The raw `&` from the target must NOT appear unencoded; it is %26-encoded.
+    assert "%26b%3D2" in seen["raw"]
+    assert "blocked.example/?a=1&b=2" not in seen["raw"]

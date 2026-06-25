@@ -89,7 +89,7 @@ class FakeBrowser:
         self.calls = 0
 
     async def render(self, url, *, wait_for=None, actions=None, screenshot=False,
-                     full_page=True, timeout=45, stealth=False):
+                     timeout=45, stealth=False):
         self.calls += 1
         shot = "BASE64PNG" if screenshot else None
         return {"final_url": url, "html": self.html, "screenshot": shot, "render_tier": "normal"}
