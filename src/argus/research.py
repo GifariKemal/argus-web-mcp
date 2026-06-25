@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 
 from .extract.article import extract_article
 from .fetch.core import fetch as _default_fetch
@@ -37,7 +38,45 @@ logger = logging.getLogger(__name__)
 ANSWER_SOURCE_BUDGET = 4000
 # Minimum extracted word count for a source to land in sources; below this
 # the page is treated as a low-quality stub (nav/footer noise) and moved to failed.
+# Default 30. Overridable at runtime via ARGUS_MIN_CONTENT_WORDS (see _min_content_words)
+# so the floor can be tuned per-deployment without a code change.
 MIN_CONTENT_WORDS = 30
+
+
+def _min_content_words() -> int:
+    """The low-content floor: ARGUS_MIN_CONTENT_WORDS if a valid int, else the 30 default.
+
+    Opinion: 30 is a sound default. A genuine answer-bearing snippet (a definition, a
+    release note, a forum reply) almost always clears 30 words; pages under it are
+    overwhelmingly nav/footer chrome or cookie walls. Lowering it risks readmitting the
+    YouTube/stub noise the floor was added to reject. Kept configurable for the rare
+    short-but-real corpus, but the default stays 30 pending evidence to move it.
+    """
+    raw = os.environ.get("ARGUS_MIN_CONTENT_WORDS")
+    if raw is None:
+        return MIN_CONTENT_WORDS
+    try:
+        return int(raw)
+    except ValueError:
+        return MIN_CONTENT_WORDS
+
+
+def _apply_char_cap(sources: list[dict], max_chars: int | None) -> None:
+    """Truncate each source's `content` to `max_chars`, FLAGGED honestly (in place).
+
+    No-op when `max_chars` is None or a source is already within the cap. When a source
+    is cut, its `content` becomes the first `max_chars` chars and we add `truncated=True`
+    + `full_chars=<original length>`, while keeping the original `word_count`. This is an
+    explicit flag, never a silent cut (satisfies the no-silent-truncation gate).
+    """
+    if max_chars is None:
+        return
+    for s in sources:
+        content = s.get("content") or ""
+        if len(content) > max_chars:
+            s["full_chars"] = len(content)
+            s["content"] = content[:max_chars]
+            s["truncated"] = True
 
 
 def _dedup_results(results: list[dict], limit: int) -> list[dict]:
@@ -67,7 +106,7 @@ async def _read_one(url, *, fetch_fn, client, browser, timeout, sem) -> dict:
         word_count = art["metadata"]["word_count"]
         if not word_count:
             return {"url": url, "ok": False, "error": "empty_content"}
-        if word_count < MIN_CONTENT_WORDS:
+        if word_count < _min_content_words():
             return {"url": url, "ok": False, "error": "low_content"}
         return {
             "url": url,
@@ -177,6 +216,7 @@ async def research(
     *,
     mode: str = "deep",
     max_sources: int = 5,
+    max_chars_per_source: int | None = None,
     concurrency: int = 5,
     timeout: int = 30,
     client=None,
@@ -194,6 +234,11 @@ async def research(
     CITED LLM answer over the fetched sources (the deep bundle is always included).
     Every bundle carries a `"mode"` field.
 
+    `max_chars_per_source` (opt-in, deep/answer): cap each source's `content` to that
+    many chars for token-sensitive consumers. Truncation is FLAGGED, never silent - a
+    capped source gains `truncated=True` + `full_chars=<orig len>` and keeps its original
+    `word_count`. `None` (default) returns FULL content, identical to today.
+
     Raises ValueError on an unknown mode and SearchError if the search backend
     fails. In answer mode, raises RuntimeError when no LLM is available and none
     is injected. `search_fn`/`fetch_fn`/`llm_fn` are injection seams for testing.
@@ -204,8 +249,10 @@ async def research(
         )
 
     search_fn = search_fn or _default_search
-    found = await search_fn(query, count=max_sources * 2)  # overfetch for dedup/drop
-    candidates = _dedup_results(found.get("results", []), max_sources * 2)
+    # Overfetch *3 (not *2): every wave can have low_content/fetch failures, so a wider
+    # candidate pool gives backfill more spares to still reach max_sources good sources.
+    found = await search_fn(query, count=max_sources * 3)  # overfetch for dedup/drop/backfill
+    candidates = _dedup_results(found.get("results", []), max_sources * 3)
     top = candidates[:max_sources]  # quick-mode lightweight slice
 
     if mode == "quick":
@@ -239,6 +286,7 @@ async def research(
     )
 
     if mode == "deep":
+        _apply_char_cap(sources, max_chars_per_source)
         return {
             "query": query,
             "mode": "deep",
@@ -264,6 +312,8 @@ async def research(
         }
 
     synth = await _synthesize_answer(query, sources, llm_fn=llm_fn)
+    # Synthesis ran over FULL content above; only the returned bundle is capped (opt-in).
+    _apply_char_cap(sources, max_chars_per_source)
     return {
         "query": query,
         "mode": "answer",

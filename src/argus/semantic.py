@@ -54,6 +54,21 @@ def _get_embedder():
     return _EMBEDDER
 
 
+def warm() -> bool:
+    """Best-effort: load the embedder + run one tiny embed so the first real query
+    doesn't pay the ~5s model download/load. Returns True if warmed, False if the
+    [semantic] extra is absent. Never raises - callers (startup) must not be blocked.
+    """
+    if not available():
+        return False
+    try:
+        embed(["warm"])
+    except Exception as exc:  # noqa: BLE001 - warm-up is opportunistic; never fail startup
+        logger.warning("semantic warm-up skipped: %s", exc)
+        return False
+    return True
+
+
 def embed(texts: list[str]) -> list[list[float]]:
     """Embed texts with the singleton model. Empty input -> []. Raises SemanticUnavailable."""
     if not texts:
