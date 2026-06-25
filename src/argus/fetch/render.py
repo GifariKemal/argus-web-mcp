@@ -42,6 +42,7 @@ class BrowserPool:
         self._stealth = None  # lazy stealth crawler - started only on first anti-bot block
         self._concurrency = concurrency
         self._sem = asyncio.Semaphore(concurrency)
+        self._stealth_lock = asyncio.Lock()  # serialize lazy stealth init (audit R5)
 
     @property
     def active_contexts(self) -> int:
@@ -62,14 +63,23 @@ class BrowserPool:
                 setattr(self, attr, None)
 
     async def _ensure_stealth(self):
-        """Lazily start a stealth Chromium (Crawl4AI enable_stealth -> Patchright tier)."""
-        if self._stealth is None:
-            from crawl4ai import AsyncWebCrawler, BrowserConfig
+        """Lazily start a stealth Chromium (Crawl4AI enable_stealth -> Patchright tier).
 
-            self._stealth = AsyncWebCrawler(
-                config=BrowserConfig(headless=True, verbose=False, enable_stealth=True)
-            )
-            await self._stealth.start()
+        Lock + double-check so two concurrent blocked renders start it exactly once
+        (else one Chromium leaks - audit R5).
+        """
+        if self._stealth is None:
+            async with self._stealth_lock:
+                if self._stealth is None:
+                    from crawl4ai import AsyncWebCrawler, BrowserConfig
+
+                    crawler = AsyncWebCrawler(
+                        config=BrowserConfig(
+                            headless=True, verbose=False, enable_stealth=True
+                        )
+                    )
+                    await crawler.start()
+                    self._stealth = crawler
         return self._stealth
 
     async def render(

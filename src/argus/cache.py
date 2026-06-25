@@ -39,6 +39,11 @@ class Cache:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.blob_dir.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        # WAL + bounded lock waits: resilient to concurrent access if the deploy
+        # ever goes multi-process (audit C2). put() still commits synchronously on
+        # the loop; acceptable for current single-process use (ponytail: no threading).
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS entries ("
             "key TEXT PRIMARY KEY, payload TEXT NULL, blob_path TEXT NULL, "

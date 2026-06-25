@@ -1,3 +1,4 @@
+import asyncio
 import types
 
 import pytest
@@ -82,6 +83,27 @@ async def test_render_no_escalation_when_clean(monkeypatch):
     out = await pool.render("http://example.com/")
     assert out["render_tier"] == "normal"
     assert escalated["n"] == 0
+
+
+async def test_ensure_stealth_inits_once_under_concurrency(monkeypatch):
+    """Two concurrent _ensure_stealth() must start the stealth crawler exactly once (audit R5)."""
+    starts = {"n": 0}
+
+    class _StealthCrawler:
+        async def start(self):
+            starts["n"] += 1
+            await asyncio.sleep(0)  # yield: expose the check-then-set race window
+
+    fake_mod = types.SimpleNamespace(
+        AsyncWebCrawler=lambda config=None: _StealthCrawler(),
+        BrowserConfig=lambda **kw: None,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "crawl4ai", fake_mod)
+
+    pool = BrowserPool()
+    a, b = await asyncio.gather(pool._ensure_stealth(), pool._ensure_stealth())
+    assert starts["n"] == 1
+    assert a is b is pool._stealth
 
 
 async def test_render_blocked_raises_antibot_when_stealth_also_fails(monkeypatch):

@@ -108,6 +108,16 @@ fi
 
 cd "$ARGUS_HOME"
 
+# Idempotent git hardening so future auto-updates (`git merge --ff-only`/`git pull`)
+# are never blocked by local working-tree state introduced by this script. Run as the
+# repo owner ($ARGUS_USER). A real incident showed both of these block a fast-forward:
+#  - core.fileMode false: ignore executable-bit drift from the chmods this script does,
+#    so the deploy-script's own permission changes don't show as modified files.
+#  - assume-unchanged on deploy/searxng/settings.yml: Step 10 injects a secret into this
+#    tracked file; assume-unchanged keeps that local secret from blocking/clobbering on merge.
+sudo -u "$ARGUS_USER" git config core.fileMode false
+sudo -u "$ARGUS_USER" git update-index --assume-unchanged deploy/searxng/settings.yml
+
 # ====================================================================
 # Step 6: Create cache directory
 # ====================================================================
