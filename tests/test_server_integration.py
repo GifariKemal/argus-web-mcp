@@ -789,3 +789,24 @@ async def test_find_similar_ranks_by_semantic(app_state, monkeypatch):
     assert r["count"] == 2
     assert r["results"][0]["url"] == "http://a/1"  # higher semantic score first
     assert r["results"][0]["score"] >= r["results"][1]["score"]
+
+
+@pytest.mark.anyio
+async def test_find_similar_clamps_invalid_count(app_state, monkeypatch):
+    """count < 1 is clamped to 1 at the trust boundary (was: `[:negative]` wrong subset)."""
+    monkeypatch.setattr(server.semantic, "available", lambda: True)
+    seen = {}
+
+    async def fake_search(query, **kw):
+        seen["count"] = kw.get("count")
+        return {"query": query, "results": [
+            {"title": "a", "url": "http://a/1", "snippet": "x"},
+            {"title": "b", "url": "http://a/2", "snippet": "y"},
+            {"title": "c", "url": "http://a/3", "snippet": "z"},
+        ], "count": 3, "engines_used": ["x"]}
+
+    monkeypatch.setattr(server, "searxng_search", fake_search)
+    monkeypatch.setattr(server.semantic, "similarities", lambda seed, docs: [0.9, 0.5, 0.1])
+    r = await server.find_similar("python web scraping", count=-1)
+    assert r["count"] == 1  # clamped to 1, not a negative-slice subset
+    assert seen["count"] >= 10  # search overfetch stays bounded/sane, not count*2 of -1
