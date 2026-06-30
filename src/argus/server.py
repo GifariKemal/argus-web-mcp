@@ -537,9 +537,13 @@ async def news_sentiment_feed(
     query: str, since: str | None = None, sentiment: bool = False
 ) -> dict:
     """Ranked news feed (+ optional owned-LLM sentiment score)."""
-    s = _state()
     try:
-        return await _news_feed(query, since=since, sentiment=sentiment, client=s.client)
+        # Do NOT forward the SSRF-guarded s.client: the news ranker fetches the
+        # INTERNAL loopback SearXNG (127.0.0.1:8888), which the external-URL guard
+        # blocks by design. Mirror the working search() handler and let the search
+        # layer create its own plain client for the trusted, destination-fixed
+        # backend. The SSRF gate stays intact for every genuinely external fetch.
+        return await _news_feed(query, since=since, sentiment=sentiment)
     except SearchError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
         return err(code, "news feed failed", _safe_detail(e))

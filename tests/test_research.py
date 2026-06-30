@@ -927,6 +927,108 @@ def test_min_content_words_reads_env(monkeypatch):
     assert _min_content_words() == 30
 
 
+# --------------------------------------------------------------------------- #
+# 28. deep mode - a .pdf source is routed through PDF->markdown, NOT mangled    #
+# --------------------------------------------------------------------------- #
+import fitz  # noqa: E402 - test-only PDF fixture builder
+
+
+def _make_pdf_bytes() -> bytes:
+    # Content-rich enough to clear the MIN_CONTENT_WORDS (30) floor, mirroring a
+    # real research PDF source (a 5-word stub would legitimately be low_content).
+    doc = fitz.open()
+    page = doc.new_page()
+    line = "Argus PDF page one alpha covers gold market structure and yields."
+    for i in range(8):
+        page.insert_text((72, 72 + i * 18), line)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+PDF_BYTES = _make_pdf_bytes()
+
+
+def _fake_fetch_bytes(bytes_for_url):
+    """An injected fetch_bytes_fn: url -> (bytes | Exception). Returns (final_url, body, ctype)."""
+
+    async def _fb(url, *, client=None, timeout=60):
+        val = bytes_for_url[url]
+        if isinstance(val, Exception):
+            raise val
+        return url, val, "application/pdf"
+
+    return _fb
+
+
+async def test_deep_mode_pdf_source_extracted_to_markdown():
+    """REGRESSION (Bug 2): a .pdf result must be converted to markdown via the PDF
+    path, not decoded as raw '%PDF-...' text by extract_article."""
+    url = "https://example.com/doc.pdf"
+    results = [_search_result(1, url=url)]
+
+    out = await research(
+        "argus pdf",
+        mode="deep",
+        max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_exploding_fetch(),  # HTML fetch must NOT be used for a .pdf URL
+        fetch_bytes_fn=_fake_fetch_bytes({url: PDF_BYTES}),
+    )
+
+    assert out["count"] == 1
+    assert out["failed"] == []
+    s = out["sources"][0]
+    assert s["url"] == url
+    assert "Argus PDF page one alpha" in s["content"]
+    assert not s["content"].lstrip().startswith("%PDF")
+    assert s["word_count"] > 0
+    assert s["render_path"] == "pdf"
+
+
+async def test_deep_mode_non_pdf_at_pdf_url_falls_back_or_fails():
+    """A non-PDF body served at a .pdf URL must honor the magic-byte gate: it must
+    NOT crash. extract_pdf raises ValueError('not_pdf') -> recorded as failed."""
+    url = "https://example.com/fake.pdf"
+    results = [_search_result(1, url=url)]
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_exploding_fetch(),
+        fetch_bytes_fn=_fake_fetch_bytes({url: b"<html><body>not a pdf</body></html>"}),
+    )
+
+    # No crash; the bogus PDF is isolated to failed (not_pdf), sources stay clean.
+    assert out["count"] == 0
+    assert out["sources"] == []
+    assert len(out["failed"]) == 1
+    assert out["failed"][0]["url"] == url
+    assert out["failed"][0]["error"] == "not_pdf"
+
+
+async def test_deep_mode_pdf_highlights_are_real_sentences(monkeypatch):
+    """When highlights run over a PDF source, they operate on the extracted markdown
+    (real text), not raw binary. Exercised at the research-module level by checking
+    the content is clean markdown the server highlight step can consume."""
+    url = "https://example.com/doc.pdf"
+    results = [_search_result(1, url=url)]
+
+    out = await research(
+        "argus pdf alpha",
+        mode="deep",
+        max_sources=1,
+        search_fn=_fake_search(results),
+        fetch_fn=_exploding_fetch(),
+        fetch_bytes_fn=_fake_fetch_bytes({url: PDF_BYTES}),
+    )
+    content = out["sources"][0]["content"]
+    assert "alpha" in content
+    assert "%PDF" not in content
+
+
 def test_build_answer_context_escapes_url_quotes():
     """A source URL with a `"` must be HTML-escaped so it can't break out of the
     url="..." attribute in the <source> tag (Sec: attribute-injection hardening)."""
