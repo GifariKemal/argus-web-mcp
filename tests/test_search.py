@@ -153,6 +153,91 @@ async def test_backend_timeout():
 
 
 # --------------------------------------------------------------------------- #
+# 4b. SearXNG-fallback (SPOF mitigation): primary down -> secondary instance
+# --------------------------------------------------------------------------- #
+# A public IP literal: validate_url passes it (not a blocked IP) WITHOUT DNS, so the
+# fallback path runs fully offline. A plain fallback_client lets respx intercept it.
+_FB = "http://93.184.216.34:8888"
+
+
+@respx.mock
+async def test_primary_success_reports_backend_not_degraded():
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_page([_result(1)])))
+    out = await search("q", base_url=BASE)
+    assert out["degraded"] is False
+    assert out["backend"] == BASE
+
+
+@respx.mock
+async def test_falls_back_to_secondary_when_primary_down():
+    respx.get(f"{BASE}/search").mock(side_effect=httpx.ConnectError("refused"))
+    respx.get(f"{_FB}/search").mock(
+        return_value=httpx.Response(200, json=_page([_result(1), _result(2)]))
+    )
+    out = await search(
+        "q", base_url=BASE, fallback_base_urls=[_FB], fallback_client=httpx.AsyncClient()
+    )
+    assert out["count"] == 2
+    assert out["degraded"] is True
+    assert out["backend"] == _FB
+
+
+@respx.mock
+async def test_no_fallback_configured_raises_unchanged(monkeypatch):
+    monkeypatch.delenv("ARGUS_SEARXNG_FALLBACKS", raising=False)
+    respx.get(f"{BASE}/search").mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(SearchError) as exc:
+        await search("q", base_url=BASE)
+    assert exc.value.code == "search_backend_down"
+
+
+@respx.mock
+async def test_genuine_no_results_does_not_fall_back():
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_page([])))
+    fb = respx.get(f"{_FB}/search").mock(
+        return_value=httpx.Response(200, json=_page([_result(1)]))
+    )
+    with pytest.raises(SearchError) as exc:
+        await search(
+            "q", base_url=BASE, fallback_base_urls=[_FB], fallback_client=httpx.AsyncClient()
+        )
+    assert exc.value.code == "no_results"
+    assert fb.call_count == 0  # backend worked + empty -> never try fallback
+
+
+@respx.mock
+async def test_fallback_list_read_from_env(monkeypatch):
+    monkeypatch.setenv("ARGUS_SEARXNG_FALLBACKS", _FB)
+    respx.get(f"{BASE}/search").mock(side_effect=httpx.ConnectError("refused"))
+    respx.get(f"{_FB}/search").mock(
+        return_value=httpx.Response(200, json=_page([_result(1)]))
+    )
+    out = await search("q", base_url=BASE, fallback_client=httpx.AsyncClient())
+    assert out["degraded"] is True
+    assert out["backend"] == _FB
+
+
+@respx.mock
+async def test_fallback_refused_by_ssrf_guard_is_skipped():
+    # Defense-in-depth: in production the fallback runs on the SSRF-guarded client, whose
+    # _SafeTransport raises SSRFError before sending if the configured fallback resolves to
+    # a private/metadata IP. Here we simulate that refusal; the code must catch it and,
+    # with no other fallback, surface the original backend-down error (never crash).
+    from argus.security.ssrf import SSRFError as _SSRFError
+
+    bad = "http://169.254.169.254:8888"
+    respx.get(f"{BASE}/search").mock(side_effect=httpx.ConnectError("refused"))
+    respx.get(f"{bad}/search").mock(side_effect=_SSRFError("blocked IP"))
+    with pytest.raises(SearchError) as exc:
+        await search(
+            "q", base_url=BASE,
+            fallback_base_urls=[bad],
+            fallback_client=httpx.AsyncClient(),
+        )
+    assert exc.value.code == "search_backend_down"
+
+
+# --------------------------------------------------------------------------- #
 # 5. empty
 # --------------------------------------------------------------------------- #
 @respx.mock
