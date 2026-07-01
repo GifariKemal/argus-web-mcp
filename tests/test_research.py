@@ -1059,3 +1059,23 @@ async def test_research_forwards_throttle_to_fetch():
         search_fn=fake_search, fetch_fn=fake_fetch, throttle=sentinel,
     )
     assert seen.get("throttle") is sentinel
+
+
+async def test_propagates_search_degraded_into_bundle():
+    # When the underlying search flags low relevance (concurrency garbage), research must
+    # surface it in the bundle instead of returning it as if it were clean.
+    async def degraded_search(query, count=10):
+        return {
+            "query": query,
+            "results": [{"url": "https://example.com/1", "title": "t", "snippet": "s"}],
+            "count": 1,
+            "engines_used": ["duckduckgo"],
+            "degraded": True,
+            "degraded_reason": "low_relevance",
+        }
+
+    out = await research(
+        "q", mode="quick", search_fn=degraded_search, fetch_fn=_exploding_fetch()
+    )
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "low_relevance"

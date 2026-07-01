@@ -14,6 +14,23 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.3.1] - 2026-07-02 - Relevance guard
+
+Follow-up to the concurrency investigation: under parallel `read` + `research` load, SearXNG occasionally returned an entirely off-topic result set (observed: Google Drive pages for a Hermes query), which `search`/`research` surfaced with `degraded: false` - silent garbage. The `search` params path is concurrency-safe (per-call `{**params, ...}`, thread-safe httpx client); the defect was the *absence of a signal* that the returned set was unrelated. Fix is a deterministic, defense-in-depth relevance guard - no behavior change for on-topic queries.
+
+### Added
+
+- **Low-relevance guard in `search()`** - after rerank, if the query has usable tokens (>=2 chars) and **no** returned result shares a title/snippet token with it, the response is flagged `degraded: true` with new field `degraded_reason: "low_relevance"`. Lets the consuming agent (Hermes/Claude Code) retry or discount the batch instead of trusting off-topic hits.
+- **`degraded_reason`** field on `search()` responses (`null` when clean; `"backend_failover"` when a fallback backend served the query; `"low_relevance"` per above).
+
+### Fixed
+
+- **`research()` now propagates the search `degraded`/`degraded_reason`** into every bundle (quick/deep/answer), so a low-relevance or failover signal is no longer swallowed by the research layer.
+
+### Tested
+
+- New regression tests: off-topic result set -> `degraded=true` + `low_relevance`; on-topic set stays clean; `research` surfaces the propagated `degraded`. Full suite green (639 passed).
+
 ## [0.3.0] - 2026-07-02 - Evidence-based tuning
 
 Multi-agent analysis (14-agent workflow: 7 code deep-dive + 6 external-SOTA research + synthesis) then a 3-agent adversarial review (0 blocking), producing conservative, tested, benchmark-informed tuning. All changes deployed live and reversible. Confirmed already-good (not gaps): hybrid rerank is auto-on and live; the LLM tier is deliberately off by design.
