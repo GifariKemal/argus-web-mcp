@@ -15,6 +15,13 @@ search:
   safe_search: 0
   autocomplete: ""
   default_lang: "auto"
+  # Shorten SearXNG penalty box so one throttled burst does not bench an engine for hours
+  # (root cause of the ddg-only concentration). Private loopback instance (limiter:false).
+  suspended_times:
+    SearxEngineCaptcha: 900
+    SearxEngineTooManyRequests: 300
+    SearxEngineAccessDenied: 900
+    recaptcha_SearxEngineCaptcha: 3600
 
 server:
   # Inside the container SearXNG listens on 0.0.0.0:8080; the compose port mapping
