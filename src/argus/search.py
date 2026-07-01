@@ -570,17 +570,25 @@ async def search(
     results = rerank(q, results, recency=recency, semantic_rerank=_sr)[:count]
 
     # Relevance guard: rerank keeps >= _MIN_KEEP results even when the backend returned ONLY
-    # off-topic pages (occasional SearXNG engine-suspension / concurrent-contention junk - e.g.
-    # locale-default popular pages surfacing for a niche query). If NOT ONE returned result
-    # shares a query token (title or snippet) with the query, the response is untrustworthy:
-    # flag it degraded + reason so callers (research / the agent) never silently treat junk as
-    # good results. Deterministic, no behavior change for queries with any on-topic hit.
+    # off-topic pages (SearXNG engine-suspension: all quality engines CAPTCHA on a datacenter IP
+    # -> the sole surviving engine, throttled, returns generic filler that SearXNG parses as
+    # results - e.g. AOL/grammar pages for a Hermes query). If FEWER THAN HALF the returned
+    # results share a query token (title or snippet) with the query, the response is
+    # untrustworthy: flag it degraded + reason so callers (research / the agent) never silently
+    # treat junk as good results. Deterministic; majority-relevant sets are untouched.
     qtok = _tokens(q)
-    if qtok and results and not any(
-        (_tokens(r.get("title", "")) & qtok) or (_tokens(r.get("snippet", "")) & qtok)
-        for r in results
-    ):
-        degraded, degraded_reason = True, "low_relevance"
+    if qtok and results:
+        _overlap = sum(
+            1
+            for r in results
+            if (_tokens(r.get("title", "")) & qtok) or (_tokens(r.get("snippet", "")) & qtok)
+        )
+        # Flag when MOST results are off-topic. A single incidental token match must not
+        # mask a garbage set: a throttled sole-engine (all others CAPTCHA-suspended) returns
+        # generic filler that occasionally shares one word with the query. Majority rule
+        # (fewer than half overlapping) catches that while leaving on-topic sets untouched.
+        if _overlap * 2 < len(results):
+            degraded, degraded_reason = True, "low_relevance"
 
     engines_used = sorted({r["engine"] for r in results if r["engine"]})
     return {
