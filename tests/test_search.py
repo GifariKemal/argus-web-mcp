@@ -1454,3 +1454,40 @@ async def test_on_topic_results_not_flagged():
     out = await search("nous hermes kanban orchestration", base_url=BASE)
     assert out["degraded"] is False
     assert out["degraded_reason"] is None
+
+
+@respx.mock
+async def test_majority_off_topic_flagged_despite_incidental_match():
+    # The observed research-layer case: a throttled sole-engine returns generic filler where
+    # ONE result incidentally shares a single query token ("research" in an unrelated MS doc).
+    # Majority rule must still flag it - a lone incidental hit no longer masks a garbage set.
+    respx.get(f"{BASE}/search").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page(
+                [
+                    {  # incidental single-token overlap ("research")
+                        "title": "Get started with Microsoft 365 Copilot Notebooks",
+                        "url": "https://learn.microsoft.com/copilot",
+                        "content": "Organize research for a new project with Copilot.",
+                        "engine": "bing",
+                    },
+                    {
+                        "title": "Create installation media for Windows",
+                        "url": "https://support.microsoft.com/windows-media",
+                        "content": "Use a USB stick to install a fresh copy of Windows.",
+                        "engine": "bing",
+                    },
+                    {
+                        "title": "How to help keep your Microsoft account secure",
+                        "url": "https://support.microsoft.com/account-secure",
+                        "content": "Use the Authenticator app to sign in without a password.",
+                        "engine": "bing",
+                    },
+                ]
+            ),
+        )
+    )
+    out = await search("nous hermes agent self-improving learning loop skills", base_url=BASE)
+    assert out["degraded"] is True  # 1/3 overlap < half -> flagged
+    assert out["degraded_reason"] == "low_relevance"

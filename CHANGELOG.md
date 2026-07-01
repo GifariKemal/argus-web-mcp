@@ -14,6 +14,22 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.3.2] - 2026-07-02 - Relevance guard: majority rule
+
+Live dogfooding surfaced a second shape of the same failure the 0.3.1 guard was meant to catch. Root cause confirmed by querying SearXNG directly on the box: on the datacenter IP every quality engine is CAPTCHA/rate-limit **suspended** (brave, duckduckgo, google, mojeek, qwant, startpage) leaving **bing as the sole responder**, and bing under throttle returns generic filler (AOL.com pages for a "kanban orchestration" query; "affect vs effect" grammar pages for a "Nous Research Hermes" query) that SearXNG parses as results. The 0.3.1 guard only fired on **zero** token overlap, so a set where one filler page incidentally shared a single query word slipped through with `degraded: false` (observed in `research` deep mode: Microsoft Copilot/Windows docs returned for a Hermes query).
+
+### Changed
+
+- **Relevance guard is now majority-based.** `search()` flags `degraded: true` + `degraded_reason: "low_relevance"` when **fewer than half** the returned results share a title/snippet token with the query (was: only when *no* result overlapped). A lone incidental token match no longer masks an otherwise off-topic set. On-topic sets (the overwhelming majority overlap) are untouched; the flag remains advisory (nothing dropped, nothing errored).
+
+### Tested
+
+- New regression: majority-off-topic set with one incidental single-token match -> `degraded=true`. Existing zero-overlap and on-topic cases still hold. Full suite green (640 passed).
+
+### Root cause (NOT fixed here - needs an infra decision)
+
+The garbage originates upstream: a single datacenter IP gets CAPTCHA'd by all the good engines, so only a throttled bing survives and serves filler. The detection above makes Argus **honest** about it, but the elimination is the outbound **proxy pool** already scaffolded (commented) in `deploy/searxng/settings.yml` (`outgoing.proxies`) - route SearXNG's engine requests through rotating residential/socks5 proxies so the majors stop throttling. Alternatively, a SearXNG image bump may refresh the bing scraper. Both are owner/cost decisions, left to the operator.
+
 ## [0.3.1] - 2026-07-02 - Relevance guard
 
 Follow-up to the concurrency investigation: under parallel `read` + `research` load, SearXNG occasionally returned an entirely off-topic result set (observed: Google Drive pages for a Hermes query), which `search`/`research` surfaced with `degraded: false` - silent garbage. The `search` params path is concurrency-safe (per-call `{**params, ...}`, thread-safe httpx client); the defect was the *absence of a signal* that the returned set was unrelated. Fix is a deterministic, defense-in-depth relevance guard - no behavior change for on-topic queries.
