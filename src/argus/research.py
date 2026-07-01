@@ -295,6 +295,11 @@ async def research(
     found = await search_fn(query, count=max_sources * 3)  # overfetch for dedup/drop/backfill
     candidates = _dedup_results(found.get("results", []), max_sources * 3)
     top = candidates[:max_sources]  # quick-mode lightweight slice
+    # Propagate the search-layer degraded signal (e.g. low_relevance / backend_failover) so a
+    # research bundle built on off-topic/junk search results is never silently trusted.
+    _deg: dict = {"degraded": bool(found.get("degraded"))}
+    if found.get("degraded_reason"):
+        _deg["degraded_reason"] = found["degraded_reason"]
 
     if mode == "quick":
         sources = [
@@ -308,6 +313,7 @@ async def research(
             "failed": [],
             "count": len(sources),
             "source_count_requested": max_sources,
+            **_deg,
         }
 
     # mode == "answer" needs an LLM - resolve it BEFORE the expensive deep fetch so we
@@ -336,6 +342,7 @@ async def research(
             "failed": failed,
             "count": len(sources),
             "source_count_requested": max_sources,
+            **_deg,
         }
 
     # mode == "answer": cited LLM synthesis over the deep bundle.
@@ -351,6 +358,7 @@ async def research(
             "failed": failed,
             "count": 0,
             "source_count_requested": max_sources,
+            **_deg,
         }
 
     synth = await _synthesize_answer(query, sources, llm_fn=llm_fn)
@@ -365,5 +373,6 @@ async def research(
         "failed": failed,
         "count": len(sources),
         "source_count_requested": max_sources,
+        **_deg,
         **({"answer_error": synth["answer_error"]} if "answer_error" in synth else {}),
     }

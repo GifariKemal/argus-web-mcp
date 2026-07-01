@@ -508,6 +508,7 @@ async def search(
 
     backend = base_url
     degraded = False
+    degraded_reason: str | None = None
     fb_client = fallback_client
     fb_owns = False
     try:
@@ -538,7 +539,7 @@ async def search(
                 except (SearchError, SSRFError):
                     results = None
                     continue
-                backend, degraded = fb, True
+                backend, degraded, degraded_reason = fb, True, "backend_failover"
                 break
             if results is None:
                 raise primary_exc
@@ -567,6 +568,20 @@ async def search(
     # Ops kill-switch + in-prod A/B lever; None ('auto') preserves the existing auto behavior.
     _sr = {"on": True, "off": False}.get(os.getenv("ARGUS_SEMANTIC_RERANK", "auto").strip().lower())
     results = rerank(q, results, recency=recency, semantic_rerank=_sr)[:count]
+
+    # Relevance guard: rerank keeps >= _MIN_KEEP results even when the backend returned ONLY
+    # off-topic pages (occasional SearXNG engine-suspension / concurrent-contention junk - e.g.
+    # locale-default popular pages surfacing for a niche query). If NOT ONE returned result
+    # shares a query token (title or snippet) with the query, the response is untrustworthy:
+    # flag it degraded + reason so callers (research / the agent) never silently treat junk as
+    # good results. Deterministic, no behavior change for queries with any on-topic hit.
+    qtok = _tokens(q)
+    if qtok and results and not any(
+        (_tokens(r.get("title", "")) & qtok) or (_tokens(r.get("snippet", "")) & qtok)
+        for r in results
+    ):
+        degraded, degraded_reason = True, "low_relevance"
+
     engines_used = sorted({r["engine"] for r in results if r["engine"]})
     return {
         "query": query,
@@ -575,4 +590,5 @@ async def search(
         "engines_used": engines_used,
         "backend": backend,
         "degraded": degraded,
+        "degraded_reason": degraded_reason,
     }

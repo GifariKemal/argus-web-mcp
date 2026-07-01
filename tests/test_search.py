@@ -1417,3 +1417,40 @@ def test_generic_down_weight_preserves_zero_overlap_drop_and_min_keep():
     assert "https://zero.example.com" not in urls
     # generic-only match still present (demoted, not dropped) but ranked last
     assert urls[-1] == "https://generic.example.com"
+
+
+@respx.mock
+async def test_off_topic_results_flagged_low_relevance():
+    # Backend returns results (survive the rerank floor) that share NO token with the
+    # query - the concurrency-garbage case where SearXNG hands back an unrelated page set.
+    # search() must not silently pass it off as clean.
+    respx.get(f"{BASE}/search").mock(
+        return_value=httpx.Response(200, json=_page([_result(1), _result(2), _result(3)]))
+    )
+    out = await search("nous hermes kanban orchestration", base_url=BASE)
+    assert out["count"] >= 1  # floor kept results; nothing raised no_results
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "low_relevance"
+
+
+@respx.mock
+async def test_on_topic_results_not_flagged():
+    # A result whose title/snippet overlaps the query must stay degraded=False.
+    respx.get(f"{BASE}/search").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page(
+                [
+                    {
+                        "title": "Hermes agent kanban guide",
+                        "url": "https://example.com/hermes",
+                        "content": "orchestration for the hermes agent",
+                        "engine": "duckduckgo",
+                    }
+                ]
+            ),
+        )
+    )
+    out = await search("nous hermes kanban orchestration", base_url=BASE)
+    assert out["degraded"] is False
+    assert out["degraded_reason"] is None
