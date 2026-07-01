@@ -1039,3 +1039,23 @@ def test_build_answer_context_escapes_url_quotes():
     # The raw quote must not appear inside the attribute verbatim; it is &quot;-escaped.
     assert 'url="https://x/?a=&quot;&gt;&lt;inject&gt;"' in ctx
     assert '"><inject>' not in ctx
+
+
+async def test_research_forwards_throttle_to_fetch():
+    """research(throttle=X) must forward X into the underlying fetch_fn - regression guard
+    for the confirmed research() throttle-bypass fix (server.py previously omitted it)."""
+    seen = {}
+
+    async def fake_fetch(url, *, client, browser, timeout, throttle=None):
+        seen["throttle"] = throttle
+        return {"html": "<html><body>" + ("word " * 60) + "</body></html>", "final_url": url}
+
+    async def fake_search(query, count):
+        return {"results": [{"url": "http://example.com/a", "title": "t", "snippet": "s"}]}
+
+    sentinel = object()
+    await research(
+        "q", mode="deep", max_sources=1,
+        search_fn=fake_search, fetch_fn=fake_fetch, throttle=sentinel,
+    )
+    assert seen.get("throttle") is sentinel
