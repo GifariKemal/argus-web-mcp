@@ -177,6 +177,37 @@ async def test_search_no_results(app_state, monkeypatch):
     assert r["code"] == "no_results"
 
 
+async def test_news_sentiment_feed_does_not_route_through_guarded_client(app_state, monkeypatch):
+    """REGRESSION (Bug 1): the news handler must NOT forward the SSRF-guarded
+    s.client into the internal loopback SearXNG search.
+
+    Before the fix the handler passed client=s.client; the guard blocked the
+    127.0.0.1:8888 SearXNG host and the call failed with
+    {code:'extraction_failed', detail:'SSRFError'}. We monkeypatch the REAL
+    search seam (news.web_search) to record the client it receives and assert
+    (a) the handler succeeds (no error dict) and (b) it was NOT handed s.client.
+    """
+    from argus.trading import news
+
+    captured = {}
+
+    async def fake_web_search(query, **kw):
+        captured["kwargs"] = kw
+        return {"query": query, "results": [
+            {"title": "Gold rallies", "url": "https://ex.com/1", "content": "up", "engine": "n"},
+        ], "count": 1}
+
+    monkeypatch.setattr(news, "web_search", fake_web_search)
+
+    out = await server.news_sentiment_feed("gold")
+
+    assert "code" not in out  # not an error dict (was 'extraction_failed' before fix)
+    assert out["count"] == 1
+    # The guarded s.client must NOT have been forwarded to the SearXNG search.
+    assert captured["kwargs"].get("client") is not app_state.client
+    assert captured["kwargs"].get("client") is None
+
+
 def test_instructions_under_2kb():
     assert len(server.INSTRUCTIONS.encode("utf-8")) < 2048
 
@@ -557,8 +588,14 @@ async def test_news_feed_delegates(app_state, monkeypatch):
     monkeypatch.setattr(server, "_news_feed", fake_feed)
     r = await server.news_sentiment_feed("gold")
     assert r["count"] == 1
-    # R3: the SSRF-safe shared client must be threaded through (no plain-httpx fallback).
-    assert seen["client"] is app_state.client
+    # Bug 1 fix: the news ranker fetches the INTERNAL loopback SearXNG (127.0.0.1:8888),
+    # which the external-URL SSRF guard blocks by design. The handler must NOT forward
+    # the guarded s.client (doing so raised SSRFError -> 'extraction_failed' on every
+    # call); the search layer creates its own plain client for the trusted backend,
+    # exactly like the working search() handler. The SSRF gate stays intact for every
+    # genuinely external fetch.
+    assert seen["client"] is None
+    assert seen["client"] is not app_state.client
 
 
 @pytest.mark.slow

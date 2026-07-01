@@ -379,3 +379,64 @@ async def test_news_feed_sentiment_present_when_llm_available(canned_search, mon
     out = await news.news_sentiment_feed("gold", sentiment=True)
     assert out["items"][0]["score"] == 0.8
     assert out["items"][1]["score"] == 1.0  # 5.0 clamped to [-1, 1]
+
+
+# --------------------------------------------------------------------------- #
+# News feed - SSRF-guard regression (the REAL search wiring, NOT monkeypatched)#
+# --------------------------------------------------------------------------- #
+
+# SearXNG runs on hardcoded loopback 127.0.0.1:8888 - intentionally a "blocked"
+# IP for the external-URL SSRF guard. These tests exercise the REAL
+# argus.search.search path (web_search is NOT monkeypatched) so the wiring that
+# the canned_search fixture masks is covered.
+
+_SEARXNG_JSON = {
+    "results": [
+        {"title": "Gold rallies", "url": "https://ex.com/1",
+         "content": "Gold up on yields", "engine": "bing news"},
+    ]
+}
+
+
+def _searxng_handler(request: httpx.Request) -> httpx.Response:
+    # The internal SearXNG fetch hits {base_url}/search on loopback.
+    assert request.url.host == "127.0.0.1" and request.url.port == 8888
+    assert request.url.path == "/search"
+    return httpx.Response(200, json=_SEARXNG_JSON)
+
+
+async def test_news_feed_with_plain_client_reaches_loopback_searxng():
+    """A plain (un-guarded) client can reach the internal loopback SearXNG.
+
+    Proves the internal SearXNG call is destination-fixed (127.0.0.1:8888) and
+    must NOT be routed through the external-URL SSRF guard.
+    """
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_searxng_handler)
+    ) as client:
+        out = await news.news_sentiment_feed("gold", client=client)
+    assert out["count"] == 1
+    assert out["items"][0]["url"] == "https://ex.com/1"
+
+
+async def test_news_feed_guarded_client_blocks_loopback_searxng():
+    """REGRESSION (Bug 1): routing the internal SearXNG call through the
+    SSRF-guarded client raises SSRFError because loopback is blocked by design.
+
+    This is exactly the failure path that produced
+    {code:'extraction_failed', detail:'SSRFError'} when the handler forwarded
+    s.client. The fix is to NOT forward the guarded client (see the server
+    handler test); the SSRF gate itself must keep blocking loopback.
+    """
+    from argus.security.ssrf import SSRFError, build_safe_async_client
+
+    async with build_safe_async_client() as guarded:
+        with pytest.raises(SSRFError):
+            await news.news_sentiment_feed("gold", client=guarded)
+
+
+def test_ssrf_gate_still_blocks_loopback():
+    """HARD GATE guard: the fix must NOT punch a hole for 127.0.0.1."""
+    from argus.security.ssrf import is_blocked_ip
+
+    assert is_blocked_ip("127.0.0.1") is True

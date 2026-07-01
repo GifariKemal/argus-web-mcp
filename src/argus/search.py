@@ -5,16 +5,19 @@ and returns a lean result dict. See docs/03-TOOL-SPECS.md.
 """
 
 import asyncio
+import os
 import re
 from urllib.parse import urlsplit
 
 import httpx
 
 import argus.semantic as semantic
+from argus.security.ssrf import SSRFError, build_safe_async_client, validate_url
 
 _VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
 _MAX_PAGES = 5
 _TIMEOUT = 15.0
+_CONNECT_TIMEOUT = 2.0  # fast-fail a dead/hung SearXNG instead of hanging _TIMEOUT seconds
 _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 # Spread `general` load across many free engines so DuckDuckGo isn't the sole source
 # (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
@@ -396,6 +399,49 @@ async def _search_once(
     return results, unresponsive
 
 
+def _fallback_base_urls(explicit: list[str] | None) -> list[str]:
+    """Secondary SearXNG instances for SPOF failover: explicit arg wins, else the
+    comma-separated ``ARGUS_SEARXNG_FALLBACKS`` env (empty by default -> no failover)."""
+    if explicit is not None:
+        return explicit
+    raw = os.getenv("ARGUS_SEARXNG_FALLBACKS", "")
+    return [u.strip() for u in raw.split(",") if u.strip()]
+
+
+async def _search_backend(
+    q: str,
+    count: int,
+    params: dict,
+    base_url: str,
+    client: "httpx.AsyncClient",
+    retries: int,
+) -> list[dict]:
+    """Run the paginated search (with retry-on-throttle) against ONE SearXNG instance.
+
+    Returns mapped results, or raises ``SearchError``: ``no_results`` when the backend
+    answered but had nothing (never retried), ``search_backend_down`` on transport
+    failure or when every engine stayed unresponsive across ``retries``.
+    """
+    results: list[dict] = []
+    unresponsive: list = []
+    for attempt in range(retries + 1):
+        results, unresponsive = await _search_once(q, count, params, base_url, client)
+        if results or not unresponsive:
+            break  # got results, or a genuine no_results (don't retry)
+        if attempt < retries:
+            await asyncio.sleep(_BACKOFF_BASE * 2**attempt)
+    if results:
+        return results
+    # Distinguish a transient backend throttle (engines suspended / timing out) from a
+    # genuinely empty result, so callers don't treat rate-limiting as "nothing exists".
+    if unresponsive:
+        raise SearchError(
+            "search_backend_down",
+            f"all SearXNG engines unresponsive (rate-limited?): {unresponsive}",
+        )
+    raise SearchError("no_results", f"no results for query: {q!r}")
+
+
 async def search(
     query: str | list[str],
     count: int = 10,
@@ -409,6 +455,8 @@ async def search(
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
     safesearch: int = 0,
+    fallback_base_urls: list[str] | None = None,
+    fallback_client: "httpx.AsyncClient | None" = None,
 ) -> dict:
     """Query a self-hosted SearXNG instance and return deduped, mapped results.
 
@@ -454,33 +502,51 @@ async def search(
 
     owns_client = client is None
     if owns_client:
-        client = httpx.AsyncClient(timeout=_TIMEOUT)
+        # Fast-fail a dead/hung SearXNG: a short connect timeout detects an unreachable
+        # backend in ~_CONNECT_TIMEOUT s instead of hanging the full read timeout.
+        client = httpx.AsyncClient(timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT))
 
-    results: list[dict] = []
-    unresponsive: list = []
+    backend = base_url
+    degraded = False
+    fb_client = fallback_client
+    fb_owns = False
     try:
-        for attempt in range(retries + 1):
-            results, unresponsive = await _search_once(
-                q, count, params, base_url, client
-            )
-            if results or not unresponsive:
-                break  # got results, or a genuine no_results (don't retry)
-            if attempt < retries:
-                await asyncio.sleep(_BACKOFF_BASE * 2**attempt)
+        try:
+            results = await _search_backend(q, count, params, base_url, client, retries)
+        except SearchError as primary_exc:
+            # A genuine empty result means the backend WORKED - never fail over for that.
+            if primary_exc.code == "no_results":
+                raise
+            fallbacks = _fallback_base_urls(fallback_base_urls)
+            if not fallbacks:
+                raise
+            # SPOF failover: the primary loopback SearXNG is down. Try owner-configured
+            # secondary instances. These are EXTERNAL endpoints, so they go through the
+            # SSRF-guarded client + validate_url (a fallback misconfigured to a private/
+            # metadata IP is blocked). The loopback primary keeps its plain,
+            # destination-fixed internal client - the trust boundary is unchanged.
+            if fb_client is None:
+                fb_client = build_safe_async_client(
+                    timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
+                )
+                fb_owns = True
+            results = None
+            for fb in fallbacks:
+                try:
+                    validate_url(fb)
+                    results = await _search_backend(q, count, params, fb, fb_client, retries)
+                except (SearchError, SSRFError):
+                    results = None
+                    continue
+                backend, degraded = fb, True
+                break
+            if results is None:
+                raise primary_exc
     finally:
         if owns_client:
             await client.aclose()
-
-    if not results:
-        # Distinguish a transient backend throttle (engines suspended / timing out)
-        # from a genuinely empty result, so callers don't treat rate-limiting as
-        # "nothing exists". Throttle reaches here only after retries are exhausted.
-        if unresponsive:
-            raise SearchError(
-                "search_backend_down",
-                f"all SearXNG engines unresponsive (rate-limited?): {unresponsive}",
-            )
-        raise SearchError("no_results", f"no results for query: {q!r}")
+        if fb_owns and fb_client is not None:
+            await fb_client.aclose()
 
     # Post-filter by domain BEFORE rerank/truncation. An include filter that removes
     # everything is a legitimate no_results (the backend had hits; none on the allowlist).
@@ -504,4 +570,6 @@ async def search(
         "results": results,
         "count": len(results),
         "engines_used": engines_used,
+        "backend": backend,
+        "degraded": degraded,
     }

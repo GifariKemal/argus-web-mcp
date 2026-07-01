@@ -24,10 +24,13 @@ import asyncio
 import html
 import logging
 import os
+from urllib.parse import urlsplit
 
 from .extract.article import extract_article
+from .extract.pdf import extract_pdf
 from .fetch.core import fetch as _default_fetch
 from .fetch.static import FetchError
+from .fetch.static import fetch_bytes as _default_fetch_bytes
 from .search import search as _default_search
 from .security.ssrf import SSRFError, validate_url
 
@@ -94,34 +97,64 @@ def _dedup_results(results: list[dict], limit: int) -> list[dict]:
     return out
 
 
-async def _read_one(url, *, fetch_fn, client, browser, timeout, sem) -> dict:
-    """Fetch+extract one URL into a source dict, or a {url, ok:False, error} record."""
+def _is_pdf_url(url: str) -> bool:
+    """True if the URL path looks like a PDF (case-insensitive '.pdf' suffix)."""
+    return urlsplit(url).path.lower().endswith(".pdf")
+
+
+def _gate_content(url: str, *, title, content, word_count, final_url, render_path,
+                  published=None) -> dict:
+    """Apply the empty/low-content floor and build the source (or failed) record."""
+    if not word_count:
+        return {"url": url, "ok": False, "error": "empty_content"}
+    if word_count < _min_content_words():
+        return {"url": url, "ok": False, "error": "low_content"}
+    return {
+        "url": url, "ok": True, "final_url": final_url, "title": title,
+        "content": content, "published": published, "word_count": word_count,
+        "render_path": render_path,
+    }
+
+
+async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, sem) -> dict:
+    """Fetch+extract one URL into a source dict, or a {url, ok:False, error} record.
+
+    A ``.pdf`` URL is routed through the PDF->markdown path (fetch_bytes + extract_pdf,
+    the same path read_pdf uses) instead of extract_article, so PDFs are not mangled
+    into raw '%PDF-...' text. The '%PDF-' magic-byte gate in extract_pdf rejects a
+    non-PDF served at a .pdf URL (recorded as 'not_pdf').
+    """
     async with sem:
         try:
             validate_url(url)
+            if _is_pdf_url(url):
+                final_url, data, _ctype = await fetch_bytes_fn(
+                    url, client=client, timeout=timeout
+                )
+                pdf = extract_pdf(data, None, "text")
+                content = pdf["content"]
+                return _gate_content(
+                    url, title=(pdf.get("metadata") or {}).get("title") or url,
+                    content=content, word_count=len(content.split()),
+                    final_url=final_url, render_path="pdf",
+                )
             res = await fetch_fn(url, client=client, browser=browser, timeout=timeout)
             art = extract_article(res["html"], res["final_url"])
         except (SSRFError, FetchError) as exc:
             return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
-        word_count = art["metadata"]["word_count"]
-        if not word_count:
-            return {"url": url, "ok": False, "error": "empty_content"}
-        if word_count < _min_content_words():
-            return {"url": url, "ok": False, "error": "low_content"}
-        return {
-            "url": url,
-            "ok": True,
-            "final_url": res["final_url"],
-            "title": art["title"],
-            "content": art["content"],
-            "published": art["metadata"].get("published"),
-            "word_count": art["metadata"]["word_count"],
-            "render_path": res.get("render_path"),
-        }
+        except ValueError:  # extract_pdf('not_pdf'): a non-PDF body at a .pdf URL
+            return {"url": url, "ok": False, "error": "not_pdf"}
+        return _gate_content(
+            url, title=art["title"], content=art["content"],
+            word_count=art["metadata"]["word_count"], final_url=res["final_url"],
+            render_path=res.get("render_path"),
+            published=art["metadata"].get("published"),
+        )
 
 
 async def _deep_bundle(
-    candidates, *, fetch_fn, client, browser, timeout, concurrency, target: int = 0
+    candidates, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, concurrency,
+    target: int = 0,
 ) -> tuple[list, list]:
     """Fetch+extract `candidates` in waves until `target` good sources collected.
 
@@ -130,6 +163,7 @@ async def _deep_bundle(
     sources, spare candidates are left untouched (no wasted fetches).
     """
     fetch_fn = fetch_fn or _default_fetch
+    fetch_bytes_fn = fetch_bytes_fn or _default_fetch_bytes
     sem = asyncio.Semaphore(concurrency)
     sources: list[dict] = []
     failed: list[dict] = []
@@ -141,8 +175,8 @@ async def _deep_bundle(
         records = await asyncio.gather(
             *(
                 _read_one(
-                    r["url"], fetch_fn=fetch_fn, client=client, browser=browser,
-                    timeout=timeout, sem=sem,
+                    r["url"], fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
+                    client=client, browser=browser, timeout=timeout, sem=sem,
                 )
                 for r in wave
             )
@@ -223,6 +257,7 @@ async def research(
     browser=None,
     search_fn=None,
     fetch_fn=None,
+    fetch_bytes_fn=None,
     llm_fn=None,
 ) -> dict:
     """Search the web for `query` and return a consolidated bundle.
@@ -281,8 +316,9 @@ async def research(
         llm_fn = extract_llm
 
     sources, failed = await _deep_bundle(
-        candidates, fetch_fn=fetch_fn, client=client, browser=browser,
-        timeout=timeout, concurrency=concurrency, target=max_sources,
+        candidates, fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
+        client=client, browser=browser, timeout=timeout, concurrency=concurrency,
+        target=max_sources,
     )
 
     if mode == "deep":
