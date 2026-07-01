@@ -91,6 +91,12 @@ async def fetch_static(
     resp, body = await _get_guarded(
         url, client=client, timeout=timeout, max_redirects=max_redirects
     )
+    # Anti-bot status blocks (Cloudflare/DataDome/WAF: 403/429/503) return a challenge page,
+    # not content. Raise FetchError so fetch.core escalates to the stealth-browser + Wayback
+    # ladder (that ladder is gated on `except FetchError` and previously NEVER fired on a
+    # status block - a challenge page was returned as if it were real content).
+    if resp.status_code in (403, 429, 503):
+        raise FetchError("blocked_by_antibot", f"status {resp.status_code} (anti-bot block)")
     html = body.decode(resp.encoding or "utf-8", errors="replace")
     return {
         "final_url": str(resp.url),

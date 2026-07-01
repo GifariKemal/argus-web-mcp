@@ -14,6 +14,33 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.3.0] - 2026-07-02 - Evidence-based tuning
+
+Multi-agent analysis (14-agent workflow: 7 code deep-dive + 6 external-SOTA research + synthesis) then a 3-agent adversarial review (0 blocking), producing conservative, tested, benchmark-informed tuning. All changes deployed live and reversible. Confirmed already-good (not gaps): hybrid rerank is auto-on and live; the LLM tier is deliberately off by design.
+
+### Added
+
+- **`ARGUS_SEMANTIC_RERANK` env knob** (`auto`|`on`|`off`, default `auto`) - ops kill-switch / in-prod A-B lever over the hybrid semantic rerank (A/B-validated +14.3% nDCG@5, +27.3% on conceptual). `auto` (unset/unknown too) preserves today's behavior: hybrid iff the local embedding stack loads. Documented in `deploy/argus.env.example`.
+- **`ARGUS_ENABLE_LLM` documented** in `deploy/argus.env.example` - the previously-undocumented REQUIRED gate for the LLM tier (a key alone never enabled it); clarifies the fail-safe, tools-not-brain design.
+
+### Changed
+
+- **Anti-bot status blocks now escalate** - `fetch_static` raises `FetchError` on HTTP 403/429/503 so `fetch.core` fires the existing stealth-browser + Wayback fallback ladder. Previously a WAF/Cloudflare challenge page (a non-2xx with a body) was returned as if it were content, because the recovery ladder is gated on `except FetchError` and a status block never raised - so it never fired. Makes the static tier consistent with the browser tier's pre-existing block heuristic.
+- **Article extraction drops comment threads** - `trafilatura.extract(..., include_comments=False)` on both the markdown and text paths, so Reddit/HN/Disqus comment blocks no longer leak into main content (higher boilerplate rejection, no recall loss on articles).
+- **SearXNG penalty box shortened** (`deploy/searxng/settings.yml` `suspended_times`: CAPTCHA 24h->15m, TooManyRequests 1h->5m, AccessDenied 24h->15m) - a single throttled burst no longer benches an engine for hours. Root-cause fix for the DuckDuckGo answer-concentration (was 189/200): keeps the multi-engine fan-out populated so rerank sees a diverse pool. Private loopback instance (`limiter: false`).
+
+### Fixed
+
+- **`research()` throttle bypass** - `research`/`_deep_bundle`/`_read_one` now thread the per-host `HostThrottle`, and the `research` server tool passes `throttle=s.throttle` (every other fetch tool already did). A deep-research call no longer fires parallel same-host fetches with zero courtesy delay and no circuit-breaker - a politeness/reliability defect flagged in `benchmark/RESULTS.md`.
+
+### Tested
+
+- New regression tests: parametrized 403/429/503 static block -> stealth-browser escalation; `research(throttle=X)` forwards the throttle into fetch. Full suite green.
+
+### Follow-ups (deferred, non-blocking)
+
+- 429 escalates without honoring `Retry-After` (consider special-casing vs 403/503); block-escalation widens browser-render load on the single worker (watch read/research p95). Larger deferred items (per the tuning plan): curate forum/PDF benchmark gold, Docling PDF-quality fix, optional cross-encoder rerank / curl_cffi TLS tier.
+
 ## [0.2.0] - 2026-06-25 - DEPLOYED LIVE
 
 Live at `https://argus.gifariksuryo.xyz/mcp` on VPS `103.172.172.29` (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG `:8888`, Let's Encrypt TLS, fail2ban). Surfaced and fixed by live end-to-end testing of the deployed MCP.

@@ -116,7 +116,8 @@ def _gate_content(url: str, *, title, content, word_count, final_url, render_pat
     }
 
 
-async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, sem) -> dict:
+async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, sem,
+                    throttle=None) -> dict:
     """Fetch+extract one URL into a source dict, or a {url, ok:False, error} record.
 
     A ``.pdf`` URL is routed through the PDF->markdown path (fetch_bytes + extract_pdf,
@@ -138,7 +139,10 @@ async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, 
                     content=content, word_count=len(content.split()),
                     final_url=final_url, render_path="pdf",
                 )
-            res = await fetch_fn(url, client=client, browser=browser, timeout=timeout)
+            # Pass throttle only when set: the real fetch (core.fetch) accepts it, but injected
+            # test/fake fetch_fns don't take a throttle kwarg. None (tests) => no-op, stays green.
+            _extra = {"throttle": throttle} if throttle is not None else {}
+            res = await fetch_fn(url, client=client, browser=browser, timeout=timeout, **_extra)
             art = extract_article(res["html"], res["final_url"])
         except (SSRFError, FetchError) as exc:
             return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
@@ -154,7 +158,7 @@ async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, 
 
 async def _deep_bundle(
     candidates, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, concurrency,
-    target: int = 0,
+    target: int = 0, throttle=None,
 ) -> tuple[list, list]:
     """Fetch+extract `candidates` in waves until `target` good sources collected.
 
@@ -177,6 +181,7 @@ async def _deep_bundle(
                 _read_one(
                     r["url"], fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
                     client=client, browser=browser, timeout=timeout, sem=sem,
+                    throttle=throttle,
                 )
                 for r in wave
             )
@@ -259,6 +264,7 @@ async def research(
     fetch_fn=None,
     fetch_bytes_fn=None,
     llm_fn=None,
+    throttle=None,
 ) -> dict:
     """Search the web for `query` and return a consolidated bundle.
 
@@ -318,7 +324,7 @@ async def research(
     sources, failed = await _deep_bundle(
         candidates, fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
         client=client, browser=browser, timeout=timeout, concurrency=concurrency,
-        target=max_sources,
+        target=max_sources, throttle=throttle,
     )
 
     if mode == "deep":

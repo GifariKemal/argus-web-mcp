@@ -600,7 +600,7 @@ async def research(
         res = await _research(
             query, mode=mode, max_sources=max_sources,
             max_chars_per_source=max_chars_per_source, timeout=timeout,
-            client=s.client, browser=s.browser,
+            client=s.client, browser=s.browser, throttle=s.throttle,
         )
     except ValueError as e:  # invalid mode
         return err("schema_invalid", "invalid research mode", _safe_detail(e))

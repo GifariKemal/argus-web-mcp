@@ -56,7 +56,9 @@ def _to_format(content_md: str, fmt: str, html_source: str) -> str:
         return content_md
     if fmt == "text":
         # strip the few markdown marks we emit (headings, links, emphasis).
-        text = trafilatura.extract(html_source, output_format="txt", with_metadata=False)
+        text = trafilatura.extract(
+            html_source, output_format="txt", with_metadata=False, include_comments=False
+        )
         if text:
             return _dedup_blocks(text.replace("\n", "\n\n")).replace("\n\n", "\n").strip()
         # fall back: crude de-mark of the markdown.
@@ -109,6 +111,7 @@ def extract_article(
         output_format="markdown",
         include_links=include_links,
         with_metadata=False,
+        include_comments=False,  # comment threads (Reddit/HN/Disqus) are boilerplate noise, not main content
         favor_precision=clean,
     )
 

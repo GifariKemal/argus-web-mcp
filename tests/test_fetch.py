@@ -452,3 +452,23 @@ async def test_fetch_via_archive_percent_encodes_target_url(monkeypatch):
     # The raw `&` from the target must NOT appear unencoded; it is %26-encoded.
     assert "%26b%3D2" in seen["raw"]
     assert "blocked.example/?a=1&b=2" not in seen["raw"]
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+async def test_status_block_escalates_to_stealth_browser(monkeypatch, status):
+    """An anti-bot status block (403/429/503) from the static tier must escalate to the
+    stealth browser instead of returning the challenge page as content. Regression guard
+    for the fix: fetch.core only escalated on `except FetchError`, which a non-2xx never
+    raised, so the stealth+archive ladder never fired on status blocks."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        return httpx.Response(status, text="<html><body>Access denied (cf-challenge)</body></html>")
+
+    browser = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/blocked", client=c, browser=browser)
+    assert browser.calls == 1  # escalation fired
+    assert res["render_path"] == "browser"
+    assert "rich" in res["html"]  # real browser content, not the challenge page
+    assert "Access denied" not in res["html"]
