@@ -160,6 +160,8 @@ def test_corrupt_blob_is_stale_miss(cache):
     cache.put(k, {"content": "y" * 40000}, source="read")
     (cache.blob_dir / k).write_text("{not json", encoding="utf-8")
     assert cache.get_stale(k) is None
+    # self-heal must also delete the orphaned blob file, not just the DB row
+    assert not (cache.blob_dir / k).exists()
 
 
 # 6. purge: old rows + blobs deleted, fresh entries survive

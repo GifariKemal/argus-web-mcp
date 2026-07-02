@@ -73,6 +73,10 @@ class Cache:
                 return json.loads(Path(blob_path).read_text(encoding="utf-8"))
             return json.loads(payload)
         except (OSError, ValueError):
+            # Self-heal: drop the dead row AND its orphaned blob file (a corrupt blob would
+            # otherwise leak on disk forever after the row is gone).
+            if blob_path is not None:
+                Path(blob_path).unlink(missing_ok=True)
             self.conn.execute("DELETE FROM entries WHERE key=?", (key,))
             self.conn.commit()
             return None
