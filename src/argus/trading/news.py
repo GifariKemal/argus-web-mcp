@@ -83,4 +83,10 @@ async def news_sentiment_feed(query, since=None, *, sentiment=False, client=None
                 if score is not None:
                     item["score"] = score
 
-    return {"query": query, "items": items, "count": len(items)}
+    # Propagate the search layer's degraded signal (low_relevance / backend_failover) -
+    # off-topic or failed-over news must never be served as clean trading input.
+    out = {"query": query, "items": items, "count": len(items),
+           "degraded": bool(found.get("degraded"))}
+    if found.get("degraded_reason"):
+        out["degraded_reason"] = found["degraded_reason"]
+    return out

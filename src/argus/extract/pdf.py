@@ -11,27 +11,42 @@ import pymupdf4llm
 def _parse_pages(pages: str | None, total: int) -> list[int]:
     """Parse '1-5' / '3' (1-indexed inclusive) into a 0-indexed page list.
 
-    None -> all pages. Out-of-range bounds are clamped to the document.
+    None -> all pages. Reversed bounds are swapped; partially out-of-range bounds are
+    clamped to the document. A malformed spec ('abc', '5-') or a range entirely
+    outside the document raises ``ValueError('bad_pages')`` - distinct from the
+    ``'not_pdf'`` ValueError so callers can return an accurate error code instead of
+    mislabeling a valid PDF.
     """
     if pages is None:
         return list(range(total))
     spec = pages.strip()
-    if "-" in spec:
-        lo_s, hi_s = spec.split("-", 1)
-        lo, hi = int(lo_s), int(hi_s)
-    else:
-        lo = hi = int(spec)
+    try:
+        if "-" in spec:
+            lo_s, hi_s = spec.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+        else:
+            lo = hi = int(spec)
+    except ValueError:
+        raise ValueError("bad_pages") from None
+    if lo > hi:
+        lo, hi = hi, lo
     lo = max(1, lo)
     hi = min(total, hi)
-    return [i - 1 for i in range(lo, hi + 1)]
+    indices = [i - 1 for i in range(lo, hi + 1)]
+    if not indices:
+        raise ValueError("bad_pages")
+    return indices
 
 
 def _open(data: bytes) -> fitz.Document:
     if not data:
         raise ValueError("not_pdf")
     # pymupdf will happily render HTML/XPS/images as a doc; require the PDF magic so a
-    # non-PDF served at a .pdf URL is rejected instead of silently "extracted".
-    if data.lstrip()[:5] != b"%PDF-":
+    # non-PDF served at a .pdf URL is rejected instead of silently "extracted". Per the
+    # PDF spec (ISO 32000 implementation note), the header may be preceded by up to
+    # 1024 bytes of junk - real-world PDFs behind naive proxies/CGI do this and pymupdf
+    # parses them fine, so search the first 1KiB instead of only byte 0.
+    if b"%PDF-" not in data[:1024]:
         raise ValueError("not_pdf")
     try:
         doc = fitz.open(stream=data, filetype="pdf")
@@ -88,19 +103,36 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
         doc.close()
 
 
+def _slice_pdf(data: bytes, pages: str | None) -> tuple[bytes, int, list[int]]:
+    """Validate ``data`` and reduce it to the requested pages via pymupdf.
+
+    Returns ``(pdf_bytes, total_pages, page_indices)`` where ``pdf_bytes`` contains
+    ONLY the requested pages (the whole document when ``pages`` is None/full-range).
+    Pure pymupdf - lets the heavy Docling tier honor the ``pages`` parameter instead
+    of OCR-ing the entire document while claiming it sliced.
+    """
+    doc = _open(data)
+    try:
+        total = doc.page_count
+        page_indices = _parse_pages(pages, total)
+        if len(page_indices) != total:
+            doc.select(page_indices)
+            data = doc.tobytes()
+    finally:
+        doc.close()
+    return data, total, page_indices
+
+
 def extract_pdf_quality(data: bytes, pages: str | None = None) -> dict[str, Any]:
     """High-quality / scanned-document path via Docling (lazy import, optional dep).
 
     Docling runs OCR + layout models; far heavier than the default pymupdf4llm path.
-    Install with the ``pdf-quality`` extra. Page totals are still sourced from pymupdf.
+    Install with the ``pdf-quality`` extra. Page totals are still sourced from pymupdf;
+    ``pages`` is honored by slicing the PDF before it reaches Docling.
     """
     from docling.document_converter import DocumentConverter  # lazy, optional
 
-    # Validate + get the page total cheaply via pymupdf.
-    doc = _open(data)
-    total = doc.page_count
-    page_indices = _parse_pages(pages, total)
-    doc.close()
+    data, total, page_indices = _slice_pdf(data, pages)
 
     import io
 

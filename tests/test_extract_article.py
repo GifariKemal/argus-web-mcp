@@ -250,3 +250,23 @@ def test_truly_empty_blank_across_formats(fmt):
     res = extract_article("<html><body></body></html>", "http://x/t", fmt=fmt)
     assert res["content"] == ""
     assert res["format"] == fmt
+
+
+# --- _dedup_blocks: consecutive-only (docstring contract) ----------------------
+
+
+def test_dedup_keeps_non_adjacent_repeats():
+    """A refrain repeated later in the document is real content, not extractor noise."""
+    from argus.extract.article import _dedup_blocks
+
+    text = "Chorus line repeated.\n\nVerse one text here.\n\nChorus line repeated.\n\nVerse two."
+    out = _dedup_blocks(text)
+    assert out.count("Chorus line repeated.") == 2
+
+
+def test_dedup_collapses_adjacent_repeats():
+    from argus.extract.article import _dedup_blocks
+
+    assert _dedup_blocks("Same block.\n\nSame block.\n\nNext.").count("Same block.") == 1
+    # a blank block between the pair must not defeat the collapse
+    assert _dedup_blocks("Same block.\n\n\n\nSame block.").count("Same block.") == 1

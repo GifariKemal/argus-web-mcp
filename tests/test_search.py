@@ -442,11 +442,30 @@ def test_rerank_safety_floor_returns_empty_only_for_empty_input():
 
 def test_rerank_dedup_by_normalized_url():
     a = _mapped("ESP-Claw A", "https://example.com/esp-claw", "esp claw")
-    # same URL modulo scheme + trailing slash + query string
-    dup = _mapped("ESP-Claw A mirror", "http://example.com/esp-claw/?utm=1", "esp claw")
+    # same URL modulo scheme + trailing slash + TRACKING query params
+    dup = _mapped("ESP-Claw A mirror", "http://example.com/esp-claw/?utm_source=1", "esp claw")
     out = rerank("esp-claw", [a, dup])
     assert len(out) == 1
     assert out[0]["url"] == "https://example.com/esp-claw"  # first kept
+
+
+def test_rerank_keeps_distinct_query_param_pages():
+    """?v= / ?id= key DISTINCT resources - they must not collapse as duplicates."""
+    a = _mapped("ESP-Claw demo video", "https://youtube.com/watch?v=AAA", "esp claw demo")
+    b = _mapped("ESP-Claw teardown video", "https://youtube.com/watch?v=BBB", "esp claw teardown")
+    out = rerank("esp claw", [a, b])
+    assert len(out) == 2
+
+
+def test_norm_url_tracking_params_and_order():
+    from argus.search import _norm_url
+
+    # tracking params stripped, meaningful ones kept sorted (order-insensitive dedup)
+    assert _norm_url("https://a.com/p?utm_campaign=x&id=7") == _norm_url(
+        "http://a.com/p/?id=7&fbclid=abc"
+    )
+    # param VALUES stay case-sensitive
+    assert _norm_url("https://a.com/w?v=AAA") != _norm_url("https://a.com/w?v=aaa")
 
 
 def test_rerank_dedup_by_normalized_title():
@@ -1491,3 +1510,75 @@ async def test_majority_off_topic_flagged_despite_incidental_match():
     out = await search("nous hermes agent self-improving learning loop skills", base_url=BASE)
     assert out["degraded"] is True  # 1/3 overlap < half -> flagged
     assert out["degraded_reason"] == "low_relevance"
+
+
+def test_rerank_safety_floor_backfills_around_relevant_tail():
+    """A relevant hit at a tail position must survive the safety floor - the old code
+    REPLACED the kept set with the backend's first-N junk."""
+    junk = [
+        _mapped(f"Unrelated filler page {i}", f"https://junk{i}.example.com/{i}", f"filler {i}")
+        for i in range(8)
+    ]
+    relevant = [
+        _mapped("ESP-Claw firmware guide", "https://good.example.com/1", "esp claw docs"),
+        _mapped("ESP-Claw hardware wiki", "https://good.example.com/2", "esp claw wiki"),
+    ]
+    out = rerank("esp claw", junk + relevant, semantic_rerank=False)
+    urls = [r["url"] for r in out]
+    assert "https://good.example.com/1" in urls
+    assert "https://good.example.com/2" in urls
+
+
+def test_relevance_guard_ignores_stopword_overlap():
+    """Garbage sharing only stopwords ('to', 'the') with a natural-language query must
+    still be flagged degraded."""
+    import asyncio
+
+    import httpx
+
+    garbage = [
+        {"title": "Get the best deals on laptops", "url": "https://f1.com/a",
+         "content": "Use a USB stick to install a fresh copy of Windows.", "engine": "bing"},
+        {"title": "How to cook the perfect steak", "url": "https://f2.com/b",
+         "content": "A guide to the best searing techniques.", "engine": "bing"},
+        {"title": "The 10 best beaches to visit", "url": "https://f3.com/c",
+         "content": "Places to see in the summer.", "engine": "bing"},
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json={"results": garbage, "unresponsive_engines": []})
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await search("how to deploy the hermes agent", client=client)
+
+    out = asyncio.get_event_loop().run_until_complete(run()) if False else asyncio.run(run())
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "low_relevance"
+
+
+def test_relevance_guard_on_topic_natural_language_not_flagged():
+    import asyncio
+
+    import httpx
+
+    good = [
+        {"title": "Deploy the Hermes agent on Ubuntu", "url": "https://d1.com/a",
+         "content": "Steps to deploy the hermes agent.", "engine": "ddg"},
+        {"title": "Hermes agent deployment guide", "url": "https://d2.com/b",
+         "content": "Full deploy walkthrough for hermes.", "engine": "ddg"},
+        {"title": "Hermes agent config", "url": "https://d3.com/c",
+         "content": "Configuration and deploy tips.", "engine": "ddg"},
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json={"results": good, "unresponsive_engines": []})
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await search("how to deploy the hermes agent", client=client)
+
+    out = asyncio.run(run())
+    assert out["degraded"] is False

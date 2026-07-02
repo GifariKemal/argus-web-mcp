@@ -152,3 +152,33 @@ async def test_half_open_failure_reopens(throttle: HostThrottle, clock: FakeCloc
     throttle.record_failure("down.com")  # trial failed -> breaker open again
     with pytest.raises(CircuitOpen):
         await throttle.acquire("down.com")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_host_acquires_are_spaced(throttle: HostThrottle, sleep: FakeSleep):
+    """N concurrent acquirers must self-queue at min_interval spacing, not burst together.
+
+    Before the slot-reservation fix, later acquirers read the same stale last_request
+    (written only AFTER the sleep), computed wait<=0, and fired together: only ONE sleep
+    recorded and the final reserved slot advanced a single interval. With reserved slots,
+    every follower sleeps and the slots are exactly min_interval apart.
+    """
+    import asyncio
+
+    await asyncio.gather(
+        throttle.acquire("example.com"),
+        throttle.acquire("example.com"),
+        throttle.acquire("example.com"),
+    )
+    # follower coroutines each waited one interval (FakeSleep advances the shared clock,
+    # so each recorded duration is 1.0); the final slot is start + 2 * min_interval.
+    assert sleep.calls == [1.0, 1.0]
+    assert throttle._hosts["example.com"].last_request == 1002.0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_different_hosts_do_not_wait(throttle: HostThrottle, sleep: FakeSleep):
+    import asyncio
+
+    await asyncio.gather(throttle.acquire("a.com"), throttle.acquire("b.com"))
+    assert sleep.calls == []

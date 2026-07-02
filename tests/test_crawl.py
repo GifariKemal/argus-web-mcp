@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from argus.fetch.crawl import CrawlError, _build_config, _shape, deep_crawl
+from argus.fetch.crawl import _build_config, _shape, deep_crawl
 from argus.security.ssrf import SSRFError
 
 
@@ -193,10 +193,34 @@ def test_shape_empty():
     assert out == {"pages": [], "link_graph": {}, "count": 0}
 
 
-def test_crawl_error_attrs():
-    err = CrawlError("crawl_failed", "nope")
-    assert err.code == "crawl_failed"
-    assert "nope" in str(err)
+def test_build_config_page_timeout_wired():
+    cfg = _build_config(
+        "https://example.com/", depth=1, max_pages=5, include=None, exclude=None,
+        same_domain=True, respect_robots=True, timeout=45,
+    )
+    assert cfg.page_timeout == 45000
+
+
+async def test_deep_crawl_holds_pool_semaphore(monkeypatch):
+    """A pool-backed crawl must hold one BrowserPool permit while it runs."""
+    import asyncio
+    import socket as _socket
+
+    monkeypatch.setattr(_socket, "getaddrinfo", _gai("93.184.216.34"))
+
+    sem = asyncio.Semaphore(1)
+    seen = {}
+
+    class _Crawler:
+        async def arun(self, url, config=None):
+            seen["locked_during_run"] = sem.locked()
+            return []
+
+    browser = SimpleNamespace(_crawler=_Crawler(), _sem=sem)
+    out = await deep_crawl("https://example.com/", browser=browser)
+    assert seen["locked_during_run"] is True  # permit held during the crawl
+    assert sem._value == 1  # released afterwards
+    assert out["count"] == 0
 
 
 # --- live browser ------------------------------------------------------------
@@ -207,3 +231,58 @@ async def test_deep_crawl_live():
     out = await deep_crawl("https://crawl4ai.com/", depth=1, max_pages=3)
     assert out["count"] >= 1
     assert any(p["content"] for p in out["pages"])
+
+
+# --- server-tool wall clock + clamps (offline) --------------------------------
+
+
+async def test_server_crawl_times_out_with_err_dict(monkeypatch):
+    """A never-returning deep_crawl must yield a structured err dict within the tool
+    timeout - before the fix this hung forever (TIMEOUTS['crawl'] was dead config)."""
+    import asyncio
+
+    import argus.server as server
+
+    async def wedged(*a, **k):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(server, "deep_crawl", wedged)
+    monkeypatch.setattr(server, "_S", SimpleNamespace(browser=object(), client=None,
+                                                      cache=None, throttle=None,
+                                                      watch_store=None))
+    out = await server.crawl("https://example.com/", timeout=0.05)
+    assert out["code"] == "fetch_failed"
+    assert "timed out" in out["error"]
+
+
+async def test_server_crawl_catches_unexpected_exceptions(monkeypatch):
+    """Raw crawler exceptions must come back as the structured error contract."""
+    import argus.server as server
+
+    async def boom(*a, **k):
+        raise RuntimeError("browser exploded")
+
+    monkeypatch.setattr(server, "deep_crawl", boom)
+    monkeypatch.setattr(server, "_S", SimpleNamespace(browser=object(), client=None,
+                                                      cache=None, throttle=None,
+                                                      watch_store=None))
+    out = await server.crawl("https://example.com/")
+    assert out["code"] == "fetch_failed"
+    assert out["detail"] == "RuntimeError"  # sanitized, never the message
+
+
+async def test_server_crawl_clamps_depth_and_max_pages(monkeypatch):
+    import argus.server as server
+
+    got = {}
+
+    async def capture(seed, *, depth, max_pages, **k):
+        got["depth"], got["max_pages"] = depth, max_pages
+        return {"pages": [], "link_graph": {}, "count": 0}
+
+    monkeypatch.setattr(server, "deep_crawl", capture)
+    monkeypatch.setattr(server, "_S", SimpleNamespace(browser=object(), client=None,
+                                                      cache=None, throttle=None,
+                                                      watch_store=None))
+    await server.crawl("https://example.com/", depth=99, max_pages=10_000)
+    assert got == {"depth": 5, "max_pages": 200}

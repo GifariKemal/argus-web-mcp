@@ -418,3 +418,31 @@ async def test_live_anonymous_repositories_search():
         pytest.skip(f"GitHub anon rate-limited: {exc}")
     assert out["count"] >= 1
     assert all("full_name" in r and "stars" in r for r in out["results"])
+
+
+@respx.mock
+async def test_incomplete_results_flags_degraded():
+    respx.get(f"{GH_API}/search/repositories").mock(
+        return_value=httpx.Response(
+            200,
+            json={"total_count": 1, "incomplete_results": True, "items": [_repo_item(1)]},
+        )
+    )
+    async with _client() as client:
+        out = await github_search("fastmcp", mode="repositories", client=client)
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "incomplete_results"
+
+
+@respx.mock
+async def test_complete_results_not_degraded():
+    respx.get(f"{GH_API}/search/repositories").mock(
+        return_value=httpx.Response(
+            200,
+            json={"total_count": 1, "incomplete_results": False, "items": [_repo_item(1)]},
+        )
+    )
+    async with _client() as client:
+        out = await github_search("fastmcp", mode="repositories", client=client)
+    assert out["degraded"] is False
+    assert out["degraded_reason"] is None

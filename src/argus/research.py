@@ -148,6 +148,12 @@ async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, 
             return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
         except ValueError:  # extract_pdf('not_pdf'): a non-PDF body at a .pdf URL
             return {"url": url, "ok": False, "error": "not_pdf"}
+        except Exception as exc:  # noqa: BLE001 - per-source isolation (module contract):
+            # one source's unexpected extractor/transport error must never kill the bundle.
+            logger.warning(
+                "research source %s failed unexpectedly: %s: %s", url, type(exc).__name__, exc
+            )
+            return {"url": url, "ok": False, "error": "extract_failed"}
         return _gate_content(
             url, title=art["title"], content=art["content"],
             word_count=art["metadata"]["word_count"], final_url=res["final_url"],

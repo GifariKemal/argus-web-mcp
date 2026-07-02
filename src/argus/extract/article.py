@@ -24,17 +24,19 @@ def _dedup_blocks(text: str) -> str:
     """Drop consecutive duplicate paragraphs.
 
     trafilatura 2.0 with ``favor_precision=True`` emits each block twice; collapse
-    the verbatim repeat while preserving order and intentional repeats elsewhere.
+    the verbatim repeat while preserving order and intentional repeats elsewhere
+    (a refrain/legal clause repeated later in the document is real content - only
+    an ADJACENT repeat is extractor noise). Tracks the last non-empty block so a
+    blank block between the pair doesn't defeat the collapse.
     """
-    blocks = text.split("\n\n")
     out: list[str] = []
-    seen: set[str] = set()
-    for b in blocks:
+    prev = ""
+    for b in text.split("\n\n"):
         key = b.strip()
-        if key and key in seen:
+        if key and key == prev:
             continue
         if key:
-            seen.add(key)
+            prev = key
         out.append(b)
     return "\n\n".join(out)
 
@@ -72,17 +74,18 @@ def _to_format(content_md: str, fmt: str, html_source: str) -> str:
 
 
 def _metadata(html: str, url: str) -> dict[str, Any]:
+    # extract_metadata parses ONLY the head/metadata (~7x cheaper than bare_extraction,
+    # which extracted the full body a second time just to read these five fields).
     try:
-        doc = trafilatura.bare_extraction(html, url=url, with_metadata=True)
+        m = trafilatura.extract_metadata(html, default_url=url)
     except Exception:
-        doc = None
-    d = doc.as_dict() if doc is not None else {}
+        m = None
     return {
-        "title": d.get("title"),
-        "author": d.get("author"),
-        "published": d.get("date"),
-        "lang": d.get("language"),
-        "site": d.get("sitename") or d.get("hostname"),
+        "title": getattr(m, "title", None),
+        "author": getattr(m, "author", None),
+        "published": getattr(m, "date", None),
+        "lang": getattr(m, "language", None),
+        "site": getattr(m, "sitename", None) or getattr(m, "hostname", None),
     }
 
 
@@ -111,7 +114,7 @@ def extract_article(
         output_format="markdown",
         include_links=include_links,
         with_metadata=False,
-        include_comments=False,  # comment threads (Reddit/HN/Disqus) are boilerplate noise, not main content
+        include_comments=False,  # comment threads (Reddit/HN/Disqus) are noise, not content
         favor_precision=clean,
     )
 

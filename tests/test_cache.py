@@ -135,3 +135,83 @@ def test_ttl_for_known():
 def test_ttl_for_unknown_falls_back_to_general():
     assert ttl_for("unknown") == 3600
     assert ttl_for("unknown") == DEFAULT_TTLS["general"]
+
+
+# 4. path/query case-sensitivity (RFC 3986: only scheme+host are case-insensitive)
+def test_key_path_case_sensitive(cache):
+    assert cache.key("https://a.com/X", {}) != cache.key("https://a.com/x", {})
+    assert cache.key("https://a.com/p?Q=A", {}) != cache.key("https://a.com/p?q=a", {})
+
+
+# 5. missing/corrupt blob self-heals as a cache miss (never raises into a tool)
+def test_missing_blob_is_cache_miss_and_row_deleted(cache):
+    k = cache.key("https://big.com", {})
+    cache.put(k, {"content": "y" * 40000}, source="read")
+    blob = cache.blob_dir / k
+    assert blob.exists()
+    blob.unlink()
+    assert cache.get(k, ttl_seconds=3600) is None
+    row = cache.conn.execute("SELECT 1 FROM entries WHERE key=?", (k,)).fetchone()
+    assert row is None  # self-healed: dead row removed
+
+
+def test_corrupt_blob_is_stale_miss(cache):
+    k = cache.key("https://big2.com", {})
+    cache.put(k, {"content": "y" * 40000}, source="read")
+    (cache.blob_dir / k).write_text("{not json", encoding="utf-8")
+    assert cache.get_stale(k) is None
+
+
+# 6. purge: old rows + blobs deleted, fresh entries survive
+def test_purge_removes_old_rows_and_blobs(cache, monkeypatch):
+    import argus.cache as cache_mod
+
+    real = cache_mod.time.time()
+    monkeypatch.setattr(cache_mod.time, "time", lambda: real - 8 * 86400)
+    old_inline = cache.key("https://old-inline.com", {})
+    cache.put(old_inline, {"content": "x"}, source="read")
+    old_blob = cache.key("https://old-blob.com", {})
+    cache.put(old_blob, {"content": "y" * 40000}, source="read")
+    blob_file = cache.blob_dir / old_blob
+    # blob file mtime must also predate the cutoff for the orphan sweep
+    import os
+
+    os.utime(blob_file, (real - 8 * 86400, real - 8 * 86400))
+    monkeypatch.setattr(cache_mod.time, "time", lambda: real)
+    fresh = cache.key("https://fresh.com", {})
+    cache.put(fresh, {"content": "z"}, source="read")
+
+    deleted = cache.purge()
+    assert deleted == 2
+    assert cache.get_stale(old_inline) is None
+    assert cache.get_stale(old_blob) is None
+    assert not blob_file.exists()
+    assert cache.get_stale(fresh) == {"content": "z"}
+
+
+def test_purge_removes_orphaned_blob_files(cache, monkeypatch):
+    import os
+
+    import argus.cache as cache_mod
+
+    real = cache_mod.time.time()
+    k = cache.key("https://shrink.com", {})
+    cache.put(k, {"content": "y" * 40000}, source="read")  # blob tier
+    blob_file = cache.blob_dir / k
+    cache.put(k, {"content": "small"}, source="read")  # re-put inline -> blob orphaned
+    assert blob_file.exists()
+    os.utime(blob_file, (real - 8 * 86400, real - 8 * 86400))
+    cache.purge()
+    assert not blob_file.exists()
+    assert cache.get_stale(k) == {"content": "small"}  # live inline row untouched
+
+
+def test_purge_leaves_fresh_blob_files(cache):
+    """The orphan sweep must skip blob files younger than the cutoff."""
+    k = cache.key("https://fresh-blob.com", {})
+    cache.put(k, {"content": "y" * 40000}, source="read")
+    blob = cache.blob_dir / k
+    assert blob.exists()
+    assert cache.purge() == 0
+    assert blob.exists()
+    assert cache.get_stale(k) == {"content": "y" * 40000}

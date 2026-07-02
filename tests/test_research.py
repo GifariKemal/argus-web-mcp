@@ -1079,3 +1079,31 @@ async def test_propagates_search_degraded_into_bundle():
     )
     assert out["degraded"] is True
     assert out["degraded_reason"] == "low_relevance"
+
+
+# --------------------------------------------------------------------------- #
+# Per-source isolation: an UNEXPECTED exception from one source must never     #
+# kill the whole deep bundle (module contract: partial-failure tolerant).      #
+# --------------------------------------------------------------------------- #
+async def test_deep_unexpected_exception_is_isolated_per_source():
+    results = [_search_result(i) for i in range(1, 5)]
+    html = {
+        "https://example.com/1": ARTICLE_HTML,
+        "https://example.com/2": RuntimeError("boom - not a FetchError"),
+        "https://example.com/3": ARTICLE_HTML,
+        "https://example.com/4": ARTICLE_HTML,
+    }
+
+    out = await research(
+        "q",
+        mode="deep",
+        max_sources=3,
+        search_fn=_fake_search(results),
+        fetch_fn=_fake_fetch(html),
+    )
+
+    # before the fix: RuntimeError propagated and the WHOLE bundle raised
+    assert out["count"] == 3
+    assert {f["url"]: f["error"] for f in out["failed"]} == {
+        "https://example.com/2": "extract_failed"
+    }

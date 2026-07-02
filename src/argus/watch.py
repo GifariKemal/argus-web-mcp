@@ -155,14 +155,23 @@ class WatchStore:
         self._persist()
         return True
 
-    def update_state(self, watch_id: str, last_hash: str, last_check: float) -> None:
-        """Record the latest hash/check time for a watch. Persists."""
+    def update_state(self, watch_id: str, last_hash: str | None, last_check: float) -> None:
+        """Record the latest hash/check time for a watch. Persists. ``last_hash`` may be
+        None (an errored check advances last_check while keeping no baseline). Atomic:
+        a persist failure rolls the in-memory fields back so memory and disk never
+        diverge (a diverged hash would re-deliver an already-sent change after restart).
+        """
         watch = self._find(watch_id)
         if watch is None:
             return
+        old_hash, old_check = watch.last_hash, watch.last_check
         watch.last_hash = last_hash
         watch.last_check = last_check
-        self._persist()
+        try:
+            self._persist()
+        except OSError:
+            watch.last_hash, watch.last_check = old_hash, old_check
+            raise
 
 
 async def check_watch(w: Watch, *, fetch_fn: FetchFn, now: float) -> dict:
@@ -219,8 +228,11 @@ async def poll_due(
     A watch is due when it has never been checked (``last_check is None``) or
     ``now - last_check >= interval_s``. For each due watch we ``check_watch``; on a
     detected change we ``deliver`` the webhook; the watch state is updated in all
-    cases (baseline and post-change) so a broken webhook does not cause perpetual
-    re-alerting. Resilient: one watch's failure never aborts the others.
+    cases - baseline, post-change, AND fetch errors (last_check always advances so
+    ``interval_s`` is honored even while a source is failing; an errored check keeps
+    the previous ``last_hash`` so no change event is lost). A broken webhook does
+    not cause perpetual re-alerting. Resilient: one watch's failure (including a
+    state-persist OSError) never aborts the others.
     """
     results: list[dict] = []
     for w in store.list():
@@ -241,9 +253,17 @@ async def poll_due(
             }
             delivered = await deliver(w.webhook, payload, client=client)
 
-        if "new_hash" in res:
-            store.update_state(w.id, res["new_hash"], now)
+        try:
+            store.update_state(w.id, res.get("new_hash", w.last_hash), now)
+        except OSError as exc:
+            # On persist failure last_hash/last_check do not advance, so a changed watch
+            # re-delivers next tick until disk recovers - bounded re-alerting beats a
+            # silent outage, and the remaining watches still get their turn.
+            logger.warning("watch %s state persist failed: %s", w.id, exc)
 
-        results.append({"id": w.id, "changed": bool(res.get("changed")), "delivered": delivered})
+        entry = {"id": w.id, "changed": bool(res.get("changed")), "delivered": delivered}
+        if "error" in res:
+            entry["error"] = res["error"]
+        results.append(entry)
 
     return results

@@ -39,8 +39,10 @@ _STALE_MAX_AGE = 6 * 3600  # serve last-good up to 6h on fetch failure
 # ponytail: in-module last-good store instead of touching the shared cache layer.
 _last_good: dict | None = None
 
-# FairEconomy impact strings -> normalized Aurix labels. Anything else (e.g. a
-# bank holiday flagged on the feed) folds into "Holiday".
+# FairEconomy impact strings -> normalized Aurix labels. Unknown NON-EMPTY labels pass
+# through verbatim so feed drift stays visible (folding them into "Holiday" would hide a
+# potentially high-impact event class); empty/missing -> "Holiday" (feed marks true
+# holiday rows with an empty impact).
 _IMPACT_MAP = {
     "high": "High",
     "medium": "Medium",
@@ -60,7 +62,8 @@ class ForexFactoryError(Exception):
 
 
 def _normalize_impact(raw: object) -> str:
-    return _IMPACT_MAP.get(str(raw or "").strip().lower(), "Holiday")
+    s = str(raw or "").strip()
+    return _IMPACT_MAP.get(s.lower(), s or "Holiday")
 
 
 def _clean(value: object) -> str | None:
@@ -85,6 +88,8 @@ def parse_ff_calendar(feed: object) -> list[dict]:
 
     events: list[dict] = []
     for raw in feed:
+        if not isinstance(raw, dict):  # junk element must not kill the whole calendar
+            continue
         events.append(
             {
                 "time": _clean(raw.get("date")),
@@ -108,10 +113,24 @@ def _in_range(time: str | None, lo: str, hi: str) -> bool:
 
 
 def _filter_range(events: list[dict], date_range) -> list[dict]:
-    """Filter events to a (start, end) inclusive YYYY-MM-DD window (auto-swapped)."""
+    """Filter events to a (start, end) inclusive YYYY-MM-DD window (auto-swapped).
+
+    Bounds are VALIDATED and normalized to ISO calendar dates - a malformed range
+    ('2026-6-2', an int, a single element) raises ``ForexFactoryError('ff_bad_date_range')``
+    instead of silently lexicographic-comparing garbage and returning the wrong event set.
+    """
     if not date_range:
         return events
-    lo, hi = date_range[0][:10], date_range[1][:10]
+    if len(date_range) != 2:
+        raise ForexFactoryError(
+            "ff_bad_date_range", f"date_range must be [start, end], got {date_range!r}"
+        )
+    try:
+        lo, hi = (datetime.fromisoformat(str(b)[:10]).date().isoformat() for b in date_range)
+    except (ValueError, TypeError) as exc:
+        raise ForexFactoryError(
+            "ff_bad_date_range", f"invalid ISO date bound in {date_range!r}"
+        ) from exc
     if lo > hi:
         lo, hi = hi, lo
     return [e for e in events if _in_range(e["time"], lo, hi)]

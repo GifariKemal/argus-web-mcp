@@ -484,3 +484,86 @@ def test_store_corrupt_json_starts_empty(tmp_path):
 def test_module_exports():
     for name in ("Watch", "WatchStore", "content_signature", "check_watch", "deliver", "poll_due"):
         assert hasattr(W, name)
+
+
+# --- error ticks honor interval_s + error surfaced + persist-failure isolation ---
+
+
+async def test_failing_watch_honors_interval_between_retries(tmp_path, public_dns):
+    """An errored check must advance last_check so the watch is NOT re-fetched on
+    every 60s tick regardless of its interval."""
+    s = _store(tmp_path)
+    s.add("https://down.test/x", None, 3600, "https://hook.test/in")
+    fetch = FakeFetch(error=RuntimeError("boom"))
+    client = FakeClient(status_code=200)
+
+    r1 = await poll_due(s, fetch_fn=fetch, client=client, now=60.0)
+    assert r1[0]["error"]  # surfaced, not dropped
+    # subsequent ticks within interval_s: NOT due, no fetch
+    await poll_due(s, fetch_fn=fetch, client=client, now=120.0)
+    await poll_due(s, fetch_fn=fetch, client=client, now=180.0)
+    assert len(fetch.calls) == 1
+    assert s.list()[0].last_hash is None  # no baseline invented on error
+    # past the interval it becomes due again
+    await poll_due(s, fetch_fn=fetch, client=client, now=60.0 + 3600)
+    assert len(fetch.calls) == 2
+
+
+async def test_error_tick_keeps_baseline_then_change_detected(tmp_path, public_dns):
+    """last_hash must survive an errored tick so the next successful check still
+    detects the change against the ORIGINAL baseline."""
+    s = _store(tmp_path)
+    w = s.add("https://flaky.test/x", None, 300, "https://hook.test/in")
+    s.update_state(w.id, content_signature(CHANGELOG_HTML), 0.0)
+
+    fetch = FakeFetch(error=RuntimeError("boom"))
+    client = FakeClient(status_code=200)
+    await poll_due(s, fetch_fn=fetch, client=client, now=1000.0)  # errored tick
+    assert s.list()[0].last_hash == content_signature(CHANGELOG_HTML)  # baseline kept
+
+    fetch2 = FakeFetch(CHANGELOG_HTML2)
+    results = await poll_due(s, fetch_fn=fetch2, client=client, now=2000.0)
+    assert results[0]["changed"] is True
+    assert results[0]["delivered"] is True
+
+
+async def test_persist_failure_does_not_abort_other_watches(tmp_path, public_dns, caplog):
+    import logging
+
+    s = _store(tmp_path)
+    s.add("https://a.test/x", None, 300, "https://hook.test/in")
+    s.add("https://b.test/x", None, 300, "https://hook.test/in")
+
+    orig = s._persist
+    def broken_persist():
+        raise OSError("disk full")
+    s._persist = broken_persist
+
+    fetch = FakeFetch(CHANGELOG_HTML)
+    client = FakeClient(status_code=200)
+    with caplog.at_level(logging.WARNING, logger="argus.watch"):
+        results = await poll_due(s, fetch_fn=fetch, client=client, now=1000.0)
+    s._persist = orig
+
+    assert len(results) == 2  # both watches processed despite persist OSError
+    assert "state persist failed" in caplog.text
+
+
+def test_update_state_rolls_back_in_memory_on_persist_failure(tmp_path):
+    """A persist OSError must roll the in-memory hash/check back so memory and disk
+    never diverge (a diverged hash re-delivers an already-sent change after restart)."""
+    s = _store(tmp_path)
+    w = s.add("https://x.test/y", None, 300, "https://hook.test/in")
+    s.update_state(w.id, "hash-A", 100.0)  # persists cleanly
+
+    orig = s._persist
+    def broken():
+        raise OSError("disk full")
+    s._persist = broken
+    with pytest.raises(OSError):
+        s.update_state(w.id, "hash-B", 200.0)
+    s._persist = orig
+
+    reloaded = s._find(w.id)
+    assert reloaded.last_hash == "hash-A"  # rolled back, not "hash-B"
+    assert reloaded.last_check == 100.0

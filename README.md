@@ -6,7 +6,7 @@
 
 <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/MCP-Streamable_HTTP-2dd4bf?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP"/></a>
 <img src="https://img.shields.io/badge/tools-20-22c55e?style=for-the-badge" alt="20 tools"/>
-<img src="https://img.shields.io/badge/tests-600_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
+<img src="https://img.shields.io/badge/tests-722_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
 <img src="https://img.shields.io/badge/SSRF_coverage-100%25-16a34a?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="SSRF 100%"/>
 <img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
 <br/>
@@ -189,7 +189,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 
 **DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA VPS (`103.172.172.29`, Ubuntu 24.04): uvicorn `127.0.0.1:8090 --workers 1` behind nginx + Let's Encrypt TLS + fail2ban; SearXNG docker on `127.0.0.1:8888`; `/health` + `/metrics` live. A systemd timer polls `main` every 5 minutes -> fast-forward only -> restart -> `/health` gate -> auto-rollback (and skips restart for docs/benchmark-only commits).
 
-20 tools / **600 offline tests** (+ browser & slow extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). Only open owner input: set `ARGUS_S2_API_KEY` to enable `scholar_search`'s Semantic Scholar backend (CrossRef is the fallback). See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
+20 tools / **722 offline tests** (+ browser & slow extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). Only open owner input: set `ARGUS_S2_API_KEY` to enable `scholar_search`'s Semantic Scholar backend (CrossRef is the fallback). See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
 
 <div align="center">
 <sub>Built for <b>PT Surya Inovasi Prioritas (SURIOTA)</b> / self-hosted / unlimited / owned</sub>

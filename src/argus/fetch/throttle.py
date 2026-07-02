@@ -32,7 +32,7 @@ class CircuitOpen(Exception):
 
 @dataclass
 class _HostState:
-    last_request: float | None = None  # monotonic time of the most recent acquire
+    last_request: float | None = None  # monotonic time of the most recently reserved slot
     failures: int = 0  # consecutive failures
     opened_at: float | None = None  # monotonic time the breaker opened, else None
 
@@ -67,13 +67,14 @@ class HostThrottle:
             # Cooldown elapsed -> half-open: clear the open flag, allow one trial through.
             st.opened_at = None
 
-        if st.last_request is not None:
-            wait = self._min_interval - (now - st.last_request)
-            if wait > 0:
-                await self._sleep(wait)
-                now = self._clock()
-
-        st.last_request = now
+        # Reserve the slot BEFORE awaiting: N concurrent same-host acquirers each take the
+        # next free slot (read+write with no await between = race-free on the single loop),
+        # so they self-queue at exactly min_interval spacing instead of all reading the same
+        # stale last_request, sleeping in parallel, and bursting simultaneously.
+        slot = now if st.last_request is None else max(now, st.last_request + self._min_interval)
+        st.last_request = slot
+        if slot > now:
+            await self._sleep(slot - now)
 
     def record_success(self, host: str) -> None:
         st = self._state(host)

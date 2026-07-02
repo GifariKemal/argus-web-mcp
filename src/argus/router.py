@@ -126,10 +126,20 @@ _PATTERNS: dict[str, list[tuple[re.Pattern[str], int]]] = {
     # 4-digit year >= 2025 -> recency.
     "news": [
         (re.compile(r"\b(20(2[5-9]|[3-9]\d))\b"), 3),
+        # 'may' is excluded from the month alternation: as a modal verb ("what may
+        # cause X") it misrouted ordinary questions to news. It only counts as a
+        # month when date-anchored (a digit/year/temporal qualifier next to it).
         (
             re.compile(
-                r"\b(january|february|march|april|may|june|july|august|"
+                r"\b(january|february|march|april|june|july|august|"
                 r"september|october|november|december)\b"
+            ),
+            2,
+        ),
+        (
+            re.compile(
+                r"\b(?:\d{1,2}(?:st|nd|rd|th)?\s+may|may\s+\d{1,2}|"
+                r"may\s+20\d{2}|(?:in|early|late)\s+may)\b"
             ),
             2,
         ),

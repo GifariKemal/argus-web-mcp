@@ -847,3 +847,200 @@ async def test_find_similar_clamps_invalid_count(app_state, monkeypatch):
     r = await server.find_similar("python web scraping", count=-1)
     assert r["count"] == 1  # clamped to 1, not a negative-slice subset
     assert seen["count"] >= 10  # search overfetch stays bounded/sane, not count*2 of -1
+
+
+# --------------------------------------------------------------------------- #
+# Round-6 hardening: tool caching, degraded-no-cache, specialist failover,     #
+# error metrics, structured-error consistency                                  #
+# --------------------------------------------------------------------------- #
+
+
+async def test_read_pdf_url_cached(app_state):
+    r1 = await server.read_pdf(f"{BASE}/doc.pdf")
+    assert r1["from_cache"] is False
+    r2 = await server.read_pdf(f"{BASE}/doc.pdf")
+    assert r2["from_cache"] is True
+    assert r2["content"] == r1["content"]
+
+
+async def test_read_pdf_unknown_mode_schema_invalid(app_state):
+    r = await server.read_pdf(f"{BASE}/doc.pdf", mode="figures")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_read_pdf_bad_pages_schema_invalid(app_state):
+    r = await server.read_pdf(f"{BASE}/doc.pdf", pages="abc")
+    assert r["code"] == "schema_invalid"
+    r2 = await server.read_pdf(f"{BASE}/doc.pdf", pages="99")
+    assert r2["code"] == "schema_invalid"
+
+
+async def test_forexfactory_cached_and_stale_not_cached(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_ff(date_range, client=None):
+        calls["n"] += 1
+        return {"events": [], "count": 0, "source": "s", "stale": False}
+
+    monkeypatch.setattr(server, "_ff_calendar", fake_ff)
+    r1 = await server.forexfactory_calendar()
+    r2 = await server.forexfactory_calendar()
+    assert calls["n"] == 1
+    assert r1["from_cache"] is False and r2["from_cache"] is True
+
+    # stale bundles must NOT be re-served as fresh cache hits
+    calls["n"] = 0
+
+    async def stale_ff(date_range, client=None):
+        calls["n"] += 1
+        return {"events": [], "count": 0, "source": "s", "stale": True,
+                "stale_age_seconds": 60}
+
+    monkeypatch.setattr(server, "_ff_calendar", stale_ff)
+    await server.forexfactory_calendar(date_range=["2026-01-01", "2026-01-02"])
+    await server.forexfactory_calendar(date_range=["2026-01-01", "2026-01-02"])
+    assert calls["n"] == 2  # no cache hit for stale results
+
+
+async def test_cot_cached_and_error_code_passthrough(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_cot(report_type="legacy_futures", date=None, client=None):
+        calls["n"] += 1
+        return {"rows": [], "count": 0, "report_type": report_type, "source": "s",
+                "identity_failures": 0, "bad_dates": 0}
+
+    monkeypatch.setattr(server, "_cot_report", fake_cot)
+    await server.cot_report()
+    r2 = await server.cot_report()
+    assert calls["n"] == 1
+    assert r2["from_cache"] is True
+
+    from argus.trading.cot import CotError
+
+    async def bad_cot(report_type="x", date=None, client=None):
+        raise CotError("cot_bad_report_type", "unknown report_type")
+
+    monkeypatch.setattr(server, "_cot_report", bad_cot)
+    r = await server.cot_report(report_type="nope")
+    assert r["code"] == "cot_bad_report_type"  # no longer masked as fetch_failed
+
+
+async def test_ff_bad_date_range_code_passthrough(app_state, monkeypatch):
+    from argus.trading.forexfactory import ForexFactoryError
+
+    async def bad_ff(date_range, client=None):
+        raise ForexFactoryError("ff_bad_date_range", "bad bounds")
+
+    monkeypatch.setattr(server, "_ff_calendar", bad_ff)
+    r = await server.forexfactory_calendar(date_range=["junk"])
+    assert r["code"] == "ff_bad_date_range"
+
+
+async def test_news_feed_cached_but_degraded_not_cached(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_feed(query, since=None, sentiment=False):
+        calls["n"] += 1
+        return {"query": query, "items": [], "count": 0, "degraded": False}
+
+    monkeypatch.setattr(server, "_news_feed", fake_feed)
+    await server.news_sentiment_feed("gold")
+    r2 = await server.news_sentiment_feed("gold")
+    assert calls["n"] == 1 and r2["from_cache"] is True
+
+    calls["n"] = 0
+
+    async def degraded_feed(query, since=None, sentiment=False):
+        calls["n"] += 1
+        return {"query": query, "items": [], "count": 0, "degraded": True,
+                "degraded_reason": "low_relevance"}
+
+    monkeypatch.setattr(server, "_news_feed", degraded_feed)
+    await server.news_sentiment_feed("silver")
+    await server.news_sentiment_feed("silver")
+    assert calls["n"] == 2  # degraded feed never cached
+
+
+async def test_search_degraded_not_cached(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def degraded_search(query, **kw):
+        calls["n"] += 1
+        return {"query": query, "results": [], "count": 0, "engines_used": [],
+                "backend": "b", "degraded": True, "degraded_reason": "low_relevance"}
+
+    monkeypatch.setattr(server, "searxng_search", degraded_search)
+    await server.search("junk query")
+    await server.search("junk query")
+    assert calls["n"] == 2  # degraded result set never cached
+
+
+async def test_smart_search_specialist_failover_to_general(app_state, monkeypatch):
+    from argus.gh_search import GitHubSearchError
+
+    async def rate_limited(*a, **k):
+        raise GitHubSearchError("search_backend_down", "rate limit")
+
+    async def general_ok(query, **kw):
+        return {"query": query, "results": [{"title": "t", "url": "https://x.com/1",
+                                             "snippet": "s", "engine": "ddg"}],
+                "count": 1, "engines_used": ["ddg"], "backend": "b",
+                "degraded": False, "degraded_reason": None}
+
+    monkeypatch.setattr(server, "_gh_search", rate_limited)
+    monkeypatch.setattr(server, "searxng_search", general_ok)
+    out = await server.smart_search("fastmcp github repo")
+    assert out["route"] == "general"
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "specialist_failover"
+    assert "code" not in out["result"]
+
+
+async def test_err_counts_metric_increments_and_exports(app_state):
+    from argus.models import ERR_COUNTS
+
+    before = ERR_COUNTS.get("ssrf_blocked", 0)
+    r = await server.read("http://169.254.169.254/latest/meta-data")
+    assert r["code"] == "ssrf_blocked"
+    assert ERR_COUNTS.get("ssrf_blocked", 0) == before + 1
+
+    class _B:
+        _crawler = object()
+        active_contexts = 0
+
+    old = server._S
+    server._S = server.State(client=None, cache=None, browser=_B())
+    try:
+        m = await server.metrics(None)
+        body = bytes(m.body).decode()
+        assert 'argus_tool_errors_total{code="ssrf_blocked"}' in body
+    finally:
+        server._S = old
+
+
+async def test_extract_structured_auto_selector_raises_no_llm_returns_error(
+    app_state, monkeypatch
+):
+    def boom(html, schema):
+        raise RuntimeError("selector engine exploded")
+
+    monkeypatch.setattr(server, "extract_selectors", boom)
+    r = await server.extract_structured(f"{BASE}/struct", {"title": "h1::text"}, mode="auto")
+    assert r is not None
+    assert r["code"] == "extraction_failed"  # was: bare None returned to the client
+
+
+async def test_cot_drift_flagged_result_not_cached(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def drifted_cot(report_type="legacy_futures", date=None, client=None):
+        calls["n"] += 1
+        return {"rows": [{"report_date": "2026-01-01"}], "count": 1,
+                "report_type": report_type, "source": "s",
+                "identity_failures": 1, "bad_dates": 0}
+
+    monkeypatch.setattr(server, "_cot_report", drifted_cot)
+    await server.cot_report()
+    await server.cot_report()
+    assert calls["n"] == 2  # drift-flagged data never cached; each call retries upstream

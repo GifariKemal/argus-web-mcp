@@ -33,13 +33,13 @@ from .extract.llm import extract_llm, llm_available
 from .extract.pdf import extract_pdf, extract_pdf_quality
 from .extract.structured import extract_selectors
 from .fetch.core import fetch
-from .fetch.crawl import CrawlError, deep_crawl
+from .fetch.crawl import deep_crawl
 from .fetch.render import BrowserPool
 from .fetch.static import FetchError, fetch_bytes
 from .gh_search import GitHubSearchError
 from .gh_search import github_search as _gh_search
 from .mapsite import MapError, map_site
-from .models import err
+from .models import ERR_COUNTS, err
 from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
@@ -47,7 +47,9 @@ from .scholar import scholar_search as _scholar_search
 from .search import SearchError
 from .search import search as searxng_search
 from .security.ssrf import SSRFError, build_safe_async_client, validate_url
+from .trading.cot import CotError
 from .trading.cot import cot_report as _cot_report
+from .trading.forexfactory import ForexFactoryError
 from .trading.forexfactory import forexfactory_calendar as _ff_calendar
 from .trading.news import news_sentiment_feed as _news_feed
 from .watch import WatchStore, poll_due
@@ -171,24 +173,38 @@ async def lifespan(_server: FastMCP):
 
 
 WATCH_TICK_S = 60
+CACHE_PURGE_EVERY_S = 3600
+
+
+async def _watch_tick(s: State) -> None:
+    """One poller tick: check due watches -> deliver on change. Never raises."""
+    async def _fetch_fn(url: str, _s=s) -> dict:
+        # raw html so selector watches parse correctly; full-content watches hash the html.
+        return await fetch(url, client=_s.client, browser=_s.browser, throttle=_s.throttle)
+
+    try:
+        await poll_due(s.watch_store, fetch_fn=_fetch_fn, client=s.client, now=time.time())
+    except Exception as exc:  # noqa: BLE001 - poller must never die; next tick retries
+        logger.warning("watch poll tick failed: %s: %s", type(exc).__name__, exc)
 
 
 async def _watch_loop() -> None:
-    """Background poller: every WATCH_TICK_S, check due watches -> deliver on change."""
+    """Background poller: every WATCH_TICK_S, check due watches; hourly, purge the cache."""
+    last_purge = time.monotonic()
     while True:
         await asyncio.sleep(WATCH_TICK_S)
         s = _S
         if s is None or s.watch_store is None:
             continue
-
-        async def _fetch_fn(url: str, _s=s) -> dict:
-            # raw html so selector watches parse correctly; full-content watches hash the html.
-            return await fetch(url, client=_s.client, browser=_s.browser, throttle=_s.throttle)
-
-        try:
-            await poll_due(s.watch_store, fetch_fn=_fetch_fn, client=s.client, now=time.time())
-        except Exception:  # noqa: BLE001,S110 - poller must never die; next tick retries
-            pass
+        await _watch_tick(s)
+        if time.monotonic() - last_purge >= CACHE_PURGE_EVERY_S:
+            last_purge = time.monotonic()
+            try:
+                n = s.cache.purge()
+                if n:
+                    logger.info("cache purge: removed %d expired entries", n)
+            except Exception as exc:  # noqa: BLE001 - purge is housekeeping, never fatal
+                logger.warning("cache purge failed: %s: %s", type(exc).__name__, exc)
 
 
 def _is_url(s: str) -> bool:
@@ -295,7 +311,10 @@ async def search(
         return err("search_backend_down", "search backend unavailable", _safe_detail(e))
 
     res["from_cache"] = False
-    s.cache.put(ck, res, source="search")
+    # Never cache a degraded result set (low_relevance junk / failover): re-serving it
+    # for the full TTL would defeat the relevance guard's retry purpose.
+    if not res.get("degraded"):
+        s.cache.put(ck, res, source="search")
     return res
 
 
@@ -305,10 +324,18 @@ async def read_pdf(
     mode: str = "text",
     timeout: int = TIMEOUTS["read_pdf"],
 ) -> dict:
-    """PDF (URL or local path) -> markdown + tables."""
+    """PDF (URL or local path) -> markdown + tables. mode: text | tables | quality."""
     s = _state()
+    if mode not in {"text", "tables", "quality"}:
+        return err("schema_invalid", f"unknown read_pdf mode {mode!r} (text|tables|quality)")
+    is_url = _is_url(url_or_path)
+    ck = s.cache.key("pdf:" + url_or_path, {"pages": pages, "mode": mode})
+    if is_url:  # local files may change on disk - only URL fetches are cached
+        cached = s.cache.get(ck, ttl_for("pdf"))
+        if cached is not None:
+            return {**cached, "from_cache": True}
     try:
-        if _is_url(url_or_path):
+        if is_url:
             validate_url(url_or_path)
             _, data, _ctype = await fetch_bytes(url_or_path, client=s.client, timeout=timeout)
         else:
@@ -332,12 +359,20 @@ async def read_pdf(
             result = await asyncio.to_thread(extract_pdf_quality, data, pages)  # Docling (heavy)
         else:
             result = extract_pdf(data, pages, mode)
-    except ValueError:
+    except ValueError as e:
+        # A malformed/out-of-document pages spec on a VALID PDF is caller error, not a
+        # corrupt file - don't mislabel it not_pdf.
+        if str(e) == "bad_pages":
+            return err("schema_invalid", "invalid pages spec", pages)
         return err("not_pdf", "not a valid PDF", url_or_path)
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("parse_failed", "PDF parse failed", _safe_detail(e))
 
-    return {"source": url_or_path, **result}
+    out = {"source": url_or_path, **result}
+    if is_url:
+        out["from_cache"] = False
+        s.cache.put(ck, out, source="pdf")
+    return out
 
 
 async def scrape(
@@ -468,6 +503,11 @@ async def extract_structured(
                         {"url": u, **err("extraction_failed", "LLM failed", _safe_detail(e))}
                     )
                     continue
+        if result is None:
+            # auto mode: the selector tier raised AND no LLM is available to fall back to -
+            # the client must get a structured error, never a bare None.
+            out.append({"url": u, **err("extraction_failed", "selector failed, no LLM fallback")})
+            continue
         out.append(result)
 
     return out[0] if single else {"results": out}
@@ -476,19 +516,29 @@ async def extract_structured(
 async def crawl(
     seed_url: str, depth: int = 2, max_pages: int = 50, include: list | None = None,
     exclude: list | None = None, same_domain: bool = True, respect_robots: bool = True,
+    timeout: int = TIMEOUTS["crawl"],
 ) -> dict:
-    """Deep-crawl a site (robots-respecting, confined to the seed host by default)."""
+    """Deep-crawl a site (robots-respecting, confined to the seed host by default).
+    `timeout` bounds the WHOLE crawl (default TIMEOUTS['crawl'] / ARGUS_TIMEOUT_CRAWL);
+    raise it for legitimately large crawls."""
     s = _state()
     if s.browser is None:
         return err("render_failed", "browser tier unavailable")
+    # Trust-boundary clamps (like find_similar's count): a runaway max_pages/depth must
+    # not occupy the shared browser for unbounded work.
+    depth = max(0, min(depth, 5))
+    max_pages = max(1, min(max_pages, 200))
     try:
-        return await deep_crawl(
-            seed_url, depth=depth, max_pages=max_pages, include=include, exclude=exclude,
-            same_domain=same_domain, respect_robots=respect_robots, browser=s.browser,
-        )
+        async with asyncio.timeout(timeout):
+            return await deep_crawl(
+                seed_url, depth=depth, max_pages=max_pages, include=include, exclude=exclude,
+                same_domain=same_domain, respect_robots=respect_robots, browser=s.browser,
+            )
     except SSRFError as e:
         return err("ssrf_blocked", "seed URL blocked by SSRF guard", _safe_detail(e))
-    except CrawlError as e:
+    except TimeoutError:
+        return err("fetch_failed", "crawl timed out", f"{timeout}s")
+    except Exception as e:  # noqa: BLE001 - never raise to client
         return err("fetch_failed", "crawl failed", _safe_detail(e))
 
 
@@ -518,37 +568,69 @@ async def screenshot(url: str, timeout: int = TIMEOUTS["screenshot"]) -> dict:
 async def forexfactory_calendar(date_range: list | None = None) -> dict:
     """ForexFactory economic calendar (FairEconomy JSON feed) in Aurix calendar shape."""
     s = _state()
+    ck = s.cache.key("ff:calendar", {"date_range": date_range})
+    cached = s.cache.get(ck, ttl_for("trading"))
+    if cached is not None:
+        return {**cached, "from_cache": True}
     try:
-        return await _ff_calendar(date_range, client=s.client)
+        res = await _ff_calendar(date_range, client=s.client)
+    except ForexFactoryError as e:
+        return err(e.code, "forexfactory calendar failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("fetch_failed", "forexfactory calendar failed", _safe_detail(e))
+    # Never cache a stale-fallback bundle - it must not be re-served as fresh for 300s.
+    if isinstance(res, dict) and not res.get("stale"):
+        res["from_cache"] = False
+        s.cache.put(ck, res, source="trading")
+    return res
 
 
 async def cot_report(report_type: str = "legacy_futures", date: str | None = None) -> dict:
     """CFTC Commitments of Traders positioning."""
     s = _state()
+    ck = s.cache.key("cot:report", {"report_type": report_type, "date": date})
+    cached = s.cache.get(ck, ttl_for("trading"))
+    if cached is not None:
+        return {**cached, "from_cache": True}
     try:
-        return await _cot_report(report_type=report_type, date=date, client=s.client)
+        res = await _cot_report(report_type=report_type, date=date, client=s.client)
+    except CotError as e:
+        return err(e.code, "COT report failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("fetch_failed", "COT report failed", _safe_detail(e))
+    res["from_cache"] = False
+    # Drift-flagged data (column-layout change) is degraded - never re-serve it for the
+    # TTL; let the next call retry against a possibly-corrected upstream.
+    if not (res.get("identity_failures") or res.get("bad_dates")):
+        s.cache.put(ck, res, source="trading")
+    return res
 
 
 async def news_sentiment_feed(
     query: str, since: str | None = None, sentiment: bool = False
 ) -> dict:
     """Ranked news feed (+ optional owned-LLM sentiment score)."""
+    s = _state()
+    ck = s.cache.key("news:" + query, {"since": since, "sentiment": sentiment})
+    cached = s.cache.get(ck, ttl_for("news"))
+    if cached is not None:
+        return {**cached, "from_cache": True}
     try:
         # Do NOT forward the SSRF-guarded s.client: the news ranker fetches the
         # INTERNAL loopback SearXNG (127.0.0.1:8888), which the external-URL guard
         # blocks by design. Mirror the working search() handler and let the search
         # layer create its own plain client for the trusted, destination-fixed
         # backend. The SSRF gate stays intact for every genuinely external fetch.
-        return await _news_feed(query, since=since, sentiment=sentiment)
+        res = await _news_feed(query, since=since, sentiment=sentiment)
     except SearchError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
         return err(code, "news feed failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("extraction_failed", "news feed failed", _safe_detail(e))
+    res["from_cache"] = False
+    if not res.get("degraded"):
+        s.cache.put(ck, res, source="news")
+    return res
 
 
 def _build_auth():
@@ -617,10 +699,12 @@ async def research(
             if content:
                 src["highlights"] = semantic.top_sentences(query, content, top_k=3)
 
-    # Only cache success - never an error dict (e.g. mode='answer' LLM failure).
+    # Only cache success - never an error dict (e.g. mode='answer' LLM failure) and
+    # never a degraded bundle (built on junk/failover search results; let it retry).
     if isinstance(res, dict) and "code" not in res:
         res["from_cache"] = False
-        s.cache.put(ck, res, source="general")
+        if not res.get("degraded"):
+            s.cache.put(ck, res, source="general")
     return res
 
 
@@ -732,7 +816,8 @@ async def github_search(
 
     if isinstance(res, dict) and "code" not in res:
         res["from_cache"] = False
-        s.cache.put(ck, res, source="search")
+        if not res.get("degraded"):  # incomplete_results: partial scan, let it retry
+            s.cache.put(ck, res, source="search")
     return res
 
 
@@ -781,6 +866,22 @@ async def smart_search(query: str, count: int = 10) -> dict:
         result = await search(query, category="it", count=count)
     else:
         result = await search(query, count=count)
+    # Specialist failover: a dead/rate-limited specialist backend (GitHub anon 10 req/min,
+    # scholar miss) must not turn a perfectly-searchable query into a dead error when the
+    # general backend can still answer. Flagged degraded, matching the search() convention.
+    if r != "general" and isinstance(result, dict) and result.get("code") in {
+        "no_results", "search_backend_down",
+    }:
+        fb = await search(query, count=count)
+        if isinstance(fb, dict) and "code" not in fb:
+            return {
+                "query": query,
+                "route": "general",
+                "reason": routed["reason"] + f"; fallback: {r} {result['code']}",
+                "degraded": True,
+                "degraded_reason": "specialist_failover",
+                "result": fb,
+            }
     return {"query": query, "route": r, "reason": routed["reason"], "result": result}
 
 
@@ -914,6 +1015,13 @@ async def metrics(_request):
         lines.append(f'argus_tool_requests_total{{tool="{name}"}} {n}')
         total += n
     lines.append(f"argus_tool_requests_total{{tool=\"_all\"}} {total}")
+
+    # Structured tool errors by code (err() dicts never raise, so exception-based
+    # monitoring sees nothing - this is the only failure signal Prometheus gets).
+    lines.append("# HELP argus_tool_errors_total structured tool errors by code since start")
+    lines.append("# TYPE argus_tool_errors_total counter")
+    for code, n in sorted(ERR_COUNTS.items()):
+        lines.append(f'argus_tool_errors_total{{code="{code}"}} {n}')
 
     # Latency histogram buckets (Prometheus-style)
     lines.append("# HELP argus_tool_latency_seconds MCP tool call latency")

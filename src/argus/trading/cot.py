@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import date as _date
 
 from argus.security.ssrf import build_safe_async_client
 
@@ -94,12 +95,41 @@ def parse_cot(text: str | bytes, report_type: str = "legacy_futures") -> list[di
     return rows
 
 
-async def cot_report(report_type: str = "legacy_futures", date=None, *, client=None) -> dict:
-    """Fetch + parse a CFTC COT report. Returns ``{rows, count, report_type, source}``.
+def _drift_checks(rows: list[dict]) -> tuple[int, int]:
+    """Live column-layout drift detectors over parsed rows (pure, additive).
 
-    ``date`` is accepted for API symmetry/future filtering but the this-week feed
-    is a single report date. Raises :class:`CotError` on fetch failure or an
-    unknown ``report_type``.
+    Returns ``(identity_failures, bad_dates)``: rows violating the composed COT
+    accounting identity ``open_interest == noncommercial_long + noncommercial_spreads
+    + commercial_long + nonreportable_long`` (only counted when all five fields parsed),
+    and rows whose ``report_date`` is not an ISO date. A CFTC layout change shifts the
+    numeric columns, so either count > 0 means the data must be treated as degraded -
+    without this, drift is only caught by the OFFLINE golden test, never live.
+    """
+    identity_failures = 0
+    bad_dates = 0
+    fields = ("open_interest", "noncommercial_long", "noncommercial_spreads",
+              "commercial_long", "nonreportable_long")
+    for row in rows:
+        vals = [row[f] for f in fields]
+        if all(v is not None for v in vals) and vals[0] != sum(vals[1:]):
+            identity_failures += 1
+        try:
+            _date.fromisoformat(row["report_date"])
+        except (ValueError, TypeError):
+            bad_dates += 1
+    return identity_failures, bad_dates
+
+
+async def cot_report(report_type: str = "legacy_futures", date=None, *, client=None) -> dict:
+    """Fetch + parse a CFTC COT report. Returns ``{rows, count, report_type, source,
+    identity_failures, bad_dates}`` (+ ``requested_date`` when ``date`` is passed).
+
+    ``date`` (YYYY-MM-DD, or any string whose first 10 chars are the date) filters rows
+    to that exact report date - the this-week feed carries a single date, so a
+    non-matching date returns an HONEST empty set instead of silently serving the
+    wrong week. ``identity_failures``/``bad_dates`` > 0 signal CFTC column-layout
+    drift (treat the data as degraded). Raises :class:`CotError` on fetch failure or
+    an unknown ``report_type``.
     """
     source = REPORT_URLS.get(report_type)
     if source is None:
@@ -120,4 +150,14 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
             await client.aclose()
 
     rows = parse_cot(body, report_type=report_type)
-    return {"rows": rows, "count": len(rows), "report_type": report_type, "source": source}
+    identity_failures, bad_dates = _drift_checks(rows)
+    out = {
+        "rows": rows, "count": len(rows), "report_type": report_type, "source": source,
+        "identity_failures": identity_failures, "bad_dates": bad_dates,
+    }
+    if date:
+        want = str(date)[:10]
+        out["rows"] = [r for r in rows if r["report_date"] == want]
+        out["count"] = len(out["rows"])
+        out["requested_date"] = want
+    return out

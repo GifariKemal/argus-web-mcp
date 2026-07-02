@@ -24,15 +24,6 @@ from ..security.ssrf import resolve_and_validate, validate_url
 from .static import _DEFAULT_PORTS
 
 
-class CrawlError(Exception):
-    """Raised when a deep crawl fails wholesale (the seed itself is unreachable)."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
 def _build_config(
     seed_url: str,
     *,
@@ -42,6 +33,7 @@ def _build_config(
     exclude: list[str] | None,
     same_domain: bool,
     respect_robots: bool,
+    timeout: float = 45,
 ):
     """Pure builder for the deep-crawl CrawlerRunConfig (no network/browser)."""
     from crawl4ai import (
@@ -73,6 +65,7 @@ def _build_config(
         check_robots_txt=respect_robots,
         cache_mode=CacheMode.BYPASS,
         stream=False,
+        page_timeout=int(timeout * 1000),  # per-page bound (ms), matches the render tier
     )
 
 
@@ -144,7 +137,10 @@ async def deep_crawl(
     Validates the seed (scheme + resolve-then-validate the host), confines the
     crawl to the seed host when ``same_domain`` (DomainFilter), applies
     include/exclude glob filters, and shapes per-page results. Partial page
-    failures are skipped, not fatal. See module docstring for the SSRF ceiling.
+    failures are skipped, not fatal. ``timeout`` bounds each PAGE load (Crawl4AI
+    page_timeout); the whole-crawl wall clock is bounded by the server tool
+    (TIMEOUTS['crawl'] / ARGUS_TIMEOUT_CRAWL). See module docstring for the SSRF
+    ceiling.
     """
     validate_url(seed_url)
     parts = urlsplit(seed_url)
@@ -158,11 +154,20 @@ async def deep_crawl(
         exclude=exclude,
         same_domain=same_domain,
         respect_robots=respect_robots,
+        timeout=timeout,
     )
 
     crawler = getattr(browser, "_crawler", None)
     if crawler is not None:
-        results = await _run(crawler, seed_url, cfg)
+        # Hold ONE BrowserPool permit for the crawl's duration so its page loads are
+        # accounted by the same RAM guard as every other browser-tier tool (a 50-page
+        # BFS must not run invisibly beside 4 concurrent scrapes on the shared Chromium).
+        sem = getattr(browser, "_sem", None)
+        if sem is not None:
+            async with sem:
+                results = await _run(crawler, seed_url, cfg)
+        else:
+            results = await _run(crawler, seed_url, cfg)
     else:
         from crawl4ai import AsyncWebCrawler, BrowserConfig
 
