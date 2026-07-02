@@ -242,6 +242,50 @@ async def test_render_wedged_browser_times_out_and_frees_permit(monkeypatch):
     assert "fine" in out["html"]
 
 
+async def test_wedged_stealth_is_recycled_not_reused(monkeypatch):
+    """A wedged STEALTH crawler must be closed+dropped so the next call re-inits a fresh
+    one - one wedge no longer poisons the anti-bot tier until process restart."""
+    import argus.fetch.render as r
+    from argus.fetch.static import FetchError
+
+    monkeypatch.setattr(r, "_RENDER_GRACE_S", 0.01)
+    starts = {"n": 0}
+    closed = {"n": 0}
+
+    class _WedgedStealth:
+        async def start(self):
+            starts["n"] += 1
+
+        async def close(self):
+            closed["n"] += 1
+
+        async def arun(self, url, config=None):
+            await asyncio.sleep(3600)  # wedge
+
+    fake_mod = types.SimpleNamespace(
+        AsyncWebCrawler=lambda config=None: _WedgedStealth(),
+        BrowserConfig=lambda **kw: None,
+        CacheMode=types.SimpleNamespace(BYPASS="bypass"),
+        CrawlerRunConfig=lambda **kw: None,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "crawl4ai", fake_mod)
+    _no_dns(monkeypatch)
+
+    pool = BrowserPool()
+    pool._crawler = _WedgedStealth()  # normal tier present (unused on the direct stealth path)
+
+    with pytest.raises(FetchError) as ei:
+        await pool.render("http://example.com/", stealth=True, timeout=0.01)
+    assert ei.value.code == "render_failed"
+    assert pool._stealth is None  # recycled: wedged handle dropped
+    assert starts["n"] == 1 and closed["n"] == 1
+
+    # next stealth render re-inits a fresh crawler instead of reusing the wedged one
+    with pytest.raises(FetchError):
+        await pool.render("http://example.com/", stealth=True, timeout=0.01)
+    assert starts["n"] == 2  # would stay 1 if the wedged handle were reused
+
+
 async def test_screenshot_of_challenge_page_still_returns(monkeypatch):
     """screenshot=True returns the captured PNG even on a challenge page - 'show me what
     the page looks like' is legitimate, and the bytes are already in hand."""

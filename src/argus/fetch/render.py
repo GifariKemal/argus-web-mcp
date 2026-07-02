@@ -87,14 +87,35 @@ class BrowserPool:
                     self._stealth = crawler
         return self._stealth
 
-    async def _bounded_arun(self, crawler, url: str, cfg, timeout: float):
+    async def _recycle_stealth(self) -> None:
+        """Close and drop a wedged stealth crawler so the next call re-inits a fresh one.
+
+        Only the STEALTH tier is recycled: it has a lazy re-init path (_ensure_stealth),
+        whereas the normal _crawler has none - nulling it would make render() raise
+        "browser pool not started" until lifespan restart. Best-effort; close errors are
+        swallowed (the handle is already presumed wedged)."""
+        async with self._stealth_lock:
+            crawler, self._stealth = self._stealth, None
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception:  # noqa: BLE001 - handle is wedged; nothing better to do
+                pass
+
+    async def _bounded_arun(self, crawler, url: str, cfg, timeout: float, *,
+                            recycle_stealth: bool = False):
         """``crawler.arun`` with an outer stdlib deadline so a wedged Chromium/CDP pipe
         cannot hold a semaphore permit forever. Crawl4AI's page_timeout stays the primary
-        mechanism; the +_RENDER_GRACE_S outer bound fires only when it already failed to."""
+        mechanism; the +_RENDER_GRACE_S outer bound fires only when it already failed to.
+
+        ``recycle_stealth`` recycles the wedged stealth crawler on timeout so one wedge
+        no longer poisons the anti-bot tier until process restart (self-healing)."""
         try:
             async with asyncio.timeout(timeout + _RENDER_GRACE_S):
                 return await crawler.arun(url, config=cfg)
         except TimeoutError as e:
+            if recycle_stealth:
+                await self._recycle_stealth()
             raise FetchError(
                 "render_failed",
                 f"render exceeded {timeout + _RENDER_GRACE_S:.0f}s (browser wedged?)",
@@ -136,7 +157,7 @@ class BrowserPool:
         crawler = await self._ensure_stealth() if stealth else self._crawler
         tier = "stealth" if stealth else "normal"
         async with self._sem:
-            res = await self._bounded_arun(crawler, url, cfg, timeout)
+            res = await self._bounded_arun(crawler, url, cfg, timeout, recycle_stealth=stealth)
 
         # Auto-escalate to the stealth tier once on an anti-bot block.
         blocked = not res.success or _looks_blocked(
@@ -145,7 +166,9 @@ class BrowserPool:
         if not stealth and blocked:
             stealth_crawler = await self._ensure_stealth()
             async with self._sem:
-                res2 = await self._bounded_arun(stealth_crawler, url, cfg, timeout)
+                res2 = await self._bounded_arun(
+                    stealth_crawler, url, cfg, timeout, recycle_stealth=True
+                )
             # Adopt the stealth result only if it is BOTH successful and not itself a
             # challenge page - a 200 "Just a moment..." must not replace res silently.
             if res2.success and not _looks_blocked(
