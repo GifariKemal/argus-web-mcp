@@ -3,7 +3,12 @@ import socket
 import httpx
 import pytest
 
-from argus.fetch.core import ESCALATE_BELOW_CHARS, _visible_text_len, fetch
+from argus.fetch.core import (
+    ESCALATE_BELOW_CHARS,
+    STATIC_FALLBACK_TIMEOUT,
+    _visible_text_len,
+    fetch,
+)
 from argus.fetch.fallback import fetch_via_archive
 from argus.fetch.render import BrowserPool
 from argus.fetch.static import FetchError, fetch_static
@@ -337,6 +342,38 @@ async def test_static_connecterror_falls_back_to_stealth_browser(monkeypatch):
     assert fake.calls == 1
     assert fake.stealth_seen is True
     assert "rich" in res["html"]
+
+
+async def test_static_timeout_is_capped_when_browser_fallback_exists(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = {}
+
+    def h(req):
+        seen.update(req.extensions["timeout"])
+        raise httpx.TimeoutException("slow origin")
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://blocked.example/", client=c, browser=fake, timeout=60)
+
+    assert seen["read"] == STATIC_FALLBACK_TIMEOUT
+    assert res["render_path"] == "browser"
+    assert fake.calls == 1
+
+
+async def test_static_timeout_not_capped_without_browser(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = {}
+
+    def h(req):
+        seen.update(req.extensions["timeout"])
+        raise httpx.TimeoutException("slow origin")
+
+    async with _client(h) as c:
+        with pytest.raises(FetchError):
+            await fetch("http://blocked.example/", client=c, browser=None, timeout=60)
+
+    assert seen["read"] == 60
 
 
 async def test_static_connecterror_no_browser_falls_back_to_archive(monkeypatch):

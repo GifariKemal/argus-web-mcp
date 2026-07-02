@@ -108,6 +108,53 @@ def test_text_mode_does_not_populate_tables():
     assert res["tables"] == []
 
 
+def test_text_mode_disables_pymupdf4llm_table_and_graphics_detection(two_page_pdf, monkeypatch):
+    seen = {}
+
+    def fake_to_markdown(doc, **kwargs):
+        seen.update(kwargs)
+        return [{"text": "fast text path"}]
+
+    monkeypatch.setattr("argus.extract.pdf.pymupdf4llm.to_markdown", fake_to_markdown)
+    res = extract_pdf(two_page_pdf, mode="text")
+
+    assert res["content"] == "fast text path"
+    assert seen["table_strategy"] is None
+    assert seen["ignore_graphics"] is True
+
+
+def test_tables_mode_keeps_pymupdf4llm_table_detection(two_page_pdf, monkeypatch):
+    seen = {}
+
+    def fake_to_markdown(doc, **kwargs):
+        seen.update(kwargs)
+        return [{"text": "table-aware path"}]
+
+    monkeypatch.setattr("argus.extract.pdf.pymupdf4llm.to_markdown", fake_to_markdown)
+    res = extract_pdf(two_page_pdf, mode="tables")
+
+    assert res["content"] == "table-aware path"
+    assert seen["table_strategy"] == "lines_strict"
+    assert seen["ignore_graphics"] is False
+
+
+def test_large_text_mode_uses_fast_plain_text_path(monkeypatch):
+    large_pdf = _make_pdf([f"PAGE {i} fast path text" for i in range(1, 22)])
+
+    def fail_to_markdown(*args, **kwargs):
+        raise AssertionError("large text mode should not call pymupdf4llm")
+
+    monkeypatch.setattr("argus.extract.pdf.pymupdf4llm.to_markdown", fail_to_markdown)
+    res = extract_pdf(large_pdf, mode="text")
+
+    assert res["pages_total"] == 21
+    assert res["pages_returned"] == 21
+    assert "## Page 21" in res["content"]
+    assert "PAGE 21 fast path text" in res["content"]
+    assert res["tables"] == []
+    assert res["metadata"]["engine"] == "pymupdf-fast-text"
+
+
 def test_not_a_pdf_raises():
     with pytest.raises(ValueError, match="not_pdf"):
         extract_pdf(b"not a pdf")

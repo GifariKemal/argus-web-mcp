@@ -7,8 +7,8 @@
 # measures the RIGHT thing instead: "captured the main content AND left out the
 # boilerplate", independent of formatting.
 #
-# Each item stores two hand-verified lists, both extracted from the LIVE page on
-# 2026-06-24 (httpx + readability for main-text, BeautifulSoup nav/footer for
+# Each item stores two hand-verified lists, extracted from the LIVE page on
+# the date noted per item (httpx + readability for main-text, BeautifulSoup nav/footer for
 # boilerplate):
 # must_contain     - verbatim main-content phrases that MUST be captured
 # (matched formatting-invariantly: >=0.8 token-overlap run).
@@ -19,29 +19,8 @@
 # This gold favours NO adapter by construction: it asks only "is the content in
 # and the cruft out". A raw full-page dump tanks on must_not_contain; an
 # over-aggressive extractor that drops body text tanks on must_contain.
-# Span page types: news (ads/nav), docs (code+prose), longform (Wikipedia +
-# near-zero-boilerplate essay).
+# Span page types: docs (code+prose) and longform (near-zero-boilerplate essay).
 # =============================================================================
-
-- id: news-02
-  category: news
-  url: "https://fortune.com/article/current-price-of-gold-06-22-2026/"
-  notes: "Fortune dated gold news - ad/nav/related-article heavy. Boilerplate-rejection stress."
-  must_contain:
-    - "The price of gold was trading at"
-    - "looking for an investment that is not tied directly to the variance of inflation"
-    - "gold as an asset is typically expected to increase in value over time"
-    - "One of the most common ways to purchase and manage gold is through a gold IRA"
-    - "without the challenge of having to make storage arrangements for physical gold bullion"
-    - "Fortune publishes a daily price of gold post each weekday that data is available"
-  must_not_contain:
-    - "100 Best Companies"
-    - "Fortune 500"
-    - "Most Powerful Women"
-    - "Customer Service Portal"
-    - "Do Not Sell"
-    - "(c) 2026 Fortune Media"
-    - "Most Popular"
 
 - id: docs-01
   category: docs
@@ -61,26 +40,6 @@
     - "Back to top"
     - "Made with Zensical"
     - "Path Parameters"
-
-- id: longform-01
-  category: longform
-  url: "https://en.wikipedia.org/wiki/Gold_as_an_investment"
-  notes: "~10k words, infobox, 60+ refs. Wikipedia chrome (nav menu + footer license) is the boilerplate."
-  must_contain:
-    - "Investors generally buy gold as a way of diversifying risk"
-    - "The gold market is subject to speculation and volatility as are other markets"
-    - "Gold has been used throughout history as money and has been a relative standard for currency equivalents"
-    - "the Bretton Woods system pegged the United States dollar to gold"
-    - "when the US unilaterally suspended the direct convertibility of the United States dollar to gold"
-    - "The last major currency to be divorced from gold was the Swiss franc"
-  must_not_contain:
-    - "Jump to content"
-    - "Create account"
-    - "Personal tools"
-    - "Text is available under the Creative Commons"
-    - "Privacy policy"
-    - "Wikipedia is a registered trademark"
-    - "Cookie statement"
 
 - id: longform-04
   category: longform

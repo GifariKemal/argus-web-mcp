@@ -30,23 +30,23 @@ from argus.search import SearchError, search
 SEARX_URL = "http://127.0.0.1:8888"
 TIMEOUT = 15.0
 
-# 15 distinct, varied real queries - a few drawn from each scenario category
-# (dev / firmware / trading / mql5 / web / ai_ml / news / docs / science / business).
+# 15 distinct, varied real non-trading queries - a few drawn from each active
+# scenario category (dev / firmware / web / ai_ml / news / docs / science / business).
 BURST_QUERIES: list[str] = [
     "python 3.13 free-threaded GIL removal status",            # dev
     "difference between git merge and git rebase",             # dev
     "ESP32 deep sleep current consumption microamps",          # firmware
     "Modbus RTU CRC16 calculation algorithm",                  # firmware
-    "XAUUSD gold price drivers real yields DXY correlation",   # trading
-    "Kelly criterion position sizing formula",                 # trading
-    "MQL5 OnTick event handler structure example",             # mql5
+    "LoRaWAN spreading factor range tradeoff",                 # firmware
     "React 19 use hook server components",                     # web
     "CSS :has() selector parent styling examples",             # web
+    "what is hydration mismatch in SSR",                       # web
     "transformer attention mechanism scaled dot product",      # ai_ml
     "RAG retrieval augmented generation chunking strategy",    # ai_ml
-    "Federal Reserve interest rate decision June 2026",        # news
+    "EU digital identity wallet rollout 2026 update",          # news
     "pydantic v2 model_validate vs parse_obj",                 # docs
     "CRISPR Cas9 mechanism of action explained",               # science
+    "dark matter evidence galaxy rotation curves",             # science
     "how to calculate customer acquisition cost CAC",          # business
 ]
 
@@ -161,6 +161,20 @@ async def main() -> None:
     print("Firing back-to-back with NO pacing (this is the burst).")
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            preflight = await client.get(
+                f"{SEARX_URL}/search",
+                params={"q": "argus burst preflight", "format": "json", "engines": "bing"},
+                timeout=httpx.Timeout(10, connect=2),
+            )
+            preflight.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - benchmark infra gate, not app logic
+            raise SystemExit(
+                f"SearXNG preflight failed at {SEARX_URL}. Start deploy/searxng first "
+                "(`docker compose up -d`) before running the live burst benchmark. "
+                f"Cause: {type(exc).__name__}: {exc}"
+            ) from exc
+
         # ARM A first: Argus must survive the burst it itself generates.
         argus_rows = await run_argus_arm(client)
         # ARM B immediately after, same hot IP, raw single-engine no-retry.

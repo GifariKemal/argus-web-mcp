@@ -19,6 +19,7 @@ from .static import FetchError, _guard, fetch_static
 # JS-rendered/thin and escalated to the browser tier.
 # ponytail: heuristic, not extraction - names the ceiling; tune if it mis-escalates.
 ESCALATE_BELOW_CHARS = 200
+STATIC_FALLBACK_TIMEOUT = 5
 
 _SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _TAGS = re.compile(r"<[^>]+>")
@@ -86,8 +87,9 @@ async def _do_fetch(
             "render_tier": r.get("render_tier", "normal"),
         }
 
+    static_timeout = min(timeout, STATIC_FALLBACK_TIMEOUT) if browser is not None else timeout
     try:
-        res = await fetch_static(url, client=client, timeout=timeout)
+        res = await fetch_static(url, client=client, timeout=static_timeout)
     except FetchError as exc:
         # Transport/connect/timeout - the host is unreachable/blocked from this box.
         # SSRFError is a different type and is NOT caught here: a blocked URL must

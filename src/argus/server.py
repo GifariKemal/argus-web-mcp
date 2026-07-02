@@ -898,14 +898,16 @@ async def scholar_search(
 
 
 async def smart_search(query: str, count: int = 10) -> dict:
-    """Auto-route a query to the best backend (deterministic classifier, no LLM): github / scholar
-    / news / it / general. Returns {query, route, reason, result}; calls the matched tool."""
+    """Auto-route a query to the best backend (deterministic classifier, no LLM): github /
+    scholar / science / news / it / general. Returns {query, route, reason, result}."""
     routed = classify(query)
     r = routed["route"]
     if r == "github":
         result = await github_search(query, mode="repositories", limit=count)
     elif r == "scholar":
         result = await scholar_search(query, limit=count)
+    elif r == "science":
+        result = await search(query, category="science", count=count)
     elif r == "news":
         result = await search(query, category="news", count=count)
     elif r == "it":

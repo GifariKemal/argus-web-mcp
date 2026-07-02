@@ -148,7 +148,7 @@ def test_quality_f1_empty_lists():
 
 def test_quality_gold_yaml_is_valid():
     gold = yaml.safe_load((BENCH / "quality_gold.yaml").read_text(encoding="utf-8"))
-    assert isinstance(gold, list) and len(gold) == 4
+    assert isinstance(gold, list) and len(gold) >= 2
     seen_ids = set()
     for item in gold:
         assert item["id"] not in seen_ids

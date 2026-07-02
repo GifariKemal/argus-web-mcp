@@ -43,12 +43,6 @@ TARGETS: dict[str, dict] = {
         "node": lambda s: s.find("article"),
         "node_desc": "BeautifulSoup .get_text() over the <article> doc body node",
     },
-    "longform-01": {
-        "url": "https://en.wikipedia.org/wiki/Gold_as_an_investment",
-        # MediaWiki canonical content container.
-        "node": lambda s: s.find(id="mw-content-text"),
-        "node_desc": "BeautifulSoup .get_text() over #mw-content-text (MediaWiki content node)",
-    },
 }
 
 # Noise tags to drop before dumping text - pure furniture, present in any DOM and

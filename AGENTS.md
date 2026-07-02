@@ -2,7 +2,7 @@
 
 # AGENTS.md - working on Argus
 
-<img src="https://img.shields.io/badge/tests-753_offline-3fb950?style=flat-square&logo=pytest&logoColor=white" alt=""/>
+<img src="https://img.shields.io/badge/tests-763_offline-3fb950?style=flat-square&logo=pytest&logoColor=white" alt=""/>
 <img src="https://img.shields.io/badge/SSRF-100%25_required-16a34a?style=flat-square" alt=""/>
 <img src="https://img.shields.io/badge/lint-ruff_clean-d29922?style=flat-square" alt=""/>
 <img src="https://img.shields.io/badge/style-Ponytail_minimal-0ea5e9?style=flat-square" alt=""/>

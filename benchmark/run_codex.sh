@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run Codex CLI (native web_search) over the 25 stratified COMPARE_IDS and save
+# Run Codex CLI (native web_search) over the stratified COMPARE_IDS and save
 # one raw answer per scenario to benchmark/codex_25/<id>.txt. Idempotent: skips
 # any id that already has a non-empty output file, so it can resume after a stop.
 #
@@ -15,7 +15,7 @@ PY="$ROOT_DIR/.venv/Scripts/python.exe"
 
 mkdir -p "$OUT_DIR"
 
-# Emit "<id>\t<query>" lines for the 25 compare scenarios.
+# Emit "<id>\t<query>" lines for the compare scenarios.
 mapfile -t LINES < <(
   "$PY" -c "import sys; sys.path.insert(0,'$BENCH_DIR'); import scenarios as s; [print(i + chr(9) + s.by_id(i)['query']) for i in s.COMPARE_IDS]"
 )

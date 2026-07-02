@@ -291,7 +291,7 @@ async def test_params_present():
 
 
 @respx.mock
-async def test_optional_params_absent_when_unset():
+async def test_default_language_param_present_when_unset():
     captured = {}
 
     def responder(request):
@@ -303,8 +303,40 @@ async def test_optional_params_absent_when_unset():
     await search("q", base_url=BASE)
 
     assert "time_range" not in captured
-    assert "language" not in captured
+    assert captured["language"] == ["en"]
     assert captured["categories"] == ["general"]
+
+
+@respx.mock
+async def test_default_language_env_can_disable(monkeypatch):
+    monkeypatch.setenv("ARGUS_DEFAULT_SEARCH_LANG", "")
+    captured = {}
+
+    def responder(request):
+        captured.update(_query_of(request))
+        return httpx.Response(200, json=_page([_result(1)]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    await search("q", base_url=BASE)
+
+    assert "language" not in captured
+
+
+@respx.mock
+async def test_default_language_env_override(monkeypatch):
+    monkeypatch.setenv("ARGUS_DEFAULT_SEARCH_LANG", "id")
+    captured = {}
+
+    def responder(request):
+        captured.update(_query_of(request))
+        return httpx.Response(200, json=_page([_result(1)]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    await search("q", base_url=BASE)
+
+    assert captured["language"] == ["id"]
 
 
 @respx.mock
@@ -1584,6 +1616,101 @@ def test_relevance_guard_on_topic_natural_language_not_flagged():
     assert out["degraded"] is False
 
 
+def test_relevance_guard_ignores_generic_only_overlap():
+    import asyncio
+
+    import httpx
+
+    generic = [
+        {"title": "Fastest cars in the world", "url": "https://e1.com/a",
+         "content": "A ranked list of the fastest vehicles.", "engine": "bing"},
+        {"title": "Fastest animals on earth", "url": "https://e2.com/b",
+         "content": "Speed records from wildlife.", "engine": "bing"},
+        {"title": "Fastest internet speed test", "url": "https://e3.com/c",
+         "content": "Measure your connection speed.", "engine": "bing"},
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json={"results": generic, "unresponsive_engines": []})
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await search("fastest way to parse large JSON in python", client=client)
+
+    out = asyncio.run(run())
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "low_relevance"
+
+
+@respx.mock
+async def test_low_relevance_general_search_rescues_to_routed_category(monkeypatch):
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
+    seen_categories = []
+
+    generic = [
+        {"title": "Fastest cars in the world", "url": "https://e1.com/a",
+         "content": "A ranked list of the fastest vehicles.", "engine": "bing"},
+        {"title": "Fastest animals on earth", "url": "https://e2.com/b",
+         "content": "Speed records from wildlife.", "engine": "bing"},
+        {"title": "Fastest internet speed test", "url": "https://e3.com/c",
+         "content": "Measure your connection speed.", "engine": "bing"},
+    ]
+    good = [
+        {"title": "Python parse large JSON efficiently", "url": "https://s1.com/a",
+         "content": "Streaming JSON parsing in python.", "engine": "stackoverflow"},
+        {"title": "Large JSON parsing in Python", "url": "https://s2.com/b",
+         "content": "Use ijson for large files.", "engine": "stackoverflow"},
+        {"title": "JSON parser performance Python", "url": "https://s3.com/c",
+         "content": "Compare json, orjson, and streaming parse.", "engine": "stackoverflow"},
+    ]
+
+    def responder(request):
+        category = request.url.params.get("categories")
+        seen_categories.append(category)
+        page = generic if category == "general" else good
+        return httpx.Response(200, json={"results": page, "unresponsive_engines": []})
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    out = await search("fastest way to parse large JSON in python", base_url=BASE)
+
+    assert seen_categories[:3] == ["general", "general", "it"]
+    assert out["degraded"] is False
+    assert out["degraded_reason"] is None
+    assert out["rescued_category"] == "it"
+    assert "Python" in out["results"][0]["title"]
+
+
+@respx.mock
+async def test_explicit_engines_skip_low_relevance_category_rescue(monkeypatch):
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
+    calls = 0
+
+    def responder(request):
+        nonlocal calls
+        calls += 1
+        assert request.url.params.get("engines") == "bing"
+        return httpx.Response(200, json={"results": [
+            {"title": "Fastest cars in the world", "url": "https://e1.com/a",
+             "content": "A ranked list of the fastest vehicles.", "engine": "bing"},
+            {"title": "Fastest animals on earth", "url": "https://e2.com/b",
+             "content": "Speed records from wildlife.", "engine": "bing"},
+            {"title": "Fastest internet speed test", "url": "https://e3.com/c",
+             "content": "Measure your connection speed.", "engine": "bing"},
+        ], "unresponsive_engines": []})
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    out = await search(
+        "fastest way to parse large JSON in python", base_url=BASE, engines=["bing"]
+    )
+
+    assert calls == 2
+    assert out["degraded"] is True
+    assert out["rescued_category"] is None
+
+
 @respx.mock
 async def test_guard_credits_semantic_rescue(monkeypatch):
     """Hybrid path: zero-lexical-overlap results rescued by high cosine must NOT be flagged
@@ -1598,6 +1725,22 @@ async def test_guard_credits_semantic_rescue(monkeypatch):
     out = await search("quantum entanglement teleportation", base_url=BASE)
     assert out["degraded"] is False
     assert all("_sem_relevant" not in r for r in out["results"])  # transient flag stripped
+
+
+@respx.mock
+async def test_guard_does_not_credit_borderline_semantic_junk(monkeypatch):
+    """Keep-floor semantic rescues are useful, but the health guard should only credit
+    high-confidence semantic matches. Borderline cosine with zero lexical overlap must
+    still mark the result set degraded."""
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: True)
+    monkeypatch.setattr(argus.search.semantic, "similarities", lambda q, texts: [0.4] * len(texts))
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_page([
+        {"title": "Alpha", "url": "https://e/1", "content": "one two three", "engine": "bing"},
+        {"title": "Beta", "url": "https://e/2", "content": "four five six", "engine": "bing"},
+        {"title": "Gamma", "url": "https://e/3", "content": "seven eight nine", "engine": "bing"},
+    ])))
+    out = await search("quantum entanglement teleportation", base_url=BASE)
+    assert out["degraded"] is True and out["degraded_reason"] == "low_relevance"
 
 
 @respx.mock

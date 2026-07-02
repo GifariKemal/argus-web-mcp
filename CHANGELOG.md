@@ -14,6 +14,38 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.4] - 2026-07-02 - Benchmark scope reset + search/PDF tuning
+
+Follow-up benchmark pass after the end-to-end Argus stress work. The active benchmark
+surface is now non-trading by default, while runtime trading tools remain available and
+tested separately.
+
+### Changed
+
+- **Benchmark scope reset:** removed active trading/MQL5 scenarios from `benchmark/scenarios.py`,
+  `benchmark/testset.yaml`, `benchmark/quality_gold.yaml`, burst tests, and the deterministic
+  tool-surface benchmark. Active search scenarios are now 160 non-trading queries across 8
+  categories; `COMPARE_IDS` is now 40 IDs. Active extraction testset is 16 URL items + 8 search
+  queries. Removed the stale `gold/longform-01.md` market/investment gold reference.
+- **Added deterministic tool-surface benchmark** (`benchmark/run_tool_surface.py`) over 19 active
+  non-trading server tool boundaries using local fixtures only. Run artifacts are ignored under
+  `benchmark/_runs/`.
+- **Search relevance tuning:** default SearXNG language now resolves to English unless overridden,
+  semantic low-relevance guarding is stricter, science routing is explicit, and weak general
+  searches can rescue into routed categories (`science`, `it`, `news`) before being marked degraded.
+- **PDF/read latency tuning:** large text PDFs take a fast PyMuPDF text path, and static fetches cap
+  timeout earlier when browser fallback is available.
+
+### Tested
+
+- `ruff check src tests benchmark`
+- Offline suite: 763 passed, 8 deselected.
+- SSRF gate: 45 passed, 100% line + branch coverage for `argus.security.ssrf`.
+- Browser marker: 3 passed. Slow marker: 3 passed. Network marker: 2 passed.
+- Benchmark smoke: tool-surface non-trading 19/19 OK; quality benchmark 2/2 items at
+  `quality_f1=1.000`; live search smoke over 16 non-trading scenarios hit 100% success and 0%
+  throttle, with `dev` still flagged for low overlap/degraded review.
+
 ## [0.4.3] - 2026-07-02 - Gap-scan round 9: convergence + doc sync
 
 A 17-agent workflow (4 subsystem deep-dives + 2 comprehensive doc-drift audits + synthesis +

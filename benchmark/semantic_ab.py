@@ -544,7 +544,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--ids-from-compare",
         action="store_true",
-        help="use the 50 COMPARE_IDS from scenarios.py (default set).",
+        help="use the COMPARE_IDS from scenarios.py (default set).",
     )
     ap.add_argument("--limit", type=int, default=None, help="cap to the first N ids.")
     ap.add_argument("--pace", type=float, default=3.0, help="seconds between queries.")

@@ -2,15 +2,15 @@
 
 Three arms, one goal: surface Argus bugs / findings / areas-to-improve.
 
-  1. ``argus``          - Argus ``search(q, count=10)`` over all 200 SCENARIOS,
+  1. ``argus``          - Argus ``search(q, count=10)`` over all 160 SCENARIOS,
                           paced to survive SearXNG per-IP throttling.
-  2. ``argus-research`` - the real ``argus.research.research`` over the 25
+  2. ``argus-research`` - the real ``argus.research.research`` over the 40
                           COMPARE_IDS (full fetch+extract of top sources).
-  3. (external) Claude WebSearch + Codex CLI over the same 25 - fed in as files,
+  3. (external) Claude WebSearch + Codex CLI over the same 40 - fed in as files,
      merged into the report by ``merge-3way``.
 
-``score`` aggregates the 200-scenario sweep into metrics + a markdown report and
-auto-flags weak categories. ``merge-3way`` builds the n=25 three-way section.
+``score`` aggregates the 160-scenario sweep into metrics + a markdown report and
+auto-flags weak categories. ``merge-3way`` builds the n=40 three-way section.
 
 All aggregation/scoring logic is factored into PURE functions (no I/O) so it is
 unit-tested offline in tests/test_compare_scorer.py.
@@ -95,6 +95,7 @@ def aggregate(records: list[dict]) -> dict:
         return {"n": 0}
     ok = [r for r in records if r.get("ok")]
     throttled = [r for r in records if r.get("throttled")]
+    degraded = [r for r in ok if r.get("degraded")]
     no_results = [
         r for r in records if not r.get("ok") and r.get("code") == "no_results"
     ]
@@ -109,6 +110,7 @@ def aggregate(records: list[dict]) -> dict:
     return {
         "n": n,
         "success_pct": _pct(len(ok), n),
+        "degraded_pct": _pct(len(degraded), n),
         "throttle_pct": _pct(len(throttled), n),
         "no_results_pct": _pct(len(no_results), n),
         "error_pct": _pct(len(other_err), n),
@@ -140,6 +142,7 @@ def engine_distribution(records: list[dict]) -> dict[str, int]:
 MIN_SUCCESS_PCT = 80.0
 MIN_MEAN_OVERLAP = 0.30
 MAX_THROTTLE_PCT = 30.0
+MAX_DEGRADED_PCT = 20.0
 
 
 def flag_findings(by_cat: dict[str, dict]) -> list[dict]:
@@ -158,6 +161,8 @@ def flag_findings(by_cat: dict[str, dict]) -> list[dict]:
             )
         if agg.get("throttle_pct", 0.0) > MAX_THROTTLE_PCT:
             reasons.append(f"throttle {agg['throttle_pct']}% > {MAX_THROTTLE_PCT}%")
+        if agg.get("degraded_pct", 0.0) > MAX_DEGRADED_PCT:
+            reasons.append(f"degraded {agg['degraded_pct']}% > {MAX_DEGRADED_PCT}%")
         if reasons:
             findings.append({"category": cat, "reasons": reasons, "metrics": agg})
     return findings
@@ -172,8 +177,10 @@ def worst_scenarios(records: list[dict], n: int = 10) -> list[dict]:
 
     def key(r: dict) -> tuple:
         ok = bool(r.get("ok"))
+        degraded = bool(r.get("degraded"))
         return (
             ok,  # False (failed) sorts first
+            not degraded,  # degraded successes before healthy successes
             r.get("top1_title_overlap", 0.0) if ok else -1.0,
             r.get("result_count", 0) if ok else -1,
             r.get("id", ""),
@@ -234,8 +241,22 @@ async def run_argus(args) -> None:
     # *web pages* (the research arm), not the search backend.
     items = _select_scenarios(args)
     records: list[dict] = []
-    client = httpx.AsyncClient(timeout=30)
+    client = httpx.AsyncClient(timeout=httpx.Timeout(30, connect=2))
     try:
+        try:
+            preflight = await client.get(
+                "http://127.0.0.1:8888/search",
+                params={"q": "argus preflight", "format": "json", "engines": "bing"},
+                timeout=httpx.Timeout(10, connect=2),
+            )
+            preflight.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - benchmark infra gate, not app logic
+            raise SystemExit(
+                "SearXNG preflight failed at http://127.0.0.1:8888. "
+                "Start deploy/searxng first (`docker compose up -d`) before running "
+                f"the live Argus search benchmark. Cause: {type(exc).__name__}: {exc}"
+            ) from exc
+
         for i, s in enumerate(items):
             # Deterministic pacing + index-derived jitter (no RNG) to dodge per-IP throttle.
             if i > 0:
@@ -251,6 +272,8 @@ async def run_argus(args) -> None:
                 "engines": [],
                 "top1_title_overlap": 0.0,
                 "throttled": False,
+                "degraded": False,
+                "degraded_reason": None,
             }
             t0 = time.perf_counter()
             try:
@@ -260,6 +283,8 @@ async def run_argus(args) -> None:
                 rec["result_count"] = len(results)
                 rec["engines"] = res.get("engines_used", [])
                 rec["ok"] = len(results) >= 1
+                rec["degraded"] = bool(res.get("degraded"))
+                rec["degraded_reason"] = res.get("degraded_reason")
                 if results:
                     rec["top1_title_overlap"] = round(
                         title_overlap(s["query"], results[0].get("title", "")), 3
@@ -272,6 +297,7 @@ async def run_argus(args) -> None:
                 rec["latency_s"] = round(time.perf_counter() - t0, 3)
                 rec["code"] = f"unexpected:{type(e).__name__}"
             records.append(rec)
+            _write_json(args.out, records)  # resume/debug friendly; survives interrupts
             if (i + 1) % 20 == 0:
                 done = sum(1 for r in records if r["ok"])
                 print(f"  [{i + 1}/{len(items)}] ok={done}", file=sys.stderr)
@@ -354,6 +380,7 @@ def _overall_table(agg: dict) -> str:
         "| metric | value |\n|---|---|\n"
         f"| scenarios | {agg.get('n', 0)} |\n"
         f"| success % | {agg.get('success_pct', 0)} |\n"
+        f"| degraded % | {agg.get('degraded_pct', 0)} |\n"
         f"| throttle % | {agg.get('throttle_pct', 0)} |\n"
         f"| no_results % | {agg.get('no_results_pct', 0)} |\n"
         f"| other-error % | {agg.get('error_pct', 0)} |\n"
@@ -366,15 +393,16 @@ def _overall_table(agg: dict) -> str:
 
 def _per_category_table(by_cat: dict[str, dict]) -> str:
     head = (
-        "| category | n | success% | throttle% | no_res% | err% | "
+        "| category | n | success% | degraded% | throttle% | no_res% | err% | "
         "p50 | p95 | mean#res | mean_overlap |\n"
-        "|---|---|---|---|---|---|---|---|---|---|\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     rows = []
     for cat, a in by_cat.items():
         rows.append(
-            f"| {cat} | {a['n']} | {a['success_pct']} | {a['throttle_pct']} | "
-            f"{a['no_results_pct']} | {a['error_pct']} | {a['latency_p50']} | "
+            f"| {cat} | {a['n']} | {a['success_pct']} | {a.get('degraded_pct', 0)} | "
+            f"{a['throttle_pct']} | {a['no_results_pct']} | {a['error_pct']} | "
+            f"{a['latency_p50']} | "
             f"{a['latency_p95']} | {a['mean_result_count']} | {a['mean_top1_overlap']} |"
         )
     return head + "\n".join(rows) + "\n"
@@ -410,7 +438,8 @@ def render_report(records: list[dict]) -> str:
     if findings:
         parts.append(
             f"Thresholds: success >= {MIN_SUCCESS_PCT}%, "
-            f"mean_top1_overlap >= {MIN_MEAN_OVERLAP}, throttle <= {MAX_THROTTLE_PCT}%.\n\n"
+            f"mean_top1_overlap >= {MIN_MEAN_OVERLAP}, throttle <= {MAX_THROTTLE_PCT}%, "
+            f"degraded <= {MAX_DEGRADED_PCT}%.\n\n"
         )
         for f in findings:
             parts.append(f"- **AREA TO IMPROVE - {f['category']}**: {'; '.join(f['reasons'])}\n")
@@ -418,14 +447,15 @@ def render_report(records: list[dict]) -> str:
         parts.append("No category breached the AREA-TO-IMPROVE thresholds.\n")
 
     parts.append("\n### 10 worst scenarios (manual review)\n")
-    parts.append("| id | category | ok | overlap | #res | code | query |\n")
-    parts.append("|---|---|---|---|---|---|---|\n")
+    parts.append("| id | category | ok | degraded | overlap | #res | code | query |\n")
+    parts.append("|---|---|---|---|---|---|---|---|\n")
     for r in worst:
         q = r.get("query", "")
         q = (q[:57] + "...") if len(q) > 60 else q
         parts.append(
             f"| {r.get('id')} | {r.get('category')} | {r.get('ok')} | "
-            f"{r.get('top1_title_overlap', 0.0)} | {r.get('result_count', 0)} | "
+            f"{r.get('degraded', False)} | {r.get('top1_title_overlap', 0.0)} | "
+            f"{r.get('result_count', 0)} | "
             f"{r.get('code')} | {q} |\n"
         )
     return "".join(parts)
@@ -575,22 +605,22 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Argus 3-arm search benchmark harness")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    a = sub.add_parser("argus", help="run Argus search over scenarios (default: all 200)")
+    a = sub.add_parser("argus", help="run Argus search over scenarios (default: all 160)")
     a.add_argument("--out", required=True)
     a.add_argument("--pace", type=float, default=4.0, help="base seconds between calls")
     a.add_argument("--limit", type=int, default=None)
     a.add_argument("--ids", default=None, help="comma-separated scenario ids")
 
-    r = sub.add_parser("argus-research", help="run argus.research over the 25 COMPARE_IDS")
+    r = sub.add_parser("argus-research", help="run argus.research over the 40 COMPARE_IDS")
     r.add_argument("--out", required=True)
     r.add_argument("--ids-from-compare", action="store_true", default=True)
     r.add_argument("--pace", type=float, default=4.0)
 
-    s = sub.add_parser("score", help="aggregate the argus 200-run into a report")
+    s = sub.add_parser("score", help="aggregate the argus 160-run into a report")
     s.add_argument("--argus", required=True)
     s.add_argument("--out", default=None)
 
-    m = sub.add_parser("merge-3way", help="merge the n=25 three-way arms into the report")
+    m = sub.add_parser("merge-3way", help="merge the n=40 three-way arms into the report")
     m.add_argument("--argus-research", required=True)
     m.add_argument("--claude", required=True)
     m.add_argument("--codex-dir", required=True)

@@ -7,6 +7,8 @@ from typing import Any
 import fitz  # pymupdf
 import pymupdf4llm
 
+_FAST_TEXT_MIN_PAGES = 20
+
 
 def _parse_pages(pages: str | None, total: int) -> list[int]:
     """Parse '1-5' / '3' (1-indexed inclusive) into a 0-indexed page list.
@@ -67,6 +69,21 @@ def _find_tables(doc: fitz.Document, page_indices: list[int]) -> list[dict[str, 
     return tables
 
 
+def _extract_plain_text(doc: fitz.Document, page_indices: list[int]) -> str:
+    """Fast full-document text path for large PDFs.
+
+    pymupdf4llm's markdown pipeline can spend tens of seconds on graphics-heavy
+    report PDFs even when the caller only asked for text. This path still returns
+    every requested page, but skips expensive layout/table inference.
+    """
+    parts: list[str] = []
+    for idx in page_indices:
+        text = doc[idx].get_text("text", sort=True).strip()
+        if text:
+            parts.append(f"## Page {idx + 1}\n\n{text}")
+    return "\n\n".join(parts).strip()
+
+
 def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> dict[str, Any]:
     """Extract a PDF to markdown using pymupdf4llm.
 
@@ -78,17 +95,28 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
     try:
         total = doc.page_count
         page_indices = _parse_pages(pages, total)
+        metadata = dict(doc.metadata or {})
 
-        table_strategy = "lines_strict" if mode == "tables" else "lines"
+        if mode == "text" and len(page_indices) >= _FAST_TEXT_MIN_PAGES:
+            metadata["engine"] = "pymupdf-fast-text"
+            return {
+                "pages_total": total,
+                "pages_returned": len(page_indices),
+                "content": _extract_plain_text(doc, page_indices),
+                "tables": [],
+                "metadata": metadata,
+            }
+
+        text_only = mode != "tables"
         chunks = pymupdf4llm.to_markdown(
             doc,
             pages=page_indices,
             page_chunks=True,
-            table_strategy=table_strategy,
+            table_strategy="lines_strict" if mode == "tables" else None,
+            ignore_graphics=text_only,
             show_progress=False,
         )
         content = "\n\n".join(c["text"].strip() for c in chunks).strip()
-        metadata = dict(doc.metadata or {})
 
         tables = _find_tables(doc, page_indices) if mode == "tables" else []
 

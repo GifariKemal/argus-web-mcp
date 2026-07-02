@@ -760,8 +760,11 @@ async def test_smart_search_routes(app_state, monkeypatch):
     assert r1["route"] == "github" and "result" in r1
     r2 = await server.smart_search("transformer attention paper arxiv")
     assert r2["route"] == "scholar"
-    r3 = await server.smart_search("best pizza in town")
-    assert r3["route"] == "general"
+    r3 = await server.smart_search("P versus NP problem explained simply")
+    assert r3["route"] == "science"
+    assert calls["search"] == "science"
+    r4 = await server.smart_search("best pizza in town")
+    assert r4["route"] == "general"
 
 
 async def test_github_search_delegates(app_state, monkeypatch):

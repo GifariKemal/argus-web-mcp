@@ -28,8 +28,8 @@ For the durable, tracked results (numbers + findings), read
 
 | File | Role |
 |---|---|
-| `testset.yaml` | The test set: ~36 URL items (7 categories) + 13 search queries. Each item may carry a `gold_reference` pointing to a curated `gold/<id>.md`. |
-| `quality_gold.yaml` | **The FAIR gold.** 4 hand-verified items spanning page types, each with `must_contain` (main-content phrases that must be captured) + `must_not_contain` (real boilerplate that must be absent). Formatting-agnostic - favours no adapter. |
+| `testset.yaml` | The active non-trading test set: 16 URL items + 8 search queries. Each item may carry a `gold_reference` pointing to a curated `gold/<id>.md`. |
+| `quality_gold.yaml` | **The FAIR gold.** 2 hand-verified non-trading items spanning page types, each with `must_contain` (main-content phrases that must be captured) + `must_not_contain` (real boilerplate that must be absent). Formatting-agnostic - favours no adapter. |
 | `scorer.py` | Stdlib-only metrics (no rouge/nltk dep): legacy `rouge_l`, `token_f1`, `truncation_completeness`; **fair `content_recall`, `boilerplate_rejection`, `quality_f1`**; plus `success`, `lcs_len`, `score_item`. Run `python benchmark/scorer.py` for an assert self-check. |
 | `adapters.py` | Uniform `async run(item) -> {content, latency, ok}`. Adapters: `argus` (real in-process tool), `raw_trafilatura`, `readability_only` (free baselines). Paid adapters are a documented stub in `KEYED_ADAPTERS` (skipped - never called without a key). |
 | `run_bench.py` | Runner - loads testset, runs adapters, scores, writes `report.md`. |
@@ -41,10 +41,10 @@ For the durable, tracked results (numbers + findings), read
 
 | File | Role |
 |---|---|
-| `scenarios.py` | The query instrument: `SCENARIOS` = 200 real queries across 10 SURIOTA-relevant categories (~20 each); `COMPARE_IDS` = a 50-id stratified sample (exactly 5 per category) for the expensive head-to-head runs. Run `python benchmark/scenarios.py` for the self-check. |
-| `run_compare.py` | 3-arm harness. `argus` runs `search()` over all 200 scenarios (paced for SearXNG per-IP throttle); `argus-research` runs `research()` over the compare ids; `score` aggregates the 200-sweep + auto-flags weak categories; `merge-3way` builds the Argus-vs-Claude-vs-Codex section. Aggregation is pure functions (offline-tested in `tests/test_compare_scorer.py`). |
+| `scenarios.py` | The query instrument: `SCENARIOS` = 160 real non-trading queries across 8 SURIOTA-relevant categories (~20 each); `COMPARE_IDS` = a 40-id stratified sample (exactly 5 per category) for the expensive head-to-head runs. Run `python benchmark/scenarios.py` for the self-check. |
+| `run_compare.py` | 3-arm harness. `argus` runs `search()` over all 160 active scenarios (paced for SearXNG per-IP throttle); `argus-research` runs `research()` over the compare ids; `score` aggregates the sweep + auto-flags weak categories; `merge-3way` builds the Argus-vs-Claude-vs-Codex section. Aggregation is pure functions (offline-tested in `tests/test_compare_scorer.py`). |
 | `run_4way.py` | 4-condition harness with `--repeat` plus token / cost / speed: claude-native, claude-argus, codex-native, codex-argus. Shells out to the CLIs (`run`), then `score` renders the table. Pure parse/aggregate functions are offline-tested in `tests/test_4way_scorer.py`. Per-call wall-clock cap 180s. |
-| `run_codex.sh` | Drives Codex CLI (`web_search=live`) over the 50 `COMPARE_IDS`, one raw answer per scenario to `codex_25/<id>.txt`. Idempotent (skips ids that already have non-empty output, so it resumes after a stop). |
+| `run_codex.sh` | Drives Codex CLI (`web_search=live`) over the 40 `COMPARE_IDS`, one raw answer per scenario to `codex_25/<id>.txt`. Idempotent (skips ids that already have non-empty output, so it resumes after a stop). |
 | `burst_test.py` | Un-paced burst re-validation: exercises Argus backoff + multi-engine redundancy vs a naive raw client to measure throttle recovery. |
 | `loadtest.py` | Local load test (no OOM / leak check). |
 | `semantic_ab.py` | Semantic rerank A/B: scores the same SearXNG candidate pool reranked lexical vs hybrid at nDCG@5 (see RESULTS.md). |
@@ -76,11 +76,11 @@ The runner is resilient: a failing fetch for one item is caught and recorded
 ### Comparison harness
 
 ```bash
-# 3-arm: Argus search over all 200 scenarios, then aggregate + auto-flag
+# 3-arm: Argus search over all 160 active scenarios, then aggregate + auto-flag
 ./.venv/Scripts/python.exe benchmark/run_compare.py argus --out out.json --pace 4.0
 ./.venv/Scripts/python.exe benchmark/run_compare.py score --argus out.json
 
-# Argus research() over the 50 compare ids, then merge the 3-way section
+# Argus research() over the 40 compare ids, then merge the 3-way section
 ./.venv/Scripts/python.exe benchmark/run_compare.py argus-research --out r.json --ids-from-compare
 ./.venv/Scripts/python.exe benchmark/run_compare.py merge-3way --argus-research r.json \
     --claude claude.json --codex-dir benchmark/codex_25
@@ -89,7 +89,7 @@ The runner is resilient: a failing fetch for one item is caught and recorded
 ./.venv/Scripts/python.exe benchmark/run_4way.py run --out out.json --repeat 3
 ./.venv/Scripts/python.exe benchmark/run_4way.py score --in out.json
 
-# Codex native answers over the 50 compare ids (idempotent, resumable)
+# Codex native answers over the 40 compare ids (idempotent, resumable)
 bash benchmark/run_codex.sh
 ```
 
@@ -119,7 +119,7 @@ want - "captured the main content AND left out the boilerplate" - independent of
 - **quality_f1** - harmonic mean of the two. A raw dump -> recall 1.0 but rejection low -> low f1;
   an over-trimmer that drops body text -> low recall -> low f1. Favours no adapter by construction.
 
-Gold lives in `quality_gold.yaml` (4 items: a news page with ads/nav, FastAPI docs, a long
+Gold lives in `quality_gold.yaml` (2 active non-trading items: FastAPI docs and a long
 Wikipedia article, the near-zero-boilerplate Paul Graham essay). `must_contain` phrases are
 verbatim main-content; `must_not_contain` are real nav/subscribe/cookie/footer/ad strings
 fetched live from each page. `run_bench.py --quality` runs every free adapter on those URLs,
@@ -131,10 +131,10 @@ historical comparison.**
 
 **P2 update (2026-06-24): gold is now INDEPENDENTLY curated.** The P1 gold was
 extracted *with Argus itself* (trafilatura), giving Argus a meaningless home-advantage
-ROUGE-L of 1.000. Three stable text items - `longform-04`, `docs-01`, `longform-01` -
-have been re-curated with a **neutral third extractor** via `benchmark/regold.py`:
+ROUGE-L of 1.000. The active non-trading re-curated items - `longform-04`, `docs-01` -
+were curated with a **neutral third extractor** via `benchmark/regold.py`:
 BeautifulSoup `.get_text()` over each page's main-content DOM node (`<font>` for the
-Paul Graham essay, `<article>` for the FastAPI doc, `#mw-content-text` for Wikipedia),
+Paul Graham essay, `<article>` for the FastAPI doc),
 with only universal furniture removed (`script`/`style`/`nav`/`header`/`footer`, plus
 Wikipedia ref/edit markers). This is a plain DOM text-dump with **no article-detection
 heuristic**, so it is independent of BOTH Argus (trafilatura) AND the readability
@@ -162,7 +162,7 @@ The two remaining P1 gold files (`longform-03`, `docs-03`) were NOT re-curated i
 are still Argus-extracted approximations - exclude them from honest-gate reads until re-golded.
 
 Independently re-curated items: `longform-04` (Paul Graham essay), `docs-01` (FastAPI
-tutorial), `longform-01` (Wikipedia gold-as-investment).
+tutorial).
 
 ## Adapters
 

@@ -80,6 +80,25 @@ def test_news_queries(query):
     assert classify(query)["route"] == "news"
 
 
+# --- science ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "P versus NP problem explained simply",
+        "BM25 vs dense retrieval hybrid search",
+        "speculative decoding LLM inference speedup",
+        "dark matter evidence galaxy rotation curves",
+        "photosynthesis light-dependent reactions steps",
+        "vector database HNSW index recall tradeoff",
+        "uv vs pip vs poetry package manager comparison",
+    ],
+)
+def test_science_queries(query):
+    assert classify(query)["route"] == "science"
+
+
 # --- it -----------------------------------------------------------------------
 
 
@@ -120,6 +139,7 @@ def test_no_signal_scores_all_zero_and_general():
     # only the 'general' baseline (0) - no real route scored
     assert out["scores"]["github"] == 0
     assert out["scores"]["scholar"] == 0
+    assert out["scores"]["science"] == 0
     assert out["scores"]["news"] == 0
     assert out["scores"]["it"] == 0
 

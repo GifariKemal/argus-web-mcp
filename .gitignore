@@ -24,6 +24,7 @@ deploy/searxng/settings.yml.bak
 
 # Benchmark run artifacts - REGENERABLE (harness + RESULTS.md/headtohead are tracked)
 benchmark/results/
+benchmark/_runs/
 benchmark/*.json
 benchmark/codex_*/
 benchmark/*_report.md

@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 import argus.semantic as semantic
+from argus.router import classify
 from argus.security.ssrf import SSRFError, build_safe_async_client, validate_url
 
 _VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
@@ -23,6 +24,8 @@ _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 # Spread `general` load across many free engines so DuckDuckGo isn't the sole source
 # (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
 _DEFAULT_ENGINES = ["duckduckgo", "bing", "brave", "mojeek", "startpage", "qwant"]
+_DEFAULT_LANG_ENV = "ARGUS_DEFAULT_SEARCH_LANG"
+_DEFAULT_LANG = "en"
 _MIN_KEEP = 3  # safety floor: never drop below this many of the backend's results
 _TITLE_WEIGHT = 2.0  # title-token coverage counts double vs snippet coverage
 # Recency boost (rerank v2): a bounded ADDITIVE bump for results carrying a `published`
@@ -41,6 +44,7 @@ _SEM_WEIGHT = 0.6
 # rescued), but one with BOTH zero lexical overlap AND cosine < _SEM_FLOOR is clearly
 # irrelevant and dropped (subject to the _MIN_KEEP safety floor).
 _SEM_FLOOR = 0.3
+_SEM_GUARD_FLOOR = 0.55
 # Relative relevance gate (v3): after the zero-overlap / SEM_FLOOR drop, apply a gentle
 # relative floor: drop a kept result only if BOTH (a) its score < _REL_FLOOR * top_score
 # AND (b) keeping the drop still leaves at least _MIN_KEEP results. This trims "single
@@ -69,7 +73,8 @@ _DOCKER_INTENT_TOKENS = frozenset(
 # relative-relevance gate.
 _GENERIC_TOKENS = frozenset(
     {"guide", "best", "how", "top", "manager", "component",
-     "tutorial", "example", "overview", "introduction"}
+     "tutorial", "example", "overview", "introduction", "fast", "fastest",
+     "way", "difference", "explained", "simply", "status", "comparison"}
 )
 _GENERIC_WEIGHT = 0.5  # multiply score by this when ALL matched query tokens are generic
 # Stopwords excluded from the RELEVANCE-GUARD overlap check only (never from rerank
@@ -366,6 +371,7 @@ def _rerank_hybrid(
         # Transient flag: lets search()'s lexical relevance guard credit a semantically
         # rescued (zero-lexical-overlap) row as relevant. Stripped before search() returns.
         r["_sem_relevant"] = sem_ok
+        r["_sem_score"] = sem
         rows.append((blended, fresh_rank, idx, keep, r))
 
     # Blended score desc; recency tiebreak (published first); then original index (stable).
@@ -437,6 +443,34 @@ def _fallback_base_urls(explicit: list[str] | None) -> list[str]:
         return explicit
     raw = os.getenv("ARGUS_SEARXNG_FALLBACKS", "")
     return [u.strip() for u in raw.split(",") if u.strip()]
+
+
+def _default_lang() -> str | None:
+    """Default SearXNG language for stable relevance; empty env disables it."""
+    raw = os.getenv(_DEFAULT_LANG_ENV)
+    if raw is None:
+        return _DEFAULT_LANG
+    raw = raw.strip()
+    return raw or None
+
+
+def _is_low_relevance(query: str, results: list[dict]) -> bool:
+    """True when most returned rows do not match content-bearing query tokens."""
+    qtok = _tokens(query) - _STOPWORDS
+    if not qtok or not results:
+        return False
+    guard_tokens = qtok - _GENERIC_TOKENS or qtok
+    min_match = 2 if len(guard_tokens) >= 4 else 1
+    overlap = sum(
+        1
+        for r in results
+        for matched in [
+            (_tokens(r.get("title", "")) | _tokens(r.get("snippet", ""))) & guard_tokens
+        ]
+        if (r.get("_sem_relevant") and r.get("_sem_score", 0.0) >= _SEM_GUARD_FLOOR)
+        or len(matched) >= min_match
+    )
+    return overlap * 2 < len(results)
 
 
 async def _search_backend(
@@ -526,8 +560,9 @@ async def search(
         params["engines"] = ",".join(_DEFAULT_ENGINES)
     if time_range:
         params["time_range"] = time_range
-    if lang:
-        params["language"] = lang
+    effective_lang = lang if lang is not None else _default_lang()
+    if effective_lang:
+        params["language"] = effective_lang
     if safesearch:
         params["safesearch"] = str(safesearch)
 
@@ -540,6 +575,7 @@ async def search(
     backend = base_url
     degraded = False
     degraded_reason: str | None = None
+    rescued_category: str | None = None
     fb_client = fallback_client
     fb_owns = False
     try:
@@ -607,27 +643,57 @@ async def search(
     # results share a query token (title or snippet) with the query, the response is
     # untrustworthy: flag it degraded + reason so callers (research / the agent) never silently
     # treat junk as good results. Deterministic; majority-relevant sets are untouched.
-    qtok = _tokens(q) - _STOPWORDS  # guard overlap on content-bearing tokens only
-    if qtok and results:
-        _overlap = sum(
-            1
-            for r in results
-            # semantically-rescued rows (hybrid path) count as relevant, else a paraphrase
-            # set with zero lexical overlap would be wrongly flagged - defeating the hybrid
-            # blend the rescue exists for. Falls back to pure lexical on the lexical-only path.
-            if r.get("_sem_relevant")
-            or (_tokens(r.get("title", "")) & qtok)
-            or (_tokens(r.get("snippet", "")) & qtok)
-        )
-        # Flag when MOST results are off-topic. A single incidental token match must not
-        # mask a garbage set: a throttled sole-engine (all others CAPTCHA-suspended) returns
-        # generic filler that occasionally shares one word with the query. Majority rule
-        # (fewer than half overlapping) catches that while leaving on-topic sets untouched.
-        if _overlap * 2 < len(results):
-            degraded, degraded_reason = True, "low_relevance"
+    # Flag when MOST results are off-topic. A single incidental/generic token match must
+    # not mask a garbage set: a throttled sole-engine can return filler that happens to
+    # share one word with the query. Majority rule catches that while leaving on-topic sets.
+    if _is_low_relevance(q, results):
+        degraded, degraded_reason = True, "low_relevance"
+
+    # If the broad general pool is garbage, try one deterministic category rescue. This
+    # only applies when the caller did not explicitly choose engines/domains; manual
+    # constraints are respected exactly.
+    if (
+        degraded_reason == "low_relevance"
+        and categories == "general"
+        and engines is None
+        and not include_domains
+        and not exclude_domains
+    ):
+        routed = classify(q)["route"]
+        if routed in {"science", "it", "news"}:
+            rescue_params = dict(params)
+            rescue_params["categories"] = routed
+            rescue_params.pop("engines", None)
+            rescue_client = None
+            try:
+                if owns_client:
+                    rescue_client = httpx.AsyncClient(
+                        timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
+                    )
+                    rescue_results = await _search_backend(
+                        q, count, rescue_params, backend, rescue_client, retries
+                    )
+                else:
+                    rescue_results = await _search_backend(
+                        q, count, rescue_params, backend, client, retries
+                    )
+                rescue_ranked = rerank(
+                    q, rescue_results, recency=routed == "news" or bool(time_range),
+                    semantic_rerank=_sr,
+                )[:count]
+                if not _is_low_relevance(q, rescue_ranked):
+                    results = rescue_ranked
+                    degraded, degraded_reason = False, None
+                    rescued_category = routed
+            except SearchError:
+                pass
+            finally:
+                if rescue_client is not None:
+                    await rescue_client.aclose()
 
     for r in results:  # strip the transient hybrid-rerank flag from the payload
         r.pop("_sem_relevant", None)
+        r.pop("_sem_score", None)
 
     engines_used = sorted({r["engine"] for r in results if r["engine"]})
     return {
@@ -638,4 +704,5 @@ async def search(
         "backend": backend,
         "degraded": degraded,
         "degraded_reason": degraded_reason,
+        "rescued_category": rescued_category,
     }

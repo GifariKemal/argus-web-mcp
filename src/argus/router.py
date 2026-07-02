@@ -6,6 +6,7 @@ of the lowercased query string: no network, no randomness, no LLM. Routes map to
 
     "github"  -> github_search(repositories)          (code/repo/library-impl intent)
     "scholar" -> scholar_search(...)                  (academic/paper/research intent)
+    "science" -> search(category="science")           (science / academic-domain intent)
     "news"    -> search(category="news", time_range)  (recency/current-events intent)
     "it"      -> search(category="it")                (programming how-to/error/API intent)
     "general" -> search(category="general")           (default / everything else)
@@ -19,10 +20,10 @@ so it only wins when nothing else scored. Extend by adding entries to ``_TOKENS`
 
 import re
 
-ROUTES = ("github", "scholar", "news", "it", "general")
+ROUTES = ("github", "scholar", "science", "news", "it", "general")
 
 # Tiebreak order on EXACTLY equal top scores - higher-precision intents first.
-_PRIORITY = ("scholar", "github", "news", "it", "general")
+_PRIORITY = ("scholar", "github", "science", "news", "it", "general")
 
 # Single-word signals: route -> {token: weight}. Matched against tokenized words.
 _TOKENS: dict[str, dict[str, int]] = {
@@ -65,6 +66,38 @@ _TOKENS: dict[str, dict[str, int]] = {
         "stock": 2,
         "stocks": 2,
     },
+    "science": {
+        "algorithm": 2,
+        "attention": 1,
+        "bm25": 3,
+        "cellular": 2,
+        "climate": 2,
+        "cosmology": 2,
+        "decoding": 2,
+        "dense": 2,
+        "diffusion": 2,
+        "distillation": 2,
+        "entropy": 2,
+        "equation": 2,
+        "equations": 2,
+        "evidence": 2,
+        "gradient": 2,
+        "hnsw": 3,
+        "hypothesis": 3,
+        "inference": 2,
+        "llm": 2,
+        "mechanism": 1,
+        "model": 1,
+        "photosynthesis": 3,
+        "protein": 2,
+        "quantum": 3,
+        "retrieval": 2,
+        "riemann": 3,
+        "speculative": 2,
+        "theorem": 2,
+        "turbulence": 2,
+        "vector": 2,
+    },
     "it": {
         "error": 2,
         "exception": 2,
@@ -84,6 +117,12 @@ _TOKENS: dict[str, dict[str, int]] = {
         "java": 2,
         "sql": 2,
         "bash": 2,
+        "json": 2,
+        "next": 2,
+        "hydration": 2,
+        "pandas": 2,
+        "react": 2,
+        "ssr": 2,
     },
 }
 
@@ -113,11 +152,31 @@ _PHRASES: dict[str, list[tuple[str, int]]] = {
         ("this week", 3),
         ("this year", 2),
     ],
+    "science": [
+        ("bell inequality", 4),
+        ("dark matter", 4),
+        ("dense retrieval", 4),
+        ("dot product attention", 4),
+        ("gradient accumulation", 4),
+        ("hybrid search", 3),
+        ("markov chain", 4),
+        ("navier stokes", 4),
+        ("p versus np", 5),
+        ("p vs np", 5),
+        ("scaled dot product", 4),
+        ("speculative decoding", 4),
+        ("teacher student", 3),
+        ("uv vs pip", 4),
+        ("pip vs poetry", 4),
+        ("vector database", 4),
+    ],
     "it": [
         ("how to", 3),
         ("stack trace", 4),
         ("c++", 2),
         ("how do i", 3),
+        ("app router", 3),
+        ("server actions", 3),
     ],
 }
 

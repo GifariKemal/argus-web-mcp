@@ -1,22 +1,22 @@
 """Large-scale search benchmark scenarios for Argus.
 
-`SCENARIOS` is the test instrument: 200 real, diverse, specific web-search queries
-spread across 10 SURIOTA-relevant categories (~20 each). Queries deliberately mix
+`SCENARIOS` is the test instrument: 160 real, diverse, specific web-search queries
+spread across 8 non-trading SURIOTA-relevant categories (~20 each). Queries deliberately mix
 factual lookups, entity/name searches, how-to questions, recency-sensitive (2026)
 topics, and obscure technical terms, with varied length - so the benchmark exercises
 the search/relevance pipeline broadly, not a single query shape.
 
-`COMPARE_IDS` is a 50-id stratified sample (exactly 5 per category) for the live
+`COMPARE_IDS` is a 40-id stratified sample (exactly 5 per category) for the live
 3-way comparison (Argus research vs Claude WebSearch vs Codex CLI), which is far
-more expensive per scenario than the 200-scenario SearXNG sweep.
+more expensive per scenario than the 160-scenario SearXNG sweep.
 
 Run `python benchmark/scenarios.py` for the self-check.
 """
 
 from __future__ import annotations
 
-# Each category contributes 20 queries. id = "c<NN>-<nn>" where NN is the 1-based
-# category index and nn is the 1-based query index within that category.
+# Each category contributes 20 queries. id = "c<NN>-<nn>" where NN is the original
+# stable category number and nn is the 1-based query index within that category.
 _CATEGORIES: dict[str, list[str]] = {
     "dev": [
         "python 3.13 free-threaded GIL removal status",
@@ -61,50 +61,6 @@ _CATEGORIES: dict[str, list[str]] = {
         "I2C clock stretching slave hold explained",
         "ESP32 ULP coprocessor assembly wake threshold",
         "bootloader vs application partition table esp32",
-    ],
-    "trading": [
-        "XAUUSD gold price drivers real yields DXY correlation",
-        "how to read COT report commercial vs non-commercial",
-        "FOMC meeting schedule 2026 rate decision dates",
-        "GBPJPY volatility carry trade interest differential",
-        "what is the VIX term structure contango",
-        "forex session overlap London New York liquidity",
-        "Sharpe ratio vs Sortino ratio difference",
-        "how does triple-barrier labeling work in finance ML",
-        "order flow imbalance market microstructure",
-        "Kelly criterion position sizing formula",
-        "gold spot vs futures basis explained",
-        "what moves USDJPY carry unwind risk",
-        "backtesting overfitting walk-forward analysis",
-        "ATR based stop loss volatility position sizing",
-        "DXY dollar index weighting components",
-        "central bank gold buying 2026 reserves",
-        "what is a liquidity sweep stop hunt",
-        "yield curve inversion recession indicator history",
-        "monte carlo simulation trading equity curve drawdown",
-        "options gamma exposure dealer hedging effect",
-    ],
-    "mql5": [
-        "MQL5 OnTick event handler structure example",
-        "how to send order with CTrade class MQL5",
-        "MetaTrader 5 strategy tester optimization genetic",
-        "MQL5 iCustom call custom indicator buffer",
-        "expert advisor magic number multiple EA same chart",
-        "MQL5 CopyRates fill rates array timeseries",
-        "MetaTrader 5 python API order_send filling mode",
-        "MQL5 trailing stop loss implementation OnTick",
-        "how to detect new bar formation MQL5",
-        "MQL5 OrderSendAsync vs OrderSend difference",
-        "MetaTrader 5 backtest tick data quality 99 percent",
-        "MQL5 ENUM_TIMEFRAMES PERIOD_CURRENT usage",
-        "MQL5 hedging vs netting account mode",
-        "how to read account equity balance MQL5",
-        "MQL5 ArraySetAsSeries indexing direction",
-        "MetaTrader 5 VPS latency execution slippage",
-        "MQL5 custom symbol synthetic instrument create",
-        "MQL5 PositionGetDouble PROFIT current position",
-        "expert advisor recompile cache MT5 reload",
-        "MQL5 OnTradeTransaction deal event handling",
     ],
     "web": [
         "React 19 use hook server components",
@@ -152,15 +108,15 @@ _CATEGORIES: dict[str, list[str]] = {
     ],
     "news": [
         "latest AI model releases 2026 frontier labs",
-        "Federal Reserve interest rate decision June 2026",
+        "EU digital identity wallet rollout 2026 update",
         "EU AI Act enforcement 2026 compliance deadline",
         "semiconductor export controls 2026 China update",
-        "gold price all time high 2026 news",
+        "AI data center energy demand 2026 news",
         "OpenAI Anthropic Google latest announcement 2026",
         "Nvidia GPU shortage datacenter 2026",
-        "Bitcoin ETF flows 2026 institutional adoption",
+        "open source security funding 2026 trends",
         "climate policy COP 2026 agreement outcome",
-        "USD interest rate outlook 2026 forecast",
+        "global public health funding 2026 forecast",
         "major data breach cybersecurity 2026",
         "electric vehicle market share 2026 trends",
         "quantum computing milestone 2026 breakthrough",
@@ -241,11 +197,22 @@ _CATEGORIES: dict[str, list[str]] = {
 }
 
 CATEGORIES: tuple[str, ...] = tuple(_CATEGORIES.keys())
+_CATEGORY_NUMBERS: dict[str, int] = {
+    "dev": 1,
+    "firmware": 2,
+    "web": 5,
+    "ai_ml": 6,
+    "news": 7,
+    "docs": 8,
+    "science": 9,
+    "business": 10,
+}
 
 
 def _build_scenarios() -> list[dict]:
     scenarios: list[dict] = []
-    for cat_idx, (category, queries) in enumerate(_CATEGORIES.items(), start=1):
+    for category, queries in _CATEGORIES.items():
+        cat_idx = _CATEGORY_NUMBERS[category]
         for q_idx, query in enumerate(queries, start=1):
             scenarios.append(
                 {
@@ -260,15 +227,13 @@ def _build_scenarios() -> list[dict]:
 SCENARIOS: list[dict] = _build_scenarios()
 
 
-# Stratified sample for the live 3-way comparison: exactly 5 per category, 50 total
-# (10 categories x 5). Picks are spread across each category's 1..20 index range
+# Stratified sample for the live 3-way comparison: exactly 5 per category, 40 total
+# (8 categories x 5). Picks are spread across each category's 1..20 index range
 # (early / lower-middle / middle / upper-middle / late) for diversity. The first 2-3
 # of each row are the original 25-id sample; the rest extend it to 5/category.
 _COMPARE_PICKS: dict[str, list[int]] = {
     "dev": [1, 10, 18, 4, 14],
     "firmware": [2, 14, 5, 11, 18],
-    "trading": [1, 8, 17, 4, 12],
-    "mql5": [2, 13, 5, 10, 17],
     "web": [1, 11, 20, 5, 15],
     "ai_ml": [1, 16, 5, 9, 13],
     "news": [2, 5, 13, 8, 17],
@@ -279,10 +244,9 @@ _COMPARE_PICKS: dict[str, list[int]] = {
 
 
 def _build_compare_ids() -> list[str]:
-    cat_index = {cat: i for i, cat in enumerate(_CATEGORIES, start=1)}
     ids: list[str] = []
     for category, picks in _COMPARE_PICKS.items():
-        ci = cat_index[category]
+        ci = _CATEGORY_NUMBERS[category]
         for p in picks:
             ids.append(f"c{ci:02d}-{p:02d}")
     return ids
@@ -300,18 +264,18 @@ def by_id(scenario_id: str) -> dict:
 
 
 def compare_scenarios() -> list[dict]:
-    """The 50 scenarios named by COMPARE_IDS, in COMPARE_IDS order."""
+    """The 40 scenarios named by COMPARE_IDS, in COMPARE_IDS order."""
     return [by_id(i) for i in COMPARE_IDS]
 
 
 def _self_check() -> None:
-    assert len(SCENARIOS) == 200, f"expected 200 scenarios, got {len(SCENARIOS)}"
+    assert len(SCENARIOS) == 160, f"expected 160 scenarios, got {len(SCENARIOS)}"
     ids = [s["id"] for s in SCENARIOS]
     assert len(set(ids)) == len(ids), "scenario ids not unique"
     queries = [s["query"] for s in SCENARIOS]
     assert len(set(queries)) == len(queries), "duplicate queries present"
-    assert len(COMPARE_IDS) == 50, f"expected 50 compare ids, got {len(COMPARE_IDS)}"
-    assert len(set(COMPARE_IDS)) == 50, "compare ids not unique"
+    assert len(COMPARE_IDS) == 40, f"expected 40 compare ids, got {len(COMPARE_IDS)}"
+    assert len(set(COMPARE_IDS)) == 40, "compare ids not unique"
     id_set = set(ids)
     missing = [i for i in COMPARE_IDS if i not in id_set]
     assert not missing, f"COMPARE_IDS not in SCENARIOS: {missing}"

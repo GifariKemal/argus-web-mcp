@@ -30,10 +30,10 @@ def test_aggregate_overall():
     recs = [
         {"id": "x1", "category": "dev", "ok": True, "code": None,
          "result_count": 10, "latency_s": 1.0, "engines": ["bing"],
-         "top1_title_overlap": 0.8, "throttled": False},
+         "top1_title_overlap": 0.8, "throttled": False, "degraded": False},
         {"id": "x2", "category": "dev", "ok": True, "code": None,
          "result_count": 6, "latency_s": 3.0, "engines": ["ddg"],
-         "top1_title_overlap": 0.4, "throttled": False},
+         "top1_title_overlap": 0.4, "throttled": False, "degraded": True},
         {"id": "x3", "category": "dev", "ok": False, "code": "search_backend_down",
          "result_count": 0, "latency_s": 2.0, "engines": [],
          "top1_title_overlap": 0.0, "throttled": True},
@@ -44,6 +44,7 @@ def test_aggregate_overall():
     agg = rc.aggregate(recs)
     assert agg["n"] == 4
     assert agg["success_pct"] == 50.0
+    assert agg["degraded_pct"] == 25.0
     assert agg["throttle_pct"] == 25.0
     assert agg["no_results_pct"] == 25.0
     assert agg["error_pct"] == 0.0
@@ -55,11 +56,13 @@ def test_aggregate_overall():
 def test_flag_findings_thresholds():
     by_cat = {
         "good": {"n": 20, "success_pct": 95.0, "throttle_pct": 5.0,
-                 "no_results_pct": 0.0, "error_pct": 0.0, "latency_p50": 1.0,
+                 "degraded_pct": 5.0, "no_results_pct": 0.0, "error_pct": 0.0,
+                 "latency_p50": 1.0,
                  "latency_p95": 2.0, "mean_result_count": 9.0,
                  "mean_top1_overlap": 0.7},
         "weak": {"n": 20, "success_pct": 70.0, "throttle_pct": 40.0,
-                 "no_results_pct": 10.0, "error_pct": 0.0, "latency_p50": 1.0,
+                 "degraded_pct": 25.0, "no_results_pct": 10.0, "error_pct": 0.0,
+                 "latency_p50": 1.0,
                  "latency_p95": 2.0, "mean_result_count": 4.0,
                  "mean_top1_overlap": 0.2},
     }
@@ -67,8 +70,8 @@ def test_flag_findings_thresholds():
     flagged = {f["category"] for f in findings}
     assert flagged == {"weak"}  # only the breaching category is flagged
     weak = findings[0]
-    # weak breaches all three thresholds (success, overlap, throttle).
-    assert len(weak["reasons"]) == 3
+    # weak breaches all four thresholds (success, overlap, throttle, degraded).
+    assert len(weak["reasons"]) == 4
 
 
 def test_worst_scenarios_orders_failures_first():
@@ -77,10 +80,13 @@ def test_worst_scenarios_orders_failures_first():
         {"id": "b", "ok": False, "code": "no_results", "top1_title_overlap": 0.0,
          "result_count": 0},
         {"id": "c", "ok": True, "top1_title_overlap": 0.1, "result_count": 2},
+        {"id": "d", "ok": True, "degraded": True, "top1_title_overlap": 0.8,
+         "result_count": 10},
     ]
-    worst = rc.worst_scenarios(recs, 2)
+    worst = rc.worst_scenarios(recs, 3)
     assert worst[0]["id"] == "b"  # failure first
-    assert worst[1]["id"] == "c"  # then lowest-overlap success
+    assert worst[1]["id"] == "d"  # then degraded success
+    assert worst[2]["id"] == "c"  # then lowest-overlap healthy success
 
 
 def test_codex_found_and_url_count():
