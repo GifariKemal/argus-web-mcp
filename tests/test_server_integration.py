@@ -1140,3 +1140,70 @@ async def test_batch_read_reports_antibot_as_failure(app_state, monkeypatch):
     out = await server.batch_read([f"{BASE}/a", f"{BASE}/b"])
     assert out["succeeded"] == 0
     assert all(not r["ok"] and r["error"]["code"] == "blocked_by_antibot" for r in out["results"])
+
+
+# --------------------------------------------------------------------------- #
+# gap-scan round 8: format/time_range enums, highlights guard, batch crash isolation
+# --------------------------------------------------------------------------- #
+async def test_read_invalid_format_schema_invalid(app_state, monkeypatch):
+    async def boom(*a, **k):
+        raise AssertionError("fetch must not run for an invalid format")
+
+    monkeypatch.setattr(server, "fetch", boom)
+    r = await server.read(f"{BASE}/article", format="json")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_scrape_invalid_format_schema_invalid(app_state):
+    r = await server.scrape(f"{BASE}/article", format="pdf")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_batch_read_invalid_format_schema_invalid(app_state):
+    r = await server.batch_read([f"{BASE}/a"], format="json")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_search_invalid_time_range_schema_invalid(app_state, monkeypatch):
+    async def boom(*a, **k):
+        raise AssertionError("searxng must not run for an invalid time_range")
+
+    monkeypatch.setattr(server, "searxng_search", boom)
+    r = await server.search("x", time_range="24h")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_research_highlights_failure_does_not_sink_bundle(app_state, monkeypatch):
+    """A runtime embed failure in the highlights step must not turn a successful bundle
+    into an uncaught error - the bundle returns, just without highlights."""
+    monkeypatch.setattr(server.semantic, "available", lambda: True)
+
+    def boom_top(*a, **k):
+        raise RuntimeError("embed backend down")
+
+    monkeypatch.setattr(server.semantic, "top_sentences", boom_top)
+
+    async def ok_research(*a, **k):
+        return {"mode": "deep", "sources": [{"url": "u", "content": "body text here"}]}
+
+    monkeypatch.setattr(server, "_research", ok_research)
+    r = await server.research("q", highlights=True)
+    assert "code" not in r  # still a success bundle, not an error
+    assert r["sources"][0]["url"] == "u"
+    assert "highlights" not in r["sources"][0]
+
+
+async def test_batch_read_isolates_a_crashing_read(app_state, monkeypatch):
+    """An unexpected exception in one read() must not sink the whole batch."""
+    real_read = server.read
+
+    async def flaky_read(u, *a, **k):
+        if u.endswith("/boom"):
+            raise RuntimeError("unexpected")
+        return await real_read(u, *a, **k)
+
+    monkeypatch.setattr(server, "read", flaky_read)
+    out = await server.batch_read([f"{BASE}/article", f"{BASE}/boom"])
+    crashed = [r for r in out["results"] if not r["ok"]]
+    assert crashed and all(r["error"]["code"] == "fetch_failed" for r in crashed)
+    assert out["succeeded"] == 1  # the good URL still came through

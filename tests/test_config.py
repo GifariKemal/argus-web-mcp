@@ -58,3 +58,18 @@ def test_int_falls_back_on_bad_value(monkeypatch):
     finally:
         monkeypatch.delenv("ARGUS_TIMEOUT_READ", raising=False)
         importlib.reload(config)
+
+
+def test_tool_specs_doc_timeouts_match_config():
+    """docs/03-TOOL-SPECS.md tool-signature timeout literals must match config.TIMEOUTS
+    (guards the drift that had 5 of 6 stale)."""
+    import re
+    from pathlib import Path
+
+    doc = Path(__file__).resolve().parent.parent / "docs" / "03-TOOL-SPECS.md"
+    pairs = re.findall(r"##\s+`(\w+)\([^`]*\btimeout=(\d+)\)`", doc.read_text(encoding="utf-8"))
+    assert pairs, "no timeout-bearing tool headers found in TOOL-SPECS"
+    for tool, val in pairs:
+        assert int(val) == config.TIMEOUTS[tool], (
+            f"{tool}: doc timeout={val} != config {config.TIMEOUTS[tool]}"
+        )

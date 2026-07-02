@@ -228,9 +228,11 @@ async def map_site(
         }
 
     async def _discover(c: httpx.AsyncClient) -> dict:
-        # 1. robots.txt -> sitemap directives.
+        # 1. robots.txt -> sitemap directives. Cap the seed list at _MAX_CHILD_SITEMAPS so a
+        # robots.txt naming hundreds of sitemaps can't fan out uncapped (the child-expansion
+        # in _collect_from_sitemaps is already bounded; this bounds the seed too).
         robots = await _get(urljoin(origin, "/robots.txt"), client=c, timeout=timeout)
-        robots_sitemaps = _robots_sitemaps(robots, origin) if robots else []
+        robots_sitemaps = _robots_sitemaps(robots, origin)[:_MAX_CHILD_SITEMAPS] if robots else []
 
         # 2. sitemaps (from robots, else the conventional /sitemap.xml).
         sitemap_urls = robots_sitemaps or [urljoin(origin, "/sitemap.xml")]

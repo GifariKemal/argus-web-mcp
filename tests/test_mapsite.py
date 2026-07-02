@@ -437,3 +437,30 @@ async def test_gzip_bomb_sitemap_skipped(monkeypatch):
     async with _client(h) as c:
         res = await map_site("https://x.test/", client=c)
     assert res["source"] == "links"  # bomb skipped, discovery degraded gracefully
+
+
+async def test_robots_sitemaps_are_capped(monkeypatch):
+    """A robots.txt naming many sitemaps must not fan out uncapped fetches."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    from argus.mapsite import _MAX_CHILD_SITEMAPS
+
+    n = _MAX_CHILD_SITEMAPS + 5
+    sitemaps = [f"https://x.test/sm{i}.xml" for i in range(n)]
+    fetched = []
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="".join(f"Sitemap: {u}\n" for u in sitemaps))
+        if p.startswith("/sm"):
+            fetched.append(p)
+            return httpx.Response(
+                200,
+                text='<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/'
+                     f'sitemap/0.9"><url><loc>https://x.test/page{p}</loc></url></urlset>',
+            )
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        await map_site("https://x.test/", client=c)
+    assert len(fetched) <= _MAX_CHILD_SITEMAPS  # seed list bounded despite n>cap in robots.txt

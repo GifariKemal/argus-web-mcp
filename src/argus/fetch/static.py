@@ -6,6 +6,7 @@ every hop is re-guarded - closing the open-redirect-to-internal SSRF hole.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 import httpx
@@ -14,6 +15,21 @@ from ..security.ssrf import aresolve_and_validate, validate_url
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _DEFAULT_UA = "ArgusBot/0.1 (+https://suriota.com; self-hosted research)"
+
+# Sniff an HTML/XML meta-declared charset from the head of the body when the HTTP header
+# carried none - httpx defaults to utf-8, silently mojibake-ing legacy CJK/Cyrillic pages.
+_META_CHARSET_RE = re.compile(
+    rb"""<meta[^>]+?charset=["']?\s*([\w.:-]+)|<\?xml[^>]+?encoding=["']([\w.:-]+)""",
+    re.IGNORECASE,
+)
+
+
+def _sniff_meta_charset(body: bytes) -> str | None:
+    m = _META_CHARSET_RE.search(body[:2048])
+    if not m:
+        return None
+    enc = (m.group(1) or m.group(2) or b"").decode("ascii", "ignore").strip()
+    return enc or None
 
 # DoS guard for the shared box. Two layers: a Content-Length header fast-path
 # (reject before reading a byte) AND a streaming hard-cap that aborts a chunked /
@@ -98,7 +114,14 @@ async def fetch_static(
     # status block - a challenge page was returned as if it were real content).
     if resp.status_code in (403, 429, 503):
         raise FetchError("blocked_by_antibot", f"status {resp.status_code} (anti-bot block)")
-    html = body.decode(resp.encoding or "utf-8", errors="replace")
+    # Decode with the HEADER-declared charset when present; otherwise sniff a meta-declared
+    # one before falling back to utf-8 (httpx's resp.encoding defaults to utf-8 with no header,
+    # which would corrupt meta-only legacy encodings past any downstream re-decode).
+    enc = resp.charset_encoding or _sniff_meta_charset(body) or "utf-8"
+    try:
+        html = body.decode(enc, errors="replace")
+    except LookupError:  # bogus/unknown meta-declared encoding name
+        html = body.decode("utf-8", errors="replace")
     return {
         "final_url": str(resp.url),
         "status": resp.status_code,

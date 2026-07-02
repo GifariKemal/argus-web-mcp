@@ -6,7 +6,7 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 
 ---
 
-## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=30)`
+## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=60)`
 URL -> clean main content.
 - **in:** `url` (str, http/https only), `format`  in  {markdown,text,html}, `clean` (strip boilerplate), `include_links` (keep hyperlinks), `extract_media` (also return the page's links + images lists), `timeout` (s).
 - **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count}, render_path:"static|browser", from_cache}` (+ `links`, `images` when `extract_media`).
@@ -26,14 +26,14 @@ Auto-route a query to the best backend (deterministic classifier, no LLM): githu
 - **out:** `{query, route, reason, result}` where `result` is the wrapped tool's normal return shape. If a specialist backend errors (`no_results`/`search_backend_down`, e.g. GitHub anonymous rate limit), smart_search falls back to general `search` and returns `route:"general"` + `degraded: true`, `degraded_reason:"specialist_failover"`.
 - **backing:** `router.classify` -> `github_search` / `scholar_search` / `search(category=news|it|general)`.
 
-## `read_pdf(url_or_path, pages=null, mode="text", timeout=60)`
+## `read_pdf(url_or_path, pages=null, mode="text", timeout=90)`
 PDF -> markdown (+ tables).
 - **in:** `url_or_path` (http/https; local paths gated by `ARGUS_ALLOW_LOCAL_PDF=1` - LFI guard on remote), `pages` (e.g. "1-5" or null=all), `mode`  in  {text,tables,quality} (unknown mode -> schema_invalid); `quality` routes to Docling for scanned/complex and honors `pages` (the PDF is sliced before Docling).
 - **out:** `{source, ...result}` (result carries pages_total/pages_returned, content (markdown), tables, metadata).
 - **backing:** pymupdf4llm (fast, digital) -> Docling (`mode="quality"`: tables/scanned). 64 MiB byte cap. URL fetches cached (`pdf` TTL 24h, + `from_cache`); local paths never cached.
 - **errors:** ssrf_blocked, fetch_failed, not_pdf, parse_failed, schema_invalid (bad mode / malformed or out-of-document `pages`).
 
-## `scrape(url, wait_for=null, actions=null, screenshot=false, format="markdown", timeout=45)`
+## `scrape(url, wait_for=null, actions=null, screenshot=false, format="markdown", timeout=90)`
 JS-rendered fetch + optional interactions.
 - **in:** `url`, `wait_for` (css selector|ms), `actions` (e.g. [{click,sel},{scroll}]), `screenshot` (bool), `format`.
 - **out:** `{url, final_url, content, format, screenshot?(base64 png), render_path:"browser"}`.
@@ -60,14 +60,14 @@ Deep-crawl a site (robots-respecting, confined to the seed host by default).
 - **backing:** Crawl4AI deep-crawl + Playwright (browser tier required).
 - **errors:** ssrf_blocked, fetch_failed, render_failed.
 
-## `screenshot(url, timeout=45)`
+## `screenshot(url, timeout=60)`
 Full-page PNG screenshot of a JS-rendered page.
 - **in:** `url`, `timeout`.
 - **out:** `{url, final_url, screenshot(base64 png), format:"png"}`.
 - **backing:** Playwright, always full-page.
 - **errors:** ssrf_blocked, render_failed, blocked_by_antibot.
 
-## `research(query, mode="deep", max_sources=5, highlights=false, max_chars_per_source=null, timeout=30)`
+## `research(query, mode="deep", max_sources=5, highlights=false, max_chars_per_source=null, timeout=120)`
 Deep research in one call (search -> read -> consolidate).
 - **in:** `query`, `mode`  in  {deep,quick,answer}: `deep` = search + parallel FULL read of top sources -> consolidated complete content; `quick` = ranked hits (title/url/snippet) only, zero fetches; `answer` = cited LLM answer (needs LLM tier, off by default). `max_sources` (deep), `highlights` (deep: attach top query-relevant sentences per source via local embeddings), `max_chars_per_source` (opt-in cap per source; truncation FLAGGED with `truncated=true`+`full_chars`, `word_count` preserved; default null = FULL content), `timeout`.
 - **out:** deep -> `{query, sources:[{url,title,content,word_count, truncated?, full_chars?, highlights?}], ...}`; quick -> ranked hits; answer -> cited answer. `from_cache` on success.

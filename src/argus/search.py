@@ -15,6 +15,7 @@ import argus.semantic as semantic
 from argus.security.ssrf import SSRFError, build_safe_async_client, validate_url
 
 _VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
+_VALID_TIME_RANGES = frozenset({"day", "week", "month", "year"})  # SearXNG-accepted values
 _MAX_PAGES = 5
 _TIMEOUT = 15.0
 _CONNECT_TIMEOUT = 2.0  # fast-fail a dead/hung SearXNG instead of hanging _TIMEOUT seconds
