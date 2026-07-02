@@ -361,7 +361,11 @@ def _rerank_hybrid(
         lex, fresh_rank, has_overlap, idx, r = s
         lex_norm = lex / max_lex if max_lex > 0 else 0.0
         blended = _SEM_WEIGHT * sem + (1 - _SEM_WEIGHT) * lex_norm
-        keep = has_overlap or sem >= _SEM_FLOOR
+        sem_ok = sem >= _SEM_FLOOR
+        keep = has_overlap or sem_ok
+        # Transient flag: lets search()'s lexical relevance guard credit a semantically
+        # rescued (zero-lexical-overlap) row as relevant. Stripped before search() returns.
+        r["_sem_relevant"] = sem_ok
         rows.append((blended, fresh_rank, idx, keep, r))
 
     # Blended score desc; recency tiebreak (published first); then original index (stable).
@@ -608,7 +612,12 @@ async def search(
         _overlap = sum(
             1
             for r in results
-            if (_tokens(r.get("title", "")) & qtok) or (_tokens(r.get("snippet", "")) & qtok)
+            # semantically-rescued rows (hybrid path) count as relevant, else a paraphrase
+            # set with zero lexical overlap would be wrongly flagged - defeating the hybrid
+            # blend the rescue exists for. Falls back to pure lexical on the lexical-only path.
+            if r.get("_sem_relevant")
+            or (_tokens(r.get("title", "")) & qtok)
+            or (_tokens(r.get("snippet", "")) & qtok)
         )
         # Flag when MOST results are off-topic. A single incidental token match must not
         # mask a garbage set: a throttled sole-engine (all others CAPTCHA-suspended) returns
@@ -616,6 +625,9 @@ async def search(
         # (fewer than half overlapping) catches that while leaving on-topic sets untouched.
         if _overlap * 2 < len(results):
             degraded, degraded_reason = True, "low_relevance"
+
+    for r in results:  # strip the transient hybrid-rerank flag from the payload
+        r.pop("_sem_relevant", None)
 
     engines_used = sorted({r["engine"] for r in results if r["engine"]})
     return {

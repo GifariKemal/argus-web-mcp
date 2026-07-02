@@ -14,6 +14,41 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.3] - 2026-07-02 - Gap-scan round 9: convergence + doc sync
+
+A 17-agent workflow (4 subsystem deep-dives + 2 comprehensive doc-drift audits + synthesis +
+adversarial verify) scanned the post-0.4.2 tree. Convergence continues - 4 small code fixes + a
+full documentation sync. Suite 746 -> 753 passed, ruff clean, coverage 94% held.
+
+### Fixed
+
+- **`search()` low_relevance guard no longer false-flags semantic rescues.** The guard recomputed
+  pure-lexical overlap even on the hybrid path, so a legitimate paraphrase set (zero lexical overlap
+  but high cosine - exactly what the hybrid blend rescues) was wrongly flagged `degraded=low_relevance`.
+  `_rerank_hybrid` now tags each row's semantic relevance (transient, stripped before return) and the
+  guard credits a row as relevant on lexical overlap OR `cosine >= _SEM_FLOOR`. Genuine junk (low
+  cosine AND no lexical overlap) still flags. Lexical-only path unchanged.
+- **`screenshot()` now surfaces `blocked_by_antibot` via `FetchError.code`** (round 7 converted read/
+  scrape but missed screenshot; the old `"antibot" in str(e)` substring never matched the real
+  `"...(anti-bot block)"` message, so the branch was dead).
+- **`map_urls` clamps `max_urls`** at the trust boundary (`max(1, min(max_urls, 5000))`, like crawl/
+  find_similar) - a negative value previously dropped the last URLs and misreported `truncated=True`.
+
+### Tested
+
+- Guard-credits-semantic-rescue + still-flags-low-cosine-junk (hybrid path); screenshot antibot code;
+  map_urls clamp (low + high); bogus meta-charset -> utf-8 LookupError fallback.
+
+### Docs / chore
+
+- **Version lockstep**: `pyproject.toml` + `argus.__version__` bumped `0.1.0 -> 0.4.3` (they had drifted
+  from the CHANGELOG/tag through every release).
+- **README + AGENTS** test-count badges/text corrected `722 -> 753`.
+- **ROADMAP** P4 log now records rounds 7, 8, 9 (was Round-6 only).
+- **`deploy/argus.env.example`** documents the remaining real env vars: `ARGUS_S2_API_KEY` /
+  `SEMANTIC_SCHOLAR_API_KEY` (scholar rate-limit) and `ARGUS_HEALTH_LATENCY_BUCKETS` (/metrics buffer).
+- **TOOL-SPECS** timeout literals + env-var docs are now in sync with the code (audited end-to-end).
+
 ## [0.4.2] - 2026-07-02 - Gap-scan round 8: 10 long-tail fixes
 
 A 27-agent workflow (8 subsystem deep-dives + 3 SOTA-research + synthesis + adversarial
