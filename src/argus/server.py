@@ -44,7 +44,7 @@ from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
 from .scholar import scholar_search as _scholar_search
-from .search import SearchError
+from .search import _VALID_CATEGORIES, SearchError
 from .search import search as searxng_search
 from .security.ssrf import SSRFError, build_safe_async_client, validate_url
 from .trading.cot import CotError
@@ -252,7 +252,10 @@ async def read(
         stale = s.cache.get_stale(ck)
         if stale is not None:
             return {**stale, "from_cache": True}
-        return err("fetch_failed", "fetch failed", _safe_detail(e))
+        # Surface an anti-bot block as its own code (like scrape/screenshot) so the agent
+        # gets the actionable cause. Use the structured .code, not a message substring.
+        code = "blocked_by_antibot" if e.code == "blocked_by_antibot" else "fetch_failed"
+        return err(code, "fetch failed", _safe_detail(e))
 
     art = extract_article(res["html"], res["final_url"], fmt=format, clean=clean,
                           include_links=include_links)
@@ -290,6 +293,10 @@ async def search(
 ) -> dict:
     """Web search via self-hosted SearXNG (unlimited). Optional domain allow/deny + safesearch."""
     s = _state()
+    # Reject an out-of-enum category up front (consistent with read_pdf / extract_structured)
+    # rather than silently coercing to 'general' and caching the wrong-scope result.
+    if category not in _VALID_CATEGORIES:
+        return err("schema_invalid", f"unknown category {category!r} (general|news|science|it)")
     qkey = query if isinstance(query, str) else " ".join(query)
     ck = s.cache.key(
         "search:" + qkey,
@@ -400,7 +407,7 @@ async def scrape(
     except SSRFError as e:
         return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
-        code = "blocked_by_antibot" if "antibot" in str(e).lower() else "render_failed"
+        code = "blocked_by_antibot" if e.code == "blocked_by_antibot" else "render_failed"
         return err(code, "render failed", _safe_detail(e))
 
     art = extract_article(res["html"], res["final_url"], fmt=format)
@@ -428,7 +435,7 @@ async def batch_read(
         async with sem:
             r = await read(u, format=format, clean=clean)
         if isinstance(r, dict) and r.get("code") in {
-            "ssrf_blocked", "fetch_failed", "empty_content",
+            "ssrf_blocked", "fetch_failed", "empty_content", "blocked_by_antibot",
         }:
             return {"url": u, "ok": False, "error": r}
         return {"url": u, "ok": True, "content": r["content"], "title": r.get("title")}
@@ -679,25 +686,33 @@ async def research(
         return {**cached, "from_cache": True}
 
     try:
-        res = await _research(
-            query, mode=mode, max_sources=max_sources,
-            max_chars_per_source=max_chars_per_source, timeout=timeout,
-            client=s.client, browser=s.browser, throttle=s.throttle,
-        )
+        async with asyncio.timeout(timeout):
+            res = await _research(
+                query, mode=mode, max_sources=max_sources,
+                max_chars_per_source=max_chars_per_source, timeout=timeout,
+                client=s.client, browser=s.browser, throttle=s.throttle,
+            )
     except ValueError as e:  # invalid mode
         return err("schema_invalid", "invalid research mode", _safe_detail(e))
     except SearchError as e:
         code = "no_results" if e.code == "no_results" else "search_backend_down"
         return err(code, "research search failed", _safe_detail(e))
+    except TimeoutError:  # whole-call wall clock (backfill waves can each cost ~timeout)
+        return err("fetch_failed", "research timed out", f"{timeout}s")
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("extraction_failed", "research failed", _safe_detail(e))
 
-    # Optional per-source highlights (top query-relevant sentences) - deep bundle + semantic on.
-    if highlights and isinstance(res, dict) and semantic.available():
+    # Strip the pre-cap full content stashed for highlight extraction (keeps the payload
+    # lean regardless of the highlights flag), computing highlights from the FULL text first
+    # when requested - the top query-relevant sentence must be reachable even past the cap.
+    if isinstance(res, dict):
+        want_hl = highlights and semantic.available()
         for src in res.get("sources", []):
-            content = src.get("content")
-            if content:
-                src["highlights"] = semantic.top_sentences(query, content, top_k=3)
+            full = src.pop("_full_content", None)
+            if want_hl:
+                text = full or src.get("content")
+                if text:
+                    src["highlights"] = semantic.top_sentences(query, text, top_k=3)
 
     # Only cache success - never an error dict (e.g. mode='answer' LLM failure) and
     # never a degraded bundle (built on junk/failover search results; let it retry).

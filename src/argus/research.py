@@ -78,6 +78,10 @@ def _apply_char_cap(sources: list[dict], max_chars: int | None) -> None:
         content = s.get("content") or ""
         if len(content) > max_chars:
             s["full_chars"] = len(content)
+            # Keep the pre-cap text so highlights can be computed over the FULL content
+            # (the top query-relevant sentence may sit past the cap). The server strips
+            # this key before returning, so the payload stays lean either way.
+            s["_full_content"] = content
             s["content"] = content[:max_chars]
             s["truncated"] = True
 
