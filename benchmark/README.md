@@ -44,7 +44,7 @@ For the durable, tracked results (numbers + findings), read
 | `scenarios.py` | The query instrument: `SCENARIOS` = 160 real non-trading queries across 8 SURIOTA-relevant categories (~20 each); `COMPARE_IDS` = a 40-id stratified sample (exactly 5 per category) for the expensive head-to-head runs. Run `python benchmark/scenarios.py` for the self-check. |
 | `run_compare.py` | 3-arm harness. `argus` runs `search()` over all 160 active scenarios (paced for SearXNG per-IP throttle); `argus-research` runs `research()` over the compare ids; `score` aggregates the sweep + auto-flags weak categories; `merge-3way` builds the Argus-vs-Claude-vs-Codex section. Aggregation is pure functions (offline-tested in `tests/test_compare_scorer.py`). |
 | `run_4way.py` | 4-condition harness with `--repeat` plus token / cost / speed: claude-native, claude-argus, codex-native, codex-argus. Shells out to the CLIs (`run`), then `score` renders the table. Pure parse/aggregate functions are offline-tested in `tests/test_4way_scorer.py`. Per-call wall-clock cap 180s. |
-| `run_codex.sh` | Drives Codex CLI (`web_search=live`) over the 40 `COMPARE_IDS`, one raw answer per scenario to `codex_25/<id>.txt`. Idempotent (skips ids that already have non-empty output, so it resumes after a stop). |
+| `run_codex.sh` | Drives Codex CLI (`web_search=live`) over the 40 `COMPARE_IDS`, one raw answer per scenario to `codex_compare/<id>.txt`. Idempotent (skips ids that already have non-empty output, so it resumes after a stop). |
 | `burst_test.py` | Un-paced burst re-validation: exercises Argus backoff + multi-engine redundancy vs a naive raw client to measure throttle recovery. |
 | `loadtest.py` | Local load test (no OOM / leak check). |
 | `semantic_ab.py` | Semantic rerank A/B: scores the same SearXNG candidate pool reranked lexical vs hybrid at nDCG@5 (see RESULTS.md). |
@@ -83,7 +83,7 @@ The runner is resilient: a failing fetch for one item is caught and recorded
 # Argus research() over the 40 compare ids, then merge the 3-way section
 ./.venv/Scripts/python.exe benchmark/run_compare.py argus-research --out r.json --ids-from-compare
 ./.venv/Scripts/python.exe benchmark/run_compare.py merge-3way --argus-research r.json \
-    --claude claude.json --codex-dir benchmark/codex_25
+    --claude claude.json --codex-dir benchmark/codex_compare
 
 # 4-condition (Claude/Codex x WITH/WITHOUT Argus) with token/cost/speed
 ./.venv/Scripts/python.exe benchmark/run_4way.py run --out out.json --repeat 3
@@ -119,8 +119,8 @@ want - "captured the main content AND left out the boilerplate" - independent of
 - **quality_f1** - harmonic mean of the two. A raw dump -> recall 1.0 but rejection low -> low f1;
   an over-trimmer that drops body text -> low recall -> low f1. Favours no adapter by construction.
 
-Gold lives in `quality_gold.yaml` (2 active non-trading items: FastAPI docs and a long
-Wikipedia article, the near-zero-boilerplate Paul Graham essay). `must_contain` phrases are
+Gold lives in `quality_gold.yaml` (2 active non-trading items: FastAPI docs and the
+near-zero-boilerplate Paul Graham essay). `must_contain` phrases are
 verbatim main-content; `must_not_contain` are real nav/subscribe/cookie/footer/ad strings
 fetched live from each page. `run_bench.py --quality` runs every free adapter on those URLs,
 writes an "Extraction-quality (formatting-invariant)" section to `report.md`, and marks the

@@ -1,3 +1,3 @@
 """Argus - SURIOTA self-hosted web fetch/scrape/search MCP server."""
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"

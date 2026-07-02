@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 BENCH_DIR = Path(__file__).resolve().parents[1] / "benchmark"
 if str(BENCH_DIR) not in sys.path:
@@ -127,3 +130,28 @@ def test_build_3way_rows_and_tally():
     assert tally["argus_found"] == 1  # only the one populated record
     assert tally["claude_found"] == 1
     assert tally["codex_found"] == 1
+
+
+def test_merge_3way_requires_complete_codex_outputs(tmp_path):
+    research = tmp_path / "research.json"
+    claude = tmp_path / "claude.json"
+    codex_dir = tmp_path / "codex_compare"
+    codex_dir.mkdir()
+    research.write_text("[]", encoding="utf-8")
+    claude.write_text("[]", encoding="utf-8")
+    first = rc.scen_mod.COMPARE_IDS[0]
+    (codex_dir / f"{first}.txt").write_text("https://example.com", encoding="utf-8")
+
+    args = SimpleNamespace(
+        argus_research=str(research),
+        claude=str(claude),
+        codex_dir=str(codex_dir),
+        allow_partial_codex=False,
+        out=str(tmp_path / "out.md"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        rc.run_merge_3way(args)
+
+    assert "missing" in str(exc.value)
+    assert "Codex output" in str(exc.value)

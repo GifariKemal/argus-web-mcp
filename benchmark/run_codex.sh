@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run Codex CLI (native web_search) over the stratified COMPARE_IDS and save
-# one raw answer per scenario to benchmark/codex_25/<id>.txt. Idempotent: skips
+# one raw answer per scenario to benchmark/codex_compare/<id>.txt. Idempotent: skips
 # any id that already has a non-empty output file, so it can resume after a stop.
 #
 # Usage:  bash benchmark/run_codex.sh
@@ -9,7 +9,7 @@ set -uo pipefail
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$BENCH_DIR")"
-OUT_DIR="$BENCH_DIR/codex_25"
+OUT_DIR="$BENCH_DIR/codex_compare"
 PY="$ROOT_DIR/.venv/Scripts/python.exe"
 [ -x "$PY" ] || PY="$ROOT_DIR/.venv/bin/python"   # fall back to POSIX venv layout
 

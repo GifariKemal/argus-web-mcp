@@ -13,9 +13,9 @@ of the lowercased query string: no network, no randomness, no LLM. Routes map to
 
 Scoring is additive: every matching keyword/phrase/pattern adds its weight to its route.
 The highest-scoring route wins; an exact tie at the top (or no signal) is broken by
-``_PRIORITY``: scholar > github > news > it > general. ``general`` is the zero baseline,
-so it only wins when nothing else scored. Extend by adding entries to ``_TOKENS`` /
-``_PHRASES`` / ``_PATTERNS`` (and a new route to ``ROUTES`` + ``_PRIORITY``).
+``_PRIORITY``: scholar > github > science > news > it > general. ``general`` is the
+zero baseline, so it only wins when nothing else scored. Extend by adding entries to
+``_TOKENS`` / ``_PHRASES`` / ``_PATTERNS`` (and a new route to ``ROUTES`` + ``_PRIORITY``).
 """
 
 import re

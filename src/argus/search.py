@@ -646,14 +646,17 @@ async def search(
     # Flag when MOST results are off-topic. A single incidental/generic token match must
     # not mask a garbage set: a throttled sole-engine can return filler that happens to
     # share one word with the query. Majority rule catches that while leaving on-topic sets.
-    if _is_low_relevance(q, results):
-        degraded, degraded_reason = True, "low_relevance"
+    low_relevance = _is_low_relevance(q, results)
+    if low_relevance:
+        degraded = True
+        if degraded_reason is None:
+            degraded_reason = "low_relevance"
 
     # If the broad general pool is garbage, try one deterministic category rescue. This
     # only applies when the caller did not explicitly choose engines/domains; manual
     # constraints are respected exactly.
     if (
-        degraded_reason == "low_relevance"
+        low_relevance
         and categories == "general"
         and engines is None
         and not include_domains
@@ -667,9 +670,15 @@ async def search(
             rescue_client = None
             try:
                 if owns_client:
-                    rescue_client = httpx.AsyncClient(
-                        timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
-                    )
+                    if backend == base_url:
+                        rescue_client = httpx.AsyncClient(
+                            timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
+                        )
+                    else:
+                        validate_url(backend)
+                        rescue_client = build_safe_async_client(
+                            timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
+                        )
                     rescue_results = await _search_backend(
                         q, count, rescue_params, backend, rescue_client, retries
                     )
@@ -683,7 +692,8 @@ async def search(
                 )[:count]
                 if not _is_low_relevance(q, rescue_ranked):
                     results = rescue_ranked
-                    degraded, degraded_reason = False, None
+                    if degraded_reason == "low_relevance":
+                        degraded, degraded_reason = False, None
                     rescued_category = routed
             except SearchError:
                 pass

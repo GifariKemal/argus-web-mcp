@@ -767,6 +767,21 @@ async def test_smart_search_routes(app_state, monkeypatch):
     assert r4["route"] == "general"
 
 
+async def test_smart_search_invalid_query_returns_structured_error(app_state):
+    r = await server.smart_search(None)  # type: ignore[arg-type]
+    assert r["code"] == "schema_invalid"
+
+
+async def test_smart_search_catch_all_returns_structured_error(app_state, monkeypatch):
+    async def boom(query, **kw):
+        raise RuntimeError("unexpected search failure")
+
+    monkeypatch.setattr(server, "search", boom)
+    r = await server.smart_search("best pizza in town")
+    assert r["code"] == "search_backend_down"
+    assert r["detail"] == "RuntimeError"
+
+
 async def test_github_search_delegates(app_state, monkeypatch):
     async def fake_gh(query, **kw):
         return {"query": query, "mode": kw.get("mode", "repositories"), "total_count": 1,

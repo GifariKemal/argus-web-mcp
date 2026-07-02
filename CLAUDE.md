@@ -15,10 +15,10 @@ A FastMCP (Python) server, deployed remote-HTTP on the SURIOTA VPS, that every C
 4. `docs/04-REFERENCES.md` - OSS study guide (Crawl4AI/SearXNG/FastMCP/trafilatura - what to learn + URLs).
 5. `docs/01-RESEARCH.md` - research findings + sources. `benchmark/testset.yaml` - benchmark set.
 
-## Status (2026-06-25)
+## Status (updated 2026-07-02; deployed 2026-06-25)
 P0/P1/P2/P3 DONE. **DEPLOYED LIVE** at `https://argus.gifariksuryo.xyz/mcp` (bearer auth) on VPS `103.172.172.29` (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker `:8888`, LE TLS, nginx, fail2ban). Safe auto-update timer polls `main` every 5 min (ff-only -> health-gate -> auto-rollback; skips restart for docs/benchmark-only commits). Run locally: `./.venv/Scripts/python.exe -m argus.server` (stdio) or `uvicorn argus.server:app` (HTTP). Plans in `docs/superpowers/plans/`.
 
-**Built & verified:** 20 MCP tools; **763 offline tests (+browser, +slow, +network) green; SSRF 100%; ruff clean**; coverage 94%. Round-10 benchmark/tuning shipped 2026-07-02: active benchmark scope is non-trading by default (160 search scenarios, 40 compare IDs, 16 URL items, 8 search queries), deterministic tool-surface benchmark covers 19 active non-trading tool boundaries, search relevance/routing is tightened, large-PDF and static fallback latency paths are tuned. Runtime trading tools remain available and separately tested. HTTP transport live (`/health`,`/metrics` per-tool counters, JWT/static bearer -> /mcp 401 without token). Deploy artifacts in `deploy/` (systemd/nginx/provision/fail2ban + SECURITY-AUDIT). Local load test passed (no OOM/leak). Multi-agent QA/QC end-to-end clean (security Round-2: no Critical/High). Hardening: streaming body-cap, per-host throttle+circuit-breaker, archive egress-fallback, full caching.
+**Built & verified:** 20 MCP tools; **767 offline tests (+browser, +slow, +network) green; SSRF 100%; ruff clean**; coverage 94%. Latest: 0.4.5 Round-10 final gap-scan (2026-07-02) fixed search failover+rescue degradation, `smart_search` structured-error handling, strict 40-id Codex merge coverage, and doc drift. Active benchmark scope is non-trading by default (160 search scenarios, 40 compare IDs, 16 URL items, 8 search queries), and deterministic tool-surface benchmark covers 19 active non-trading tool boundaries. Runtime trading tools remain available and separately tested. HTTP transport live (`/health`,`/metrics` per-tool counters, JWT/static bearer -> /mcp 401 without token). Deploy artifacts in `deploy/` (systemd/nginx/provision/fail2ban + SECURITY-AUDIT). Local load test passed (no OOM/leak). Multi-agent QA/QC end-to-end clean (security Round-2: no Critical/High). Hardening: streaming body-cap, per-host throttle+circuit-breaker, archive egress-fallback, full caching.
 
 **No LLM needed (architecture):** Argus is tools-not-brain - the consuming agent (Claude Code Opus 4.8 / Codex) does synthesis from `research(deep)`/`quick` raw-content bundles. Argus's LLM tier (research `answer`, extract_structured `llm`) is OPTIONAL, **off by default** (requires `ARGUS_ENABLE_LLM=1` + endpoint), so Argus is fully functional with zero LLM. Not a deploy dependency.
 
@@ -44,8 +44,8 @@ Crawl4AI (Apache-2.0, clone&improve core) / trafilatura (article extract) / **Se
 ## Hard gates (never compromise)
 - **SSRF resolve-then-validate** (deny private/metadata IPs, re-pin IP, anti-rebinding, scheme allowlist) - **100% test coverage**.
 - **Trading-source parsers >=99% field accuracy** before any live Aurix use.
-- **Benchmark** (reference-based, vs the 12): Argus ROUGE-L >= best free competitor, success >=95%, truncation completeness >=0.98 long-form.
+- **Benchmark:** formatting-invariant `quality_f1` ties/beats the best free baseline; success >=95%; no silent truncation/full-content gate holds; active v0.4.4 benchmark scope is non-trading by default.
 - Security SAST + deps-audit before deploy; load test (no OOM/leak).
 
 ## VPS access
-SSH key-only: `ssh -i C:\Users\Administrator\.ssh\gifari_vps_ed25519 ai@103.172.172.29` (Ubuntu 24.04). Coexist with Hermes :80 / SUVA :8080. P1+P2+local-P3 gates pass; deploy is gated only on the owner inputs listed in **Status** (subdomain/DNS, token, optional proxy + LLM endpoint). Deploy runbook: `deploy/README.md`.
+SSH key-only: `ssh -i C:\Users\Administrator\.ssh\gifari_vps_ed25519 ai@103.172.172.29` (Ubuntu 24.04). Coexists with Hermes :80 / SUVA :8080. Deployment is complete; remaining owner inputs are F1 `ARGUS_S2_API_KEY` and optional SearXNG `outgoing.proxies`. Leave `ARGUS_ENABLE_LLM` unset unless intentionally enabling the optional LLM tier. Deploy runbook: `deploy/README.md`.

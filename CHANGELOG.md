@@ -14,6 +14,41 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.5] - 2026-07-02 - Round 10 final gap-scan
+
+Final gap-scan over the deployed a802678/v0.4.4 tree, focused on code added during
+the benchmark reset/search/PDF tuning pass.
+
+### Fixed
+
+- **`search()` preserves `backend_failover` degradation through category rescue.** A primary
+  backend failure followed by low-relevance fallback results and a successful routed rescue could
+  previously clear `degraded`, causing fallback results to look clean and become cacheable. Rescue
+  now clears only pure `low_relevance`; failover stays surfaced and uncached. Rescue against an
+  external fallback backend also uses the SSRF-safe client path.
+- **`smart_search()` now obeys the tool error contract.** Invalid non-string/empty queries return
+  `schema_invalid`, and unexpected internal exceptions return structured `search_backend_down`
+  instead of leaking across the MCP boundary.
+- **3-way merge now requires complete Codex coverage by default.** The active compare set is 40 IDs;
+  `merge-3way` fails fast when Codex output files are missing unless `--allow-partial-codex` is
+  passed explicitly. Active Codex output path is now `benchmark/codex_compare/`.
+
+### Docs / Benchmark
+
+- Synced `smart_search` docs/instructions with the `science` route and documented
+  `search.rescued_category`.
+- Removed stale trading seams/text from the active tool-surface benchmark.
+- Corrected status/date/benchmark-gate drift in `CLAUDE.md`, `docs/02-ROADMAP.md`, and
+  `benchmark/RESULTS.md`.
+
+### Tested
+
+- `ruff check src tests benchmark`
+- Offline suite: 767 passed, 8 deselected.
+- SSRF gate: 45 passed, 100% line + branch coverage for `argus.security.ssrf`.
+- Browser marker: 3 passed. Slow marker: 3 passed. Network marker: 2 passed.
+- Tool-surface smoke: 19/19 active non-trading boundaries OK.
+
 ## [0.4.4] - 2026-07-02 - Benchmark scope reset + search/PDF tuning
 
 Follow-up benchmark pass after the end-to-end Argus stress work. The active benchmark

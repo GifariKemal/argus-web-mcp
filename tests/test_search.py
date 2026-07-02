@@ -1682,6 +1682,46 @@ async def test_low_relevance_general_search_rescues_to_routed_category(monkeypat
     assert "Python" in out["results"][0]["title"]
 
 
+async def test_category_rescue_preserves_backend_failover_degraded(monkeypatch):
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
+
+    async def fake_backend(q, count, params, base_url, client, retries):
+        if base_url == BASE:
+            raise SearchError("search_backend_down", "primary down")
+        if params["categories"] == "general":
+            return [
+                {
+                    "title": "Garden weather",
+                    "url": f"https://fallback.example/{i}",
+                    "snippet": "flowers and rain",
+                    "engine": "fallback",
+                }
+                for i in range(5)
+            ]
+        assert params["categories"] == "it"
+        return [
+            {
+                "title": "React hydration mismatch in SSR",
+                "url": "https://fallback.example/react",
+                "snippet": "debug hydration mismatch in server rendered React",
+                "engine": "fallback",
+            }
+        ]
+
+    monkeypatch.setattr(argus.search, "_search_backend", fake_backend)
+
+    out = await search(
+        "React hydration mismatch SSR",
+        base_url=BASE,
+        fallback_base_urls=["https://fallback.example"],
+    )
+
+    assert out["backend"] == "https://fallback.example"
+    assert out["rescued_category"] == "it"
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "backend_failover"
+
+
 @respx.mock
 async def test_explicit_engines_skip_low_relevance_category_rescue(monkeypatch):
     monkeypatch.setattr(argus.search.semantic, "available", lambda: False)

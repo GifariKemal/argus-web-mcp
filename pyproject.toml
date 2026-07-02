@@ -1,6 +1,6 @@
 [project]
 name = "argus"
-version = "0.4.4"
+version = "0.4.5"
 description = "Argus - SURIOTA self-hosted web fetch/scrape/search MCP server"
 requires-python = ">=3.11,<3.14"
 dependencies = [

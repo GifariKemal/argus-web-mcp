@@ -1,8 +1,8 @@
 # Argus benchmark RESULTS (durable summary)
 
-_Run 2026-06-24/25. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked record._
+_Run 2026-06-24/25. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked historical record._
 
-Harness: `benchmark/run_compare.py` (3-arm) + `benchmark/run_4way.py` (4-condition + token/cost/speed) + `benchmark/scenarios.py` (200 queries x 10 categories, 50 stratified compare ids) + `benchmark/run_codex.sh` + `benchmark/burst_test.py`. See [README.md](README.md) for harness usage.
+Historical 2026-06-24/25 runs used 200 queries x 10 categories and 50 compare IDs. Current v0.4.4 harness scope is 160 non-trading queries x 8 categories and 40 compare IDs, with Codex outputs under `benchmark/codex_compare/`. See [README.md](README.md) for current harness usage.
 
 ## Contents
 
@@ -52,8 +52,9 @@ Researched Jina / Brave / Firecrawl / Exa / Tavily / Bright Data. Adopted the to
 
 - **`map_urls`** - sitemap.xml / robots.txt / 1-hop link URL discovery (Firecrawl/Exa `map`).
 - **`research(mode='answer')`** - cited LLM answer over the bundle (Exa/Tavily/Jina `answer`).
+- **`find_similar`** - local embedding semantic similarity (Exa-style related pages).
 - **search `include_domains`/`exclude_domains` + `safesearch` + recency-v2** (Exa/Tavily/Brave filters).
-- Deferred (effort/infra): semantic/`findSimilar` (local embeddings), image captioning (VLM), managed residential proxies (Bright Data - only genuine non-self-hostable gap).
+- Deferred (effort/infra): image captioning (VLM), managed residential proxies (Bright Data - only genuine non-self-hostable gap).
 
 **Argus already matches/beats the field on:** full content (no truncation) vs lossy summaries/hits, unlimited+owned vs metered, self-hosted JS+stealth render, transparent archive egress-fallback, content-addressed persistent cache, and the trading-extractor moat.
 
@@ -105,7 +106,7 @@ Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per 
 
 A post-fix CLI re-run (v2) showed NO latency improvement and the native (no-Argus) control slowed too -> the v1->v2 difference was environmental noise, not the fixes. Two clean isolations explain it:
 
-1. **`research()` bypasses the host throttle.** `research._read_one` calls `fetch(url, client, browser, timeout)` with NO `throttle=` (research.py:63; `fetch(throttle=None)`=no throttle). The server wires the throttle into `read`/`crawl`/`news` but NOT `research`. So **S1 (ARGUS_COURTESY_DELAY 1.0->0.25) has ZERO effect on deep research** - it was the wrong lever for the `*-argus` path.
+1. **Historical note, superseded by 0.3.0:** this run observed `research()` bypassing the host throttle. Current code threads `HostThrottle` through `server.research` -> `_research` -> `_deep_bundle` -> `_read_one`, so this is no longer an active gap.
 2. **In-process `research()` on the VPS is FAST** (local SearXNG, no agent, no client transport): MQL5 query median **5.5s** (3.5-11.1s; first rep includes a one-time embed-model download), MQTT query median **3.6s** (3.3-5.3s). All returned 5 sources (backfill works: 1-2 per-query failures still yield 5).
 
 **Conclusion:** Argus is NOT the latency bottleneck. The 50-180s `claude-argus` benchmark latencies are agent overhead (`claude -p` system prompt + reasoning + multi-turn) + MCP-over-HTTPS round-trips from the client + the agent making research()+many read() calls serially. There is **no Argus scaling fix to make** - the earlier "worker pool" action item is moot (and `--workers>1` would still be unsafe with the stateful pool). If end-to-end agent latency matters, the lever is the CONSUMING agent's pattern (one `research` call + synthesize, not research + many reads), not Argus. S2 (wiring ARGUS_MAX_CONCURRENT_CONTEXTS) remains a valid correctness fix for the dead doc'd knob, just not load-bearing here.

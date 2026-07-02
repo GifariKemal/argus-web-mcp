@@ -16,15 +16,15 @@ URL -> clean main content.
 ## `search(query, count=10, category="general", time_range=null, lang=null, include_domains=null, exclude_domains=null, safesearch=0)`
 Web search via self-hosted SearXNG (unlimited).
 - **in:** `query` (str|str[]), `count` (1-50, paginate SearXNG ~20/page), `category`  in  {general,news,science,it}, `time_range`  in  {day,week,month,year}, `lang`, `include_domains`/`exclude_domains` (str[] allow/deny), `safesearch` (0|1|2).
-- **out:** `{query, results:[{title,url,snippet,engine,published?}], count, engines_used, backend, degraded, degraded_reason, from_cache}`. `degraded: true` + `degraded_reason` in {`low_relevance`, `backend_failover`} signal an untrustworthy/failed-over result set (advisory - nothing dropped); degraded sets are never cached.
+- **out:** `{query, results:[{title,url,snippet,engine,published?}], count, engines_used, backend, degraded, degraded_reason, rescued_category?, from_cache}`. `degraded: true` + `degraded_reason` in {`low_relevance`, `backend_failover`} signal an untrustworthy/failed-over result set (advisory - nothing dropped); degraded sets are never cached. `rescued_category` is set when a weak broad general search is rerun through a routed category (`science`/`it`/`news`).
 - **backing:** SearXNG `GET /search?format=json`.
 - **errors:** search_backend_down, no_results.
 
 ## `smart_search(query, count=10)`
-Auto-route a query to the best backend (deterministic classifier, no LLM): github / scholar / news / it / general; calls the matched tool.
+Auto-route a query to the best backend (deterministic classifier, no LLM): github / scholar / science / news / it / general; calls the matched tool.
 - **in:** `query` (str), `count`.
 - **out:** `{query, route, reason, result}` where `result` is the wrapped tool's normal return shape. If a specialist backend errors (`no_results`/`search_backend_down`, e.g. GitHub anonymous rate limit), smart_search falls back to general `search` and returns `route:"general"` + `degraded: true`, `degraded_reason:"specialist_failover"`.
-- **backing:** `router.classify` -> `github_search` / `scholar_search` / `search(category=news|it|general)`.
+- **backing:** `router.classify` -> `github_search` / `scholar_search` / `search(category=science|news|it|general)`.
 
 ## `read_pdf(url_or_path, pages=null, mode="text", timeout=90)`
 PDF -> markdown (+ tables).

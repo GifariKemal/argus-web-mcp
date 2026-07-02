@@ -36,13 +36,13 @@ OUT_DIR = ROOT / "benchmark" / "_runs"
 BASE = "http://fixtures.test"
 
 ARTICLE_HTML = (
-    "<html><head><title>Gold Outlook</title></head><body>"
+    "<html><head><title>IoT Gateway Outlook</title></head><body>"
     "<nav>home about</nav>"
-    "<article><h1>Gold Outlook</h1>"
-    "<p>" + ("Gold prices are driven by real yields and the dollar. " * 8) + "</p>"
-    "<p>" + ("Central bank demand has supported the metal this year. " * 6) + "</p>"
+    "<article><h1>IoT Gateway Outlook</h1>"
+    "<p>" + ("IoT gateways connect sensors, edge compute, and cloud systems. " * 8) + "</p>"
+    "<p>" + ("Industrial deployments depend on protocol support and reliability. " * 6) + "</p>"
     "</article>"
-    "<a href='/page1'>Page 1</a><img src='/gold.png' alt='gold'>"
+    "<a href='/page1'>Page 1</a><img src='/gateway.png' alt='gateway'>"
     "<footer>copyright</footer></body></html>"
 )
 STRUCT_HTML = (
@@ -227,9 +227,6 @@ def _patch_external_seams() -> dict[str, Any]:
         "deep_crawl": server.deep_crawl,
         "_gh_search": server._gh_search,
         "_scholar_search": server._scholar_search,
-        "_ff_calendar": server._ff_calendar,
-        "_cot_report": server._cot_report,
-        "_news_feed": server._news_feed,
         "semantic_available": server.semantic.available,
         "semantic_similarities": server.semantic.similarities,
     }
@@ -255,8 +252,8 @@ def _patch_external_seams() -> dict[str, Any]:
             "query": query,
             "mode": kwargs.get("mode", "deep"),
             "sources": [
-                {"url": f"{BASE}/article", "title": "Gold Outlook",
-                 "content": "Gold benchmark source body.", "word_count": 4,
+                {"url": f"{BASE}/article", "title": "IoT Gateway Market",
+                 "content": "IoT benchmark source body.", "word_count": 4,
                  "render_path": "static"}
             ],
             "failed": [],
@@ -278,27 +275,11 @@ def _patch_external_seams() -> dict[str, Any]:
         return {"query": query, "source": "fixture", "count": 1,
                 "results": [{"title": "Attention Is All You Need", "citations": 100000}]}
 
-    async def fake_ff(date_range=None, client=None):
-        return {"events": [{"currency": "USD", "event": "CPI", "impact": "High"}],
-                "count": 1, "source": "fixture", "stale": False}
-
-    async def fake_cot(report_type="legacy_futures", date=None, client=None):
-        return {"rows": [{"market": "GOLD", "report_date": "2026-01-01"}],
-                "count": 1, "report_type": report_type, "source": "fixture",
-                "identity_failures": 0, "bad_dates": 0}
-
-    async def fake_news(query, since=None, sentiment=False):
-        return {"query": query, "items": [{"title": "Gold rallies", "url": f"{BASE}/article"}],
-                "count": 1, "degraded": False}
-
     server.searxng_search = fake_search
     server._research = fake_research
     server.deep_crawl = fake_crawl
     server._gh_search = fake_gh
     server._scholar_search = fake_scholar
-    server._ff_calendar = fake_ff
-    server._cot_report = fake_cot
-    server._news_feed = fake_news
     server.semantic.available = lambda: True
     server.semantic.similarities = lambda seed, docs: [0.9 - i * 0.1 for i, _ in enumerate(docs)]
     return originals
@@ -310,9 +291,6 @@ def _restore_external_seams(originals: dict[str, Any]) -> None:
     server.deep_crawl = originals["deep_crawl"]
     server._gh_search = originals["_gh_search"]
     server._scholar_search = originals["_scholar_search"]
-    server._ff_calendar = originals["_ff_calendar"]
-    server._cot_report = originals["_cot_report"]
-    server._news_feed = originals["_news_feed"]
     server.semantic.available = originals["semantic_available"]
     server.semantic.similarities = originals["semantic_similarities"]
 

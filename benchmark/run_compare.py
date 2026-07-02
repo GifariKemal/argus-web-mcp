@@ -20,7 +20,7 @@ Usage:
   python benchmark/run_compare.py argus-research --out r.json --ids-from-compare [--pace 4.0]
   python benchmark/run_compare.py score --argus out.json [--out report.md]
   python benchmark/run_compare.py merge-3way --argus-research r.json --claude c.json \\
-      --codex-dir benchmark/codex_25 [--out report.md]
+      --codex-dir benchmark/codex_compare [--out report.md]
 """
 
 from __future__ import annotations
@@ -274,6 +274,7 @@ async def run_argus(args) -> None:
                 "throttled": False,
                 "degraded": False,
                 "degraded_reason": None,
+                "rescued_category": None,
             }
             t0 = time.perf_counter()
             try:
@@ -285,6 +286,7 @@ async def run_argus(args) -> None:
                 rec["ok"] = len(results) >= 1
                 rec["degraded"] = bool(res.get("degraded"))
                 rec["degraded_reason"] = res.get("degraded_reason")
+                rec["rescued_category"] = res.get("rescued_category")
                 if results:
                     rec["top1_title_overlap"] = round(
                         title_overlap(s["query"], results[0].get("title", "")), 3
@@ -575,12 +577,22 @@ def run_merge_3way(args) -> None:
     claude_recs = json.loads(Path(args.claude).read_text(encoding="utf-8"))
     codex_dir = Path(args.codex_dir)
     codex_texts: dict[str, str] = {}
+    missing: list[Path] = []
     for sid in scen_mod.COMPARE_IDS:
         f = codex_dir / f"{sid}.txt"
         if f.is_file():
             codex_texts[sid] = f.read_text(encoding="utf-8", errors="replace")
         else:
-            print(f"[warn] missing codex output: {f}", file=sys.stderr)
+            missing.append(f)
+    if missing and not args.allow_partial_codex:
+        sample = ", ".join(str(p) for p in missing[:5])
+        more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+        raise SystemExit(
+            f"missing {len(missing)} Codex output file(s) for COMPARE_IDS: {sample}{more}. "
+            "Run benchmark/run_codex.sh or pass --allow-partial-codex explicitly."
+        )
+    for f in missing:
+        print(f"[warn] missing codex output: {f}", file=sys.stderr)
     rows = build_3way_rows(research_recs, claude_recs, codex_texts)
     tally = tally_3way(rows)
     section = render_3way_section(rows, tally)
@@ -624,6 +636,7 @@ def main() -> None:
     m.add_argument("--argus-research", required=True)
     m.add_argument("--claude", required=True)
     m.add_argument("--codex-dir", required=True)
+    m.add_argument("--allow-partial-codex", action="store_true")
     m.add_argument("--out", default=None)
 
     args = p.parse_args()

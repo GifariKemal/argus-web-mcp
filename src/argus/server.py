@@ -65,7 +65,7 @@ INSTRUCTIONS = (
     "`find_similar(url/text)` semantically-related pages (local embeddings); "
     "`github_search(query, mode)` structured GitHub repos/code/issues; `scholar_search(query)` "
     "academic papers (Semantic Scholar/CrossRef: citations/DOI/abstract); `smart_search(query)` "
-    "auto-routes to the best backend (github/scholar/news/it/general); "
+    "auto-routes to the best backend (github/scholar/science/news/it/general); "
     "`extract_structured(url, schema, mode)` pull fields via CSS/XPath, mode='llm'/'auto' "
     "uses an LLM. `watch(url, webhook)`/`list_watches`/`unwatch` monitor a page -> webhook on "
     "change. Trading: `forexfactory_calendar`, `cot_report`, `news_sentiment_feed`. "
@@ -900,37 +900,42 @@ async def scholar_search(
 async def smart_search(query: str, count: int = 10) -> dict:
     """Auto-route a query to the best backend (deterministic classifier, no LLM): github /
     scholar / science / news / it / general. Returns {query, route, reason, result}."""
-    routed = classify(query)
-    r = routed["route"]
-    if r == "github":
-        result = await github_search(query, mode="repositories", limit=count)
-    elif r == "scholar":
-        result = await scholar_search(query, limit=count)
-    elif r == "science":
-        result = await search(query, category="science", count=count)
-    elif r == "news":
-        result = await search(query, category="news", count=count)
-    elif r == "it":
-        result = await search(query, category="it", count=count)
-    else:
-        result = await search(query, count=count)
-    # Specialist failover: a dead/rate-limited specialist backend (GitHub anon 10 req/min,
-    # scholar miss) must not turn a perfectly-searchable query into a dead error when the
-    # general backend can still answer. Flagged degraded, matching the search() convention.
-    if r != "general" and isinstance(result, dict) and result.get("code") in {
-        "no_results", "search_backend_down",
-    }:
-        fb = await search(query, count=count)
-        if isinstance(fb, dict) and "code" not in fb:
-            return {
-                "query": query,
-                "route": "general",
-                "reason": routed["reason"] + f"; fallback: {r} {result['code']}",
-                "degraded": True,
-                "degraded_reason": "specialist_failover",
-                "result": fb,
-            }
-    return {"query": query, "route": r, "reason": routed["reason"], "result": result}
+    if not isinstance(query, str) or not query.strip():
+        return err("schema_invalid", "query must be a non-empty string", "query must be str")
+    try:
+        routed = classify(query)
+        r = routed["route"]
+        if r == "github":
+            result = await github_search(query, mode="repositories", limit=count)
+        elif r == "scholar":
+            result = await scholar_search(query, limit=count)
+        elif r == "science":
+            result = await search(query, category="science", count=count)
+        elif r == "news":
+            result = await search(query, category="news", count=count)
+        elif r == "it":
+            result = await search(query, category="it", count=count)
+        else:
+            result = await search(query, count=count)
+        # Specialist failover: a dead/rate-limited specialist backend (GitHub anon 10 req/min,
+        # scholar miss) must not turn a perfectly-searchable query into a dead error when the
+        # general backend can still answer. Flagged degraded, matching the search() convention.
+        if r != "general" and isinstance(result, dict) and result.get("code") in {
+            "no_results", "search_backend_down",
+        }:
+            fb = await search(query, count=count)
+            if isinstance(fb, dict) and "code" not in fb:
+                return {
+                    "query": query,
+                    "route": "general",
+                    "reason": routed["reason"] + f"; fallback: {r} {result['code']}",
+                    "degraded": True,
+                    "degraded_reason": "specialist_failover",
+                    "result": fb,
+                }
+        return {"query": query, "route": r, "reason": routed["reason"], "result": result}
+    except Exception as e:  # noqa: BLE001 - never raise to client
+        return err("search_backend_down", "smart search failed", _safe_detail(e))
 
 
 async def watch(
