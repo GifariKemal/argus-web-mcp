@@ -177,6 +177,16 @@ async def test_search_no_results(app_state, monkeypatch):
     assert r["code"] == "no_results"
 
 
+async def test_search_unexpected_error_maps_to_backend_down(app_state, monkeypatch):
+    async def boom(query, **kw):
+        raise RuntimeError("rerank exploded")
+
+    monkeypatch.setattr(server, "searxng_search", boom)
+    r = await server.search("anything")
+    assert r["code"] == "search_backend_down"
+    assert "RuntimeError" in r["detail"]
+
+
 async def test_news_sentiment_feed_does_not_route_through_guarded_client(app_state, monkeypatch):
     """REGRESSION (Bug 1): the news handler must NOT forward the SSRF-guarded
     s.client into the internal loopback SearXNG search.
@@ -216,6 +226,27 @@ async def test_read_extract_media(app_state):
     r = await server.read(f"{BASE}/article", extract_media=True)
     assert "links" in r and "images" in r
     assert isinstance(r["links"], list) and isinstance(r["images"], list)
+
+
+async def test_read_extract_media_surfaces_truncation_flags(app_state, monkeypatch):
+    html = (
+        "<html><body><article><p>"
+        + ("Gold content sentence. " * 40)
+        + "</p></article>"
+        + "".join(f'<a href="/l{i}">link {i}</a>' for i in range(501))
+        + "".join(f'<img src="/i{i}.png" alt="{i}">' for i in range(501))
+        + "</body></html>"
+    )
+
+    async def fake_fetch(url, **kw):
+        return {"html": html, "final_url": url, "status": 200, "render_path": "static"}
+
+    monkeypatch.setattr(server, "fetch", fake_fetch)
+    r = await server.read(f"{BASE}/many-media", extract_media=True)
+    assert len(r["links"]) == 500
+    assert len(r["images"]) == 500
+    assert r["links_truncated"] is True
+    assert r["images_truncated"] is True
 
 
 async def test_research_highlights(app_state, monkeypatch):
@@ -1207,3 +1238,30 @@ async def test_batch_read_isolates_a_crashing_read(app_state, monkeypatch):
     crashed = [r for r in out["results"] if not r["ok"]]
     assert crashed and all(r["error"]["code"] == "fetch_failed" for r in crashed)
     assert out["succeeded"] == 1  # the good URL still came through
+
+
+# --------------------------------------------------------------------------- #
+# gap-scan round 9: screenshot antibot code, map_urls clamp
+# --------------------------------------------------------------------------- #
+async def test_screenshot_surfaces_blocked_by_antibot(app_state, monkeypatch):
+    from argus.fetch.static import FetchError
+
+    async def blocked(*a, **k):
+        raise FetchError("blocked_by_antibot", "challenge page persists after stealth escalation")
+
+    monkeypatch.setattr(server, "fetch", blocked)
+    r = await server.screenshot(f"{BASE}/x")
+    assert r["code"] == "blocked_by_antibot"
+
+
+async def test_map_urls_clamps_max_urls(app_state, monkeypatch):
+    seen = []
+
+    async def fake_map_site(url, *, max_urls, include_subdomains, client):
+        seen.append(max_urls)
+        return {"url": url, "urls": [], "count": 0, "source": "links", "truncated": False}
+
+    monkeypatch.setattr(server, "map_site", fake_map_site)
+    await server.map_urls("https://x.test/", max_urls=-2)
+    await server.map_urls("https://x.test/", max_urls=99999)
+    assert seen == [1, 5000]  # clamped low + high at the trust boundary

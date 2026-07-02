@@ -1582,3 +1582,33 @@ def test_relevance_guard_on_topic_natural_language_not_flagged():
 
     out = asyncio.run(run())
     assert out["degraded"] is False
+
+
+@respx.mock
+async def test_guard_credits_semantic_rescue(monkeypatch):
+    """Hybrid path: zero-lexical-overlap results rescued by high cosine must NOT be flagged
+    degraded (else the guard defeats the paraphrase-rescue the hybrid blend exists for)."""
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: True)
+    monkeypatch.setattr(argus.search.semantic, "similarities", lambda q, texts: [0.9] * len(texts))
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_page([
+        {"title": "Alpha", "url": "https://e/1", "content": "one two three", "engine": "bing"},
+        {"title": "Beta", "url": "https://e/2", "content": "four five six", "engine": "bing"},
+        {"title": "Gamma", "url": "https://e/3", "content": "seven eight nine", "engine": "bing"},
+    ])))
+    out = await search("quantum entanglement teleportation", base_url=BASE)
+    assert out["degraded"] is False
+    assert all("_sem_relevant" not in r for r in out["results"])  # transient flag stripped
+
+
+@respx.mock
+async def test_guard_still_flags_low_cosine_junk(monkeypatch):
+    """Hybrid path but genuinely off-topic (low cosine AND no lexical overlap) still degrades."""
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: True)
+    monkeypatch.setattr(argus.search.semantic, "similarities", lambda q, texts: [0.05] * len(texts))
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_page([
+        {"title": "Alpha", "url": "https://e/1", "content": "one two three", "engine": "bing"},
+        {"title": "Beta", "url": "https://e/2", "content": "four five six", "engine": "bing"},
+        {"title": "Gamma", "url": "https://e/3", "content": "seven eight nine", "engine": "bing"},
+    ])))
+    out = await search("quantum entanglement teleportation", base_url=BASE)
+    assert out["degraded"] is True and out["degraded_reason"] == "low_relevance"

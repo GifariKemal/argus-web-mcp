@@ -285,6 +285,8 @@ async def read(
         media = extract_links_images(res["html"], res["final_url"])
         out["links"] = media["links"]
         out["images"] = media["images"]
+        out["links_truncated"] = media["links_truncated"]
+        out["images_truncated"] = media["images_truncated"]
     s.cache.put(ck, out, source="general")
     return out
 
@@ -326,6 +328,8 @@ async def search(
         if e.code == "no_results":
             return err("no_results", "no search results", qkey)
         return err("search_backend_down", "search backend unavailable", _safe_detail(e))
+    except Exception as e:  # noqa: BLE001 - every tool boundary must return structured errors
+        return err("search_backend_down", "search failed", _safe_detail(e))
 
     res["from_cache"] = False
     # Never cache a degraded result set (low_relevance junk / failover): re-serving it
@@ -587,7 +591,7 @@ async def screenshot(url: str, timeout: int = TIMEOUTS["screenshot"]) -> dict:
     except SSRFError as e:
         return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
-        code = "blocked_by_antibot" if "antibot" in str(e).lower() else "render_failed"
+        code = "blocked_by_antibot" if e.code == "blocked_by_antibot" else "render_failed"
         return err(code, "screenshot failed", _safe_detail(e))
     return {"url": url, "final_url": res["final_url"], "screenshot": res.get("screenshot"),
             "format": "png"}
@@ -752,6 +756,7 @@ async def research(
 async def map_urls(url: str, max_urls: int = 500, include_subdomains: bool = True) -> dict:
     """Discover a site's URLs via sitemap.xml / robots.txt / 1-hop links (no full fetch)."""
     s = _state()
+    max_urls = max(1, min(max_urls, 5000))  # clamp at the trust boundary (like crawl/find_similar)
     ck = s.cache.key("map:" + url, {"max_urls": max_urls, "include_subdomains": include_subdomains})
     cached = s.cache.get(ck, ttl_for("docs"))
     if cached is not None:

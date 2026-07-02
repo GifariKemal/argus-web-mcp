@@ -520,3 +520,18 @@ async def test_static_honors_header_charset_over_meta(monkeypatch):
     async with _client(h) as c:
         res = await fetch_static("http://example.com/", client=c)
     assert text in res["html"]
+
+
+async def test_static_bogus_meta_charset_falls_back_to_utf8(monkeypatch):
+    """An unknown/bogus meta-declared charset must fall back to utf-8, not raise LookupError."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    body = (b'<html><head><meta charset="bogus-enc-xyz"></head><body>'
+            b"hello world</body></html>")
+
+    def h(req):
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+
+    async with _client(h) as c:
+        res = await fetch_static("http://example.com/", client=c)
+    assert res["status"] == 200
+    assert "hello world" in res["html"]  # decoded via utf-8 fallback, no exception
