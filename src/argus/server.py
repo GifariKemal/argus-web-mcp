@@ -44,7 +44,7 @@ from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
 from .scholar import scholar_search as _scholar_search
-from .search import _VALID_CATEGORIES, SearchError
+from .search import _VALID_CATEGORIES, _VALID_TIME_RANGES, SearchError
 from .search import search as searxng_search
 from .security.ssrf import SSRFError, build_safe_async_client, validate_url
 from .trading.cot import CotError
@@ -75,8 +75,14 @@ INSTRUCTIONS = (
 
 BATCH_CAP = 200
 MAX_PDF_BYTES = 64 * 1024 * 1024
+_VALID_FORMATS = frozenset({"markdown", "text", "html"})  # read/scrape/batch_read output formats
 
 logger = logging.getLogger("argus.server")
+# Make the documented ARGUS_LOG_LEVEL knob real: set the package logger level (records
+# propagate to uvicorn/journald's root handlers). Unknown value -> INFO. Set at import.
+logging.getLogger("argus").setLevel(
+    getattr(logging, os.environ.get("ARGUS_LOG_LEVEL", "INFO").upper(), logging.INFO)
+)
 
 # Per-tool latency samples (deque maxlen for bounded memory). Filled by _MetricsMiddleware.
 _tool_latencies: dict[str, deque[float]] = {}
@@ -231,6 +237,8 @@ async def read(
     """Fetch a URL -> clean main content (no truncation). `extract_media`=True also returns the
     page's links + images lists."""
     s = _state()
+    if format not in _VALID_FORMATS:
+        return err("schema_invalid", f"unknown format {format!r} (markdown|text|html)")
     try:
         validate_url(url)
     except SSRFError as e:
@@ -297,6 +305,8 @@ async def search(
     # rather than silently coercing to 'general' and caching the wrong-scope result.
     if category not in _VALID_CATEGORIES:
         return err("schema_invalid", f"unknown category {category!r} (general|news|science|it)")
+    if time_range is not None and time_range not in _VALID_TIME_RANGES:
+        return err("schema_invalid", f"unknown time_range {time_range!r} (day|week|month|year)")
     qkey = query if isinstance(query, str) else " ".join(query)
     ck = s.cache.key(
         "search:" + qkey,
@@ -392,6 +402,8 @@ async def scrape(
 ) -> dict:
     """JS-rendered fetch (+ optional screenshot/interactions) via the browser tier."""
     s = _state()
+    if format not in _VALID_FORMATS:
+        return err("schema_invalid", f"unknown format {format!r} (markdown|text|html)")
     try:
         validate_url(url)
     except SSRFError as e:
@@ -425,6 +437,8 @@ async def batch_read(
     urls: list[str], concurrency: int = 8, format: str = "markdown", clean: bool = True
 ) -> dict:
     """Parallel `read` over many URLs - partial-failure tolerant."""
+    if format not in _VALID_FORMATS:
+        return err("schema_invalid", f"unknown format {format!r} (markdown|text|html)")
     note = None
     if len(urls) > BATCH_CAP:
         note = f"capped to first {BATCH_CAP} of {len(urls)} urls"
@@ -435,12 +449,19 @@ async def batch_read(
         async with sem:
             r = await read(u, format=format, clean=clean)
         if isinstance(r, dict) and r.get("code") in {
-            "ssrf_blocked", "fetch_failed", "empty_content", "blocked_by_antibot",
+            "ssrf_blocked", "fetch_failed", "empty_content", "blocked_by_antibot", "schema_invalid",
         }:
             return {"url": u, "ok": False, "error": r}
         return {"url": u, "ok": True, "content": r["content"], "title": r.get("title")}
 
-    results = await asyncio.gather(*(one(u) for u in urls))
+    # return_exceptions: an unexpected crash in one read() must not sink the whole batch.
+    raw = await asyncio.gather(*(one(u) for u in urls), return_exceptions=True)
+    results = [
+        r if isinstance(r, dict)
+        else {"url": u, "ok": False,
+              "error": err("fetch_failed", "unexpected read error", _safe_detail(r))}
+        for u, r in zip(urls, raw, strict=True)
+    ]
     succeeded = sum(1 for r in results if r["ok"])
     out = {"results": results, "succeeded": succeeded, "failed": len(results) - succeeded}
     if note:
@@ -712,7 +733,12 @@ async def research(
             if want_hl:
                 text = full or src.get("content")
                 if text:
-                    src["highlights"] = semantic.top_sentences(query, text, top_k=3)
+                    try:
+                        src["highlights"] = semantic.top_sentences(query, text, top_k=3)
+                    except Exception:  # noqa: BLE001 - a runtime embed failure must not sink
+                        # the whole (successful) bundle; skip highlights and stop retrying.
+                        logger.warning("highlights embed failed; returning bundle without them")
+                        want_hl = False
 
     # Only cache success - never an error dict (e.g. mode='answer' LLM failure) and
     # never a degraded bundle (built on junk/failover search results; let it retry).
