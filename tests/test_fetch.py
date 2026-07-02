@@ -472,3 +472,51 @@ async def test_status_block_escalates_to_stealth_browser(monkeypatch, status):
     assert res["render_path"] == "browser"
     assert "rich" in res["html"]  # real browser content, not the challenge page
     assert "Access denied" not in res["html"]
+
+
+# --- encoding: sniff meta-declared charset when the HTTP header carries none ---
+async def test_static_sniffs_meta_charset_windows1251(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    text = "Привет мир"
+    body = ('<html><head><meta charset="windows-1251"></head><body>'
+            + text + "</body></html>").encode("windows-1251")
+
+    def h(req):
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+
+    async with _client(h) as c:
+        res = await fetch_static("http://example.com/", client=c)
+    assert "�" not in res["html"]  # no mojibake
+    assert text in res["html"]
+
+
+async def test_static_sniffs_shift_jis_http_equiv(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    text = "こんにちは"
+    body = ('<html><head><meta http-equiv="Content-Type" '
+            'content="text/html; charset=shift_jis"></head><body>'
+            + text + "</body></html>").encode("shift_jis")
+
+    def h(req):
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+
+    async with _client(h) as c:
+        res = await fetch_static("http://example.com/", client=c)
+    assert "�" not in res["html"]
+    assert text in res["html"]
+
+
+async def test_static_honors_header_charset_over_meta(monkeypatch):
+    """A header-declared charset wins; the meta-sniff must not override it."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    text = "café"
+    body = ("<html><body>" + text + "</body></html>").encode("latin-1")
+
+    def h(req):
+        return httpx.Response(
+            200, content=body, headers={"content-type": "text/html; charset=latin-1"}
+        )
+
+    async with _client(h) as c:
+        res = await fetch_static("http://example.com/", client=c)
+    assert text in res["html"]
