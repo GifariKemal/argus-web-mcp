@@ -99,7 +99,7 @@ class BrowserPool:
         if crawler is not None:
             try:
                 await crawler.close()
-            except Exception:  # noqa: BLE001 - handle is wedged; nothing better to do
+            except Exception:  # noqa: BLE001, S110 - handle is wedged; nothing better to do
                 pass
 
     async def _bounded_arun(self, crawler, url: str, cfg, timeout: float, *,

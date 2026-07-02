@@ -34,8 +34,8 @@ from .fetch.static import (
 )
 from .security.ssrf import (
     SSRFError,
-    build_safe_async_client,
     aresolve_and_validate,
+    build_safe_async_client,
     validate_url,
 )
 
