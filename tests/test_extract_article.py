@@ -270,3 +270,24 @@ def test_dedup_collapses_adjacent_repeats():
     assert _dedup_blocks("Same block.\n\nSame block.\n\nNext.").count("Same block.") == 1
     # a blank block between the pair must not defeat the collapse
     assert _dedup_blocks("Same block.\n\n\n\nSame block.").count("Same block.") == 1
+
+
+def test_dedup_collapses_whole_body_run_after_heading():
+    """trafilatura 2.x signature: the multi-block body repeats verbatim after the title.
+
+    [# Title, A, B, A, B] must collapse to [# Title, A, B] - the adjacent-only dedup
+    (key == prev) could never catch this because the repeated blocks are NON-adjacent.
+    """
+    from argus.extract.article import _dedup_blocks
+
+    out = _dedup_blocks("# Title\n\nAlpha para.\n\nBeta para.\n\nAlpha para.\n\nBeta para.")
+    assert out.count("Alpha para.") == 1
+    assert out.count("Beta para.") == 1
+    assert out.count("# Title") == 1
+    assert out == "# Title\n\nAlpha para.\n\nBeta para."  # order preserved
+
+
+def test_dedup_collapses_full_document_repeat():
+    from argus.extract.article import _dedup_blocks
+
+    assert _dedup_blocks("A one.\n\nB two.\n\nA one.\n\nB two.") == "A one.\n\nB two."

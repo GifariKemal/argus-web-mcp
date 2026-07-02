@@ -89,6 +89,21 @@ def _cr_abstract(work: dict) -> str | None:
 def _first(seq) -> str | None:
     return seq[0] if seq else None
 
+def _cr_pdf(work: dict) -> str | None:
+    """OA PDF URL from CrossRef's ``link`` array (first application/pdf full-text link).
+
+    CrossRef exposes open-access full text via ``link`` entries carrying
+    ``content-type``; S2 has ``openAccessPdf.url`` but CrossRef's mapping hardcoded
+    None, so ``open_access=True`` dropped every CrossRef-fallback result (the common
+    anonymous-S2-429 path). Guard the URL so a malformed payload can't inject a non-URL.
+    """
+    for link in work.get("link") or []:
+        if link.get("content-type") == "application/pdf":
+            url = link.get("URL")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                return url
+    return None
+
 def _map_crossref(work: dict) -> dict:
     return {
         "title": _first(work.get("title")),
@@ -99,7 +114,7 @@ def _map_crossref(work: dict) -> dict:
         "doi": work.get("DOI"),
         "url": work.get("URL"),
         "abstract": _cr_abstract(work),
-        "open_access_pdf": None,
+        "open_access_pdf": _cr_pdf(work),
     }
 
 def _apply_filters(results: list[dict], year_from: int | None, open_access: bool) -> list[dict]:

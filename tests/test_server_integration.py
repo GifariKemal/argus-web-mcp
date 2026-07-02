@@ -1044,3 +1044,99 @@ async def test_cot_drift_flagged_result_not_cached(app_state, monkeypatch):
     await server.cot_report()
     await server.cot_report()
     assert calls["n"] == 2  # drift-flagged data never cached; each call retries upstream
+
+
+# --------------------------------------------------------------------------- #
+# gap-scan batch (0.4.1): category validation, research timeout, highlights, antibot
+# --------------------------------------------------------------------------- #
+async def test_search_invalid_category_schema_invalid(app_state, monkeypatch):
+    """A typo'd category is rejected up front (like read_pdf modes), not coerced to
+    'general' and cached under the wrong key. No backend call is made."""
+    async def boom(*a, **k):
+        raise AssertionError("searxng_search must not be called for an invalid category")
+
+    monkeypatch.setattr(server, "searxng_search", boom)
+    r = await server.search("anything", category="nwes")
+    assert r["code"] == "schema_invalid"
+
+
+async def test_research_wall_clock_timeout(app_state, monkeypatch):
+    """research() is bounded by an overall wall clock (backfill waves can each cost
+    ~timeout); a slow bundle returns a structured timeout error, not a 3x overrun."""
+    import asyncio
+    import time
+
+    async def slow_research(*a, **k):
+        await asyncio.sleep(5)
+        return {"sources": []}
+
+    monkeypatch.setattr(server, "_research", slow_research)
+    t0 = time.monotonic()
+    r = await server.research("q", timeout=0.05)
+    dt = time.monotonic() - t0
+    assert r["code"] == "fetch_failed" and "timed out" in r["error"].lower()
+    assert dt < 1.0  # bounded ~timeout, not the full 5s sleep
+
+
+async def test_research_highlights_use_full_precap_content(app_state, monkeypatch):
+    """highlights must be computed from FULL pre-cap content (top sentence may sit past
+    the cap), and the stashed _full_content must never leak into the payload."""
+    captured = {}
+
+    def fake_top(query, text, top_k=3):
+        captured["text"] = text
+        return ["hl-sentence"]
+
+    monkeypatch.setattr(server.semantic, "available", lambda: True)
+    monkeypatch.setattr(server.semantic, "top_sentences", fake_top)
+
+    async def fake_research(*a, **k):
+        return {"mode": "deep", "sources": [
+            {"url": "u", "content": "CAP", "_full_content": "FULL pre-cap body text",
+             "truncated": True, "full_chars": 22},
+        ]}
+
+    monkeypatch.setattr(server, "_research", fake_research)
+    r = await server.research("q", highlights=True, max_chars_per_source=3)
+    src = r["sources"][0]
+    assert captured["text"] == "FULL pre-cap body text"  # full content, not the cap
+    assert src["highlights"] == ["hl-sentence"]
+    assert "_full_content" not in src  # stripped -> payload stays lean
+
+
+async def test_research_strips_full_content_even_without_highlights(app_state, monkeypatch):
+    """Even with highlights=False the pre-cap stash must be stripped (no payload bloat)."""
+    async def fake_research(*a, **k):
+        return {"mode": "deep", "sources": [
+            {"url": "u", "content": "CAP", "_full_content": "FULL", "truncated": True},
+        ]}
+
+    monkeypatch.setattr(server, "_research", fake_research)
+    r = await server.research("q", highlights=False, max_chars_per_source=3)
+    assert "_full_content" not in r["sources"][0]
+
+
+async def test_read_surfaces_blocked_by_antibot(app_state, monkeypatch):
+    """read() surfaces an anti-bot block as its own code (via structured .code, not a
+    message substring), matching scrape/screenshot."""
+    from argus.fetch.static import FetchError
+
+    async def blocked_fetch(*a, **k):
+        raise FetchError("blocked_by_antibot", "status 403 (anti-bot block)")
+
+    monkeypatch.setattr(server, "fetch", blocked_fetch)
+    r = await server.read(f"{BASE}/antibot-page")
+    assert r["code"] == "blocked_by_antibot"
+
+
+async def test_batch_read_reports_antibot_as_failure(app_state, monkeypatch):
+    """A batched anti-bot block counts as ok=False (not a KeyError on missing content)."""
+    from argus.fetch.static import FetchError
+
+    async def blocked_fetch(*a, **k):
+        raise FetchError("blocked_by_antibot", "status 429 (anti-bot block)")
+
+    monkeypatch.setattr(server, "fetch", blocked_fetch)
+    out = await server.batch_read([f"{BASE}/a", f"{BASE}/b"])
+    assert out["succeeded"] == 0
+    assert all(not r["ok"] and r["error"]["code"] == "blocked_by_antibot" for r in out["results"])

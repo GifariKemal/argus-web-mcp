@@ -13,6 +13,11 @@ def _result(success=True, html="<html><body>ok content here</body></html>", stat
     )
 
 
+async def _fake_aresolve(host, port, timeout=None):
+    """Stub the (now async, off-loop) SSRF resolver: no real DNS, public IP."""
+    return ["93.184.216.34"]
+
+
 def test_looks_blocked_status():
     assert _looks_blocked("<html>fine</html>", 403)
     assert _looks_blocked("<html>fine</html>", 429)
@@ -48,7 +53,7 @@ async def test_render_escalates_to_stealth_on_block(monkeypatch):
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     # avoid real DNS in resolve_and_validate
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     out = await pool.render("http://example.com/")
     assert out["render_tier"] == "stealth"
@@ -78,7 +83,7 @@ async def test_render_no_escalation_when_clean(monkeypatch):
 
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     out = await pool.render("http://example.com/")
     assert out["render_tier"] == "normal"
@@ -122,7 +127,7 @@ async def test_render_blocked_raises_antibot_when_stealth_also_fails(monkeypatch
 
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     with pytest.raises(FetchError) as ei:
         await pool.render("http://example.com/")
@@ -142,7 +147,7 @@ class _RecordingCrawler:
 def _no_dns(monkeypatch):
     import argus.fetch.render as r
 
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
 
 async def test_render_blocked_on_both_tiers_raises_antibot(monkeypatch):
@@ -235,6 +240,50 @@ async def test_render_wedged_browser_times_out_and_frees_permit(monkeypatch):
     pool._crawler = _RecordingCrawler(_result(html="<article>" + "fine " * 60 + "</article>"))
     out = await pool.render("http://example.com/", timeout=5)
     assert "fine" in out["html"]
+
+
+async def test_wedged_stealth_is_recycled_not_reused(monkeypatch):
+    """A wedged STEALTH crawler must be closed+dropped so the next call re-inits a fresh
+    one - one wedge no longer poisons the anti-bot tier until process restart."""
+    import argus.fetch.render as r
+    from argus.fetch.static import FetchError
+
+    monkeypatch.setattr(r, "_RENDER_GRACE_S", 0.01)
+    starts = {"n": 0}
+    closed = {"n": 0}
+
+    class _WedgedStealth:
+        async def start(self):
+            starts["n"] += 1
+
+        async def close(self):
+            closed["n"] += 1
+
+        async def arun(self, url, config=None):
+            await asyncio.sleep(3600)  # wedge
+
+    fake_mod = types.SimpleNamespace(
+        AsyncWebCrawler=lambda config=None: _WedgedStealth(),
+        BrowserConfig=lambda **kw: None,
+        CacheMode=types.SimpleNamespace(BYPASS="bypass"),
+        CrawlerRunConfig=lambda **kw: None,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "crawl4ai", fake_mod)
+    _no_dns(monkeypatch)
+
+    pool = BrowserPool()
+    pool._crawler = _WedgedStealth()  # normal tier present (unused on the direct stealth path)
+
+    with pytest.raises(FetchError) as ei:
+        await pool.render("http://example.com/", stealth=True, timeout=0.01)
+    assert ei.value.code == "render_failed"
+    assert pool._stealth is None  # recycled: wedged handle dropped
+    assert starts["n"] == 1 and closed["n"] == 1
+
+    # next stealth render re-inits a fresh crawler instead of reusing the wedged one
+    with pytest.raises(FetchError):
+        await pool.render("http://example.com/", stealth=True, timeout=0.01)
+    assert starts["n"] == 2  # would stay 1 if the wedged handle were reused
 
 
 async def test_screenshot_of_challenge_page_still_returns(monkeypatch):

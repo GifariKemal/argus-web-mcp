@@ -10,11 +10,14 @@ This is a HARD GATE. Keep it small, pure, and fully covered.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlsplit
 
 import httpx
+
+from ..config import DNS_TIMEOUT
 
 ALLOWED_SCHEMES = {"http", "https"}
 
@@ -87,6 +90,26 @@ def resolve_and_validate(host: str, port: int) -> list[str]:
     return ips
 
 
+async def aresolve_and_validate(
+    host: str, port: int, timeout: float | None = None
+) -> list[str]:
+    """Async form of :func:`resolve_and_validate`: run the blocking resolver off the
+    event loop, bounded by ``timeout`` seconds (default ``DNS_TIMEOUT``).
+
+    Security logic is IDENTICAL - it calls the same sync validator; this only stops a
+    slow/hung ``socket.getaddrinfo`` from freezing the single-worker event loop for ALL
+    concurrent tool calls (and it re-runs per redirect hop). A timeout surfaces as
+    ``SSRFError`` so the existing ``ssrf_blocked`` contract and fetch-layer ladder hold.
+    """
+    if timeout is None:
+        timeout = DNS_TIMEOUT
+    try:
+        async with asyncio.timeout(timeout):
+            return await asyncio.to_thread(resolve_and_validate, host, port)
+    except TimeoutError as exc:
+        raise SSRFError(f"resolution timed out for {host!r} after {timeout:g}s") from exc
+
+
 class _SafeTransport(httpx.AsyncBaseTransport):
     """Pins each request to a validated resolved IP (anti-DNS-rebinding).
 
@@ -102,7 +125,7 @@ class _SafeTransport(httpx.AsyncBaseTransport):
         original_host = request.url.host
         port = request.url.port or _DEFAULT_PORTS[request.url.scheme]
 
-        ips = resolve_and_validate(original_host, port)
+        ips = await aresolve_and_validate(original_host, port)
         pinned = ips[0]
 
         request.url = request.url.copy_with(host=pinned)

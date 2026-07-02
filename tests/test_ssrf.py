@@ -15,6 +15,7 @@ import pytest
 from argus.security.ssrf import (
     ALLOWED_SCHEMES,
     SSRFError,
+    aresolve_and_validate,
     build_safe_async_client,
     is_blocked_ip,
     resolve_and_validate,
@@ -256,3 +257,55 @@ def test_client_does_not_follow_redirects():
 def test_client_kwargs_passthrough():
     client = build_safe_async_client(timeout=7.0)
     assert client.timeout.read == 7.0
+
+
+# --------------------------------------------------------------------------- #
+# aresolve_and_validate: same validation, off the event loop, bounded (async DNS)
+# --------------------------------------------------------------------------- #
+async def test_aresolve_runs_off_loop_and_overlaps(monkeypatch):
+    """A blocking getaddrinfo must not freeze the loop: two concurrent resolves
+    overlap (~N, not ~2N) and a tiny concurrent task still ticks during the lookup."""
+    import asyncio
+    import time
+
+    def slow_gai(host, port, *a, **k):
+        time.sleep(0.3)  # blocking, as the real resolver is
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow_gai)
+    ticked = []
+
+    async def ticker():
+        await asyncio.sleep(0.05)
+        ticked.append(True)
+
+    t0 = time.monotonic()
+    results = await asyncio.gather(
+        aresolve_and_validate("a.example.com", 443),
+        aresolve_and_validate("b.example.com", 443),
+        ticker(),
+    )
+    dt = time.monotonic() - t0
+    assert results[0] == ["93.184.216.34"]
+    assert ticked == [True]  # loop stayed responsive during the blocking lookup
+    assert dt < 0.55  # overlapped off-loop (~0.3s), not serialized on-loop (~0.6s)
+
+
+async def test_aresolve_timeout_raises_ssrf(monkeypatch):
+    """A hung resolver surfaces as SSRFError after the timeout, without blocking."""
+    import time
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: (time.sleep(2), [])[1])
+    with pytest.raises(SSRFError):
+        await aresolve_and_validate("hung.example.com", 443, timeout=0.2)
+
+
+async def test_aresolve_propagates_blocked_ip(monkeypatch):
+    """The off-loop path enforces the SAME block-on-any rule as the sync validator."""
+
+    def fake_gai(host, port, *a, **k):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    with pytest.raises(SSRFError):
+        await aresolve_and_validate("internal.example.com", 443)

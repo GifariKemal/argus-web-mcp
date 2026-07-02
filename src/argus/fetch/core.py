@@ -72,7 +72,7 @@ async def _do_fetch(
     if force_browser:
         if browser is None:
             raise FetchError("render_failed", "render requested but no browser available")
-        _guard(url)  # SSRF resolve-then-validate before navigating (browser tier too)
+        await _guard(url)  # SSRF resolve-then-validate before navigating (browser tier too)
         r = await browser.render(
             url, wait_for=wait_for, actions=actions, screenshot=screenshot,
             timeout=max(timeout, 45),

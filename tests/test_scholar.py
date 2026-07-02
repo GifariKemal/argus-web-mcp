@@ -98,7 +98,7 @@ async def test_s2_request_carries_fields_and_limit():
 # --------------------------------------------------------------------------- #
 # CrossRef fallback (S2 429 / failure / empty)
 # --------------------------------------------------------------------------- #
-def _cr_work(i, *, year=2019, citations=50, abstract=None):
+def _cr_work(i, *, year=2019, citations=50, abstract=None, links=None):
     work = {
         "title": [f"CR Paper {i}"],
         "author": [
@@ -113,6 +113,8 @@ def _cr_work(i, *, year=2019, citations=50, abstract=None):
     }
     if abstract is not None:
         work["abstract"] = abstract
+    if links is not None:
+        work["link"] = links
     return work
 
 
@@ -195,6 +197,31 @@ async def test_both_error_raises_backend_down():
         with pytest.raises(ScholarError) as exc:
             await scholar_search("x", client=client)
     assert exc.value.code == "search_backend_down"
+
+
+@respx.mock
+async def test_crossref_open_access_pdf_surfaces_under_oa_filter():
+    """On the common anonymous S2-429 path, open_access=True previously dropped every
+    CrossRef result (open_access_pdf hardcoded None). Now a work exposing a PDF link
+    survives the filter."""
+    respx.get(_S2_SEARCH).mock(return_value=httpx.Response(429, json={"message": "rate"}))
+    respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(
+            200,
+            json={"message": {"items": [
+                _cr_work(1, links=[
+                    {"URL": "https://ex.org/abs.html", "content-type": "text/html"},
+                    {"URL": "https://ex.org/full.pdf", "content-type": "application/pdf"},
+                ]),
+                _cr_work(2),  # no link -> no OA pdf -> dropped by the filter
+            ]}},
+        )
+    )
+    async with _client() as client:
+        out = await scholar_search("attention", open_access=True, client=client)
+    assert out["source"] == "crossref"
+    assert out["count"] == 1
+    assert out["results"][0]["open_access_pdf"] == "https://ex.org/full.pdf"
 
 
 @respx.mock

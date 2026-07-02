@@ -34,8 +34,8 @@ from .fetch.static import (
 )
 from .security.ssrf import (
     SSRFError,
+    aresolve_and_validate,
     build_safe_async_client,
-    resolve_and_validate,
     validate_url,
 )
 
@@ -214,7 +214,7 @@ async def map_site(
     parts = urlsplit(url)
     seed_host = parts.hostname or ""
     # Re-pin the seed up front so an SSRF block surfaces before any discovery work.
-    resolve_and_validate(seed_host, parts.port or _DEFAULT_PORTS[parts.scheme])
+    await aresolve_and_validate(seed_host, parts.port or _DEFAULT_PORTS[parts.scheme])
 
     origin = _origin(url)
 

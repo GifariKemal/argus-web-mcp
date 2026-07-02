@@ -38,7 +38,7 @@ from typing import Any, Protocol
 
 from parsel import Selector
 
-from .security.ssrf import SSRFError, resolve_and_validate, validate_url
+from .security.ssrf import SSRFError, aresolve_and_validate, validate_url
 
 logger = logging.getLogger("argus.watch")
 
@@ -207,7 +207,7 @@ async def deliver(webhook: str, payload: dict, *, client: _HttpClient) -> bool:
 
         parts = urlsplit(webhook)
         port = parts.port or (443 if parts.scheme == "https" else 80)
-        resolve_and_validate(parts.hostname, port)
+        await aresolve_and_validate(parts.hostname, port)
     except SSRFError as exc:
         logger.warning("webhook blocked by SSRF guard, not delivering: %s (%s)", webhook, exc)
         return False

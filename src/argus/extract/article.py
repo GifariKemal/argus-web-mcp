@@ -21,24 +21,34 @@ from readability import Document
 
 
 def _dedup_blocks(text: str) -> str:
-    """Drop consecutive duplicate paragraphs.
+    """Drop duplicated blocks emitted by the extractor.
 
-    trafilatura 2.0 with ``favor_precision=True`` emits each block twice; collapse
-    the verbatim repeat while preserving order and intentional repeats elsewhere
-    (a refrain/legal clause repeated later in the document is real content - only
-    an ADJACENT repeat is extractor noise). Tracks the last non-empty block so a
-    blank block between the pair doesn't defeat the collapse.
+    trafilatura 2.x re-emits the whole ``<article>``/``<main>`` body a second time, so
+    the block stream is a contiguous RUN repeated verbatim right after itself - e.g.
+    ``[Title, A, B, A, B]`` (the heading sits outside the duplicated run). Collapse the
+    longest such adjacent run-duplication anywhere in the stream (a single duplicated
+    block is the ``L == 1`` case, preserving the old adjacent-collapse behaviour) while
+    keeping genuine non-adjacent repeats - a refrain/legal clause recurring later is real
+    content, not extractor noise. Blank blocks are layout and must not defeat a match.
     """
-    out: list[str] = []
-    prev = ""
-    for b in text.split("\n\n"):
-        key = b.strip()
-        if key and key == prev:
-            continue
-        if key:
-            prev = key
-        out.append(b)
-    return "\n\n".join(out)
+    blocks = text.split("\n\n")
+    idx = [i for i, b in enumerate(blocks) if b.strip()]  # non-empty block positions
+    keys = [blocks[i].strip() for i in idx]
+    n = len(keys)
+    drop: set[int] = set()  # positions within `idx` to drop
+    p = 0
+    while p < n:
+        for length in range((n - p) // 2, 0, -1):  # longest adjacent repeat first
+            if keys[p : p + length] == keys[p + length : p + 2 * length]:
+                drop.update(range(p + length, p + 2 * length))
+                p += 2 * length
+                break
+        else:
+            p += 1
+    if not drop:
+        return text
+    drop_orig = {idx[k] for k in drop}
+    return "\n\n".join(b for i, b in enumerate(blocks) if i not in drop_orig)
 
 
 def _readability_markdown(html: str) -> str:

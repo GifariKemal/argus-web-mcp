@@ -14,6 +14,54 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.1] - 2026-07-02 - Gap-scan round 7: 8 verified fixes
+
+A 30-agent workflow (9 subsystem deep-dives + 4 SOTA-research + synthesis + adversarial
+verify-per-finding) scanned the post-0.4.0 tree; 8 findings survived review, all with an
+offline before/after and all shipped with regression tests. Suite 722 -> 735 passed, ruff
+clean, coverage 94% held.
+
+### Fixed
+
+- **Whole-body article duplication** - `_dedup_blocks` was adjacent-only, so trafilatura
+  2.x's verbatim re-emit of the entire `<article>`/`<main>` body (a contiguous run repeated
+  right after itself: `[Title, A, B, A, B]`) was never collapsed, doubling returned tokens
+  on well-structured pages for `read`/`research`/`scrape`/`crawl`. Now run-aware (collapses
+  the longest adjacent run-duplication; single-block repeat is the `L==1` case); genuine
+  non-adjacent refrains are preserved.
+- **`scholar_search(open_access=True)` returned no_results on the CrossRef fallback** -
+  `_map_crossref` hardcoded `open_access_pdf=None`, dropping every result on the common
+  anonymous-S2-429 path. Now maps the first `application/pdf` entry from CrossRef's `link`
+  array (URL-guarded).
+- **`research()` had no overall wall clock** - the `timeout` arg bounded only per-source
+  fetches, so sequential backfill waves could run ~3x the stated budget. Wrapped in
+  `asyncio.timeout(timeout)` (mirroring `crawl`) -> structured `fetch_failed` on overrun.
+- **Highlights were computed after truncation** - with `highlights=True` +
+  `max_chars_per_source`, `top_sentences` ran over the already-capped prefix, so a top
+  query-relevant sentence past the cap could never surface. Now computed from the full
+  pre-cap content (stashed then always stripped, so the payload stays lean either way).
+- **`search(category=...)` silently coerced an invalid enum to `general`** (and cached the
+  wrong-scope result). Now rejects with `schema_invalid` up front, consistent with
+  `read_pdf` / `extract_structured`.
+- **`read()` collapsed `blocked_by_antibot` into `fetch_failed`** unlike `scrape`/
+  `screenshot`, and all three used a `"antibot" in str(e)` message check that never matched
+  the real message (`"...(anti-bot block)"` - hyphenated). All three now derive the code from
+  the structured `FetchError.code`; `batch_read` counts an antibot block as `ok=False`.
+- **A wedged stealth browser was reused until process restart** - `_bounded_arun` bounded the
+  wedge (0.4.0) but kept `_stealth` pointed at the hung crawler. Now recycles it (close+null
+  under lock) on timeout so the next call re-inits a fresh one (stealth tier only; the normal
+  tier has no lazy re-init).
+
+### Changed (perf)
+
+- **SSRF DNS resolution now runs off the event loop, bounded by a timeout.** `resolve_and_validate`
+  called blocking `socket.getaddrinfo` synchronously from 6 async paths (incl. the safe-transport
+  send hook, which re-resolves per request AND per redirect hop); on the single worker one slow/hung
+  lookup froze ALL concurrent tool calls. New `aresolve_and_validate` runs the same validator via
+  `asyncio.to_thread` under `asyncio.timeout(ARGUS_DNS_TIMEOUT`, default 5`)`, re-raising a timeout as
+  `SSRFError`. Security logic byte-for-byte identical (validation, IP-pinning, both defence-in-depth
+  re-resolves unchanged). New `ARGUS_DNS_TIMEOUT` documented in `deploy/argus.env.example`.
+
 ## [0.4.0] - 2026-07-02 - Hardening round 6: multi-agent audit, 30 fixes shipped
 
 A 49-agent workflow (7 module-group analyzers + one adversarial verifier per finding) audited the whole codebase; 41/42 findings survived adversarial review. Everything offline-measurable was shipped, each with regression tests: suite 640 -> 722 passed, ruff clean, coverage total 94% held (touched modules at or above baseline). Root-caused, not symptom-patched.
