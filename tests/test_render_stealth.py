@@ -13,6 +13,11 @@ def _result(success=True, html="<html><body>ok content here</body></html>", stat
     )
 
 
+async def _fake_aresolve(host, port, timeout=None):
+    """Stub the (now async, off-loop) SSRF resolver: no real DNS, public IP."""
+    return ["93.184.216.34"]
+
+
 def test_looks_blocked_status():
     assert _looks_blocked("<html>fine</html>", 403)
     assert _looks_blocked("<html>fine</html>", 429)
@@ -48,7 +53,7 @@ async def test_render_escalates_to_stealth_on_block(monkeypatch):
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     # avoid real DNS in resolve_and_validate
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     out = await pool.render("http://example.com/")
     assert out["render_tier"] == "stealth"
@@ -78,7 +83,7 @@ async def test_render_no_escalation_when_clean(monkeypatch):
 
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     out = await pool.render("http://example.com/")
     assert out["render_tier"] == "normal"
@@ -122,7 +127,7 @@ async def test_render_blocked_raises_antibot_when_stealth_also_fails(monkeypatch
 
     monkeypatch.setattr(pool, "_ensure_stealth", fake_ensure)
     import argus.fetch.render as r
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
     with pytest.raises(FetchError) as ei:
         await pool.render("http://example.com/")
@@ -142,7 +147,7 @@ class _RecordingCrawler:
 def _no_dns(monkeypatch):
     import argus.fetch.render as r
 
-    monkeypatch.setattr(r, "resolve_and_validate", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
 
 
 async def test_render_blocked_on_both_tiers_raises_antibot(monkeypatch):

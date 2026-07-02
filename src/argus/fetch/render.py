@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
-from ..security.ssrf import resolve_and_validate, validate_url
+from ..security.ssrf import aresolve_and_validate, validate_url
 from .static import _DEFAULT_PORTS, FetchError
 
 # Markers of an anti-bot interstitial (Cloudflare / Akamai / PerimeterX challenge pages).
@@ -120,7 +120,7 @@ class BrowserPool:
 
         validate_url(url)
         parts = urlsplit(url)
-        resolve_and_validate(parts.hostname, parts.port or _DEFAULT_PORTS[parts.scheme])
+        await aresolve_and_validate(parts.hostname, parts.port or _DEFAULT_PORTS[parts.scheme])
 
         if self._crawler is None:
             raise FetchError("render_failed", "browser pool not started")

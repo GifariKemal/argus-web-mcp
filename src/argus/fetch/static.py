@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ..security.ssrf import resolve_and_validate, validate_url
+from ..security.ssrf import aresolve_and_validate, validate_url
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _DEFAULT_UA = "ArgusBot/0.1 (+https://suriota.com; self-hosted research)"
@@ -35,14 +35,15 @@ class FetchError(Exception):
         super().__init__(message)
 
 
-def _guard(url: str) -> None:
+async def _guard(url: str) -> None:
     """Scheme allowlist + resolve-then-validate for a single hop. Raises SSRFError."""
     validate_url(url)
     parts = urlsplit(url)
     port = parts.port or _DEFAULT_PORTS[parts.scheme]
     # ponytail: re-resolves here AND in the safe transport (defence in depth); OS
     # caches DNS so the double lookup is cheap. Makes per-hop blocking explicit/testable.
-    resolve_and_validate(parts.hostname, port)
+    # Resolver runs off the loop (aresolve) so a slow lookup per hop can't stall the worker.
+    await aresolve_and_validate(parts.hostname, port)
 
 
 async def _stream_capped(resp: httpx.Response) -> bytes:
@@ -67,7 +68,7 @@ async def _get_guarded(
     current = url
     headers = {"user-agent": _DEFAULT_UA}
     for _ in range(max_redirects + 1):
-        _guard(current)
+        await _guard(current)
         try:
             async with client.stream(
                 "GET", current, timeout=timeout, headers=headers

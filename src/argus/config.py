@@ -40,5 +40,9 @@ TIMEOUTS: dict[str, int] = {
     "unwatch": _int("ARGUS_TIMEOUT_WATCH", 30),
 }
 
+# DNS resolution guard (seconds). The SSRF resolver runs off the event loop; this
+# bounds it so a slow/hung resolver can't stall concurrent tool calls on the single worker.
+DNS_TIMEOUT = _int("ARGUS_DNS_TIMEOUT", 5)
+
 # Metrics / health
 HEALTH_LATENCY_BUCKETS = _int("ARGUS_HEALTH_LATENCY_BUCKETS", 500)  # max latencies per tool
