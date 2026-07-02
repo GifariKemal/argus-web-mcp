@@ -353,9 +353,9 @@ ARGUS_LLM_MODEL=mixtral-8x7b-32768
 # Browser concurrency (default 4, increase for throughput)
 ARGUS_MAX_CONCURRENT_CONTEXTS=8
 
-# Timeouts (seconds)
-ARGUS_REQUEST_TIMEOUT=30
-ARGUS_BROWSER_TIMEOUT=60
+# Per-tool timeouts (seconds): ARGUS_TIMEOUT_<TOOL> (see config.py), e.g.
+ARGUS_TIMEOUT_READ=60
+ARGUS_TIMEOUT_CRAWL=180
 
 # Logging level
 ARGUS_LOG_LEVEL=INFO  # or DEBUG for verbose logs

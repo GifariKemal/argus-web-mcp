@@ -14,6 +14,45 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.2] - 2026-07-02 - Gap-scan round 8: 10 long-tail fixes
+
+A 27-agent workflow (8 subsystem deep-dives + 3 SOTA-research + synthesis + adversarial
+verify-per-finding) scanned the post-0.4.1 tree. After two prior audits the remaining gaps
+are lower-severity but real; all shipped with offline regression tests. Suite 735 -> 746
+passed, ruff clean, coverage 94% held. (Two verified trading-only fixes were intentionally
+dropped - the trading tools are not in use here; and an opt-in `max_chars` cap for read/scrape
+was deferred as a feature, not a gap.)
+
+### Fixed
+
+- **read()/scrape()/batch_read() silently coerced an out-of-enum `format` to markdown** while
+  echoing the bogus label (and wasting a fetch); batch_read would then KeyError on the err dict.
+  Now reject with `schema_invalid`, consistent with the read_pdf/category guards.
+- **search() silently ignored an out-of-enum `time_range`** (SearXNG returns all-time results
+  for a non-`{day,week,month,year}` value). Now `schema_invalid`.
+- **Static fast-path mojibake'd meta-only legacy encodings** - httpx defaults to utf-8 with no
+  header charset, corrupting windows-1251/shift_jis/etc. pages irreversibly. Now decodes with the
+  header charset when present, else sniffs a `<meta>`/`<?xml>`-declared charset before utf-8.
+- **research() highlights ran outside try/except** - a runtime embedding failure turned a
+  successful bundle into an uncaught MCP error. Now guarded (skip highlights + log).
+- **batch_read had no crash isolation** - an unexpected exception in one `read()` sank the whole
+  batch. Now `gather(return_exceptions=True)` + per-URL failure normalization.
+- **map_site fetched robots.txt `Sitemap:` directives uncapped**, bypassing `_MAX_CHILD_SITEMAPS`.
+  The robots-derived seed list is now capped too.
+- **Corrupt-blob cache self-heal leaked the blob file** - it deleted the DB row but left the
+  orphaned file on disk. Now unlinks the blob as well.
+
+### Changed / docs
+
+- **`ARGUS_LOG_LEVEL` is now wired** (sets the `argus` logger level at import) - it was documented
+  but read nowhere. The two truly-dead knobs `ARGUS_REQUEST_TIMEOUT` / `ARGUS_BROWSER_TIMEOUT` are
+  removed from the deploy docs (the real knobs are the per-tool `ARGUS_TIMEOUT_*`).
+- **Documented the real, previously-undocumented env vars** in `deploy/argus.env.example`: JWT auth
+  (`ARGUS_JWT_JWKS_URI`/`ISSUER`/`AUDIENCE`), `ARGUS_GITHUB_TOKEN`, `ARGUS_COURTESY_DELAY`,
+  `ARGUS_MIN_CONTENT_WORDS`.
+- **Fixed 5 stale timeout defaults in `docs/03-TOOL-SPECS.md`** to match `config.TIMEOUTS`, and added
+  a `test_config` guard that fails on future doc/config timeout drift.
+
 ## [0.4.1] - 2026-07-02 - Gap-scan round 7: 8 verified fixes
 
 A 30-agent workflow (9 subsystem deep-dives + 4 SOTA-research + synthesis + adversarial
