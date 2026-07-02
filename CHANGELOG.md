@@ -4,7 +4,7 @@
 
 <img src="https://img.shields.io/badge/format-Keep_a_Changelog-2dd4bf?style=flat-square" alt="Keep a Changelog"/>
 <img src="https://img.shields.io/badge/tools-20-22c55e?style=flat-square" alt="20 tools"/>
-<img src="https://img.shields.io/badge/tests-600+-3fb950?style=flat-square" alt="600+ tests"/>
+<img src="https://img.shields.io/badge/tests-700+-3fb950?style=flat-square" alt="700+ tests"/>
 <img src="https://img.shields.io/badge/status-LIVE-16a34a?style=flat-square" alt="live"/>
 <img src="https://img.shields.io/badge/created-2026--06--24-0ea5e9?style=flat-square" alt="created"/>
 
@@ -13,6 +13,57 @@
 All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. Dates are absolute (`YYYY-MM-DD`). Argus went from research to a 20-tool, security-audited, benchmarked, **publicly-deployed** MCP server in two intensive days (2026-06-24 build, 2026-06-25 deploy + tuning); early entries are grouped by build phase rather than calendar day.
 
 ---
+
+## [0.4.0] - 2026-07-02 - Hardening round 6: multi-agent audit, 30 fixes shipped
+
+A 49-agent workflow (7 module-group analyzers + one adversarial verifier per finding) audited the whole codebase; 41/42 findings survived adversarial review. Everything offline-measurable was shipped, each with regression tests: suite 640 -> 722 passed, ruff clean, coverage total 94% held (touched modules at or above baseline). Root-caused, not symptom-patched.
+
+### Fixed - correctness
+
+- **Cache: missing/corrupt blob no longer raises into tools** - a deleted or truncated blob file (disk cleanup, crash mid-write) made every cached tool throw for the whole TTL and `get_stale` fail forever. Now self-heals: dead row deleted, treated as a cache miss, fresh fetch follows.
+- **Cache: `key()` no longer lowercases path/query** - `read("https://host/API")` and `/api` collided onto one cache key and served each other's content for up to an hour. Only scheme+host are case-insensitive per RFC 3986. One-time cold cache for mixed-case keys.
+- **Throttle: per-host courtesy delay now holds under concurrency** - N same-host acquirers (batch_read fires 8) all read the stale `last_request` and burst simultaneously after one shared sleep. Slot reservation (write before await) queues them at exactly `min_interval` spacing.
+- **Render: challenge pages can no longer masquerade as content** - a success=True "Just a moment..." page (either tier) now raises `blocked_by_antibot` instead of feeding "Verify you are human" into read/scrape/research; fetch core then falls through to its static/Wayback ladder.
+- **Render: wedged Chromium cannot starve the pool** - `arun` had no outer bound; a hung CDP pipe held a semaphore permit forever (4 hangs = browser tier dead until restart). `asyncio.timeout(timeout + 15s grace)` converts it to a bounded `render_failed`.
+- **Rerank: safety floor backfills instead of replacing** - when relevant results were a minority, the floor branch REPLACED them with the backend's first-N junk; relevant tail hits now always survive (lexical + hybrid paths).
+- **Rerank: URL dedup keeps meaningful query params** - `watch?v=AAA` vs `?v=BBB` no longer collapse as duplicates; tracking params (`utm_*`, fbclid, gclid, ...) still dedup; params compare order-insensitively.
+- **Relevance guard ignores stopword overlap** - garbage sharing only "to"/"the" with a natural-language query is now flagged `low_relevance` (guard-only change; rerank scoring untouched).
+- **Router: modal "may" no longer routes to news** - "what may cause a memory leak" went to the news backend. "may" now only counts as a month when date-anchored.
+- **research: per-source isolation restored** - one unexpected extractor error killed the whole deep bundle; now an isolated `{url, error: "extract_failed"}` entry.
+- **extract_structured (auto): no more bare `None`** - selector tier raising with no LLM fallback returned `None` to the client; now a structured `extraction_failed` error.
+- **PDF: pages-spec errors are honest** - malformed ("abc", "5-") or fully out-of-document specs on a VALID PDF returned `not_pdf`/crash paths; now `schema_invalid`. Reversed ranges auto-swap. Unknown `read_pdf` mode -> `schema_invalid` (docs advertised a nonexistent `figures`).
+- **PDF: spec-legal leading junk accepted** - `%PDF-` may sit up to 1024 bytes in (naive proxies/CGI prepend junk; pymupdf parses these fine); the magic gate now searches the first KiB.
+- **PDF quality tier honors `pages`** - Docling OCR'd the WHOLE document while reporting `pages_returned` as if sliced; the PDF is now sliced via pymupdf before Docling.
+- **map_urls: gzipped sitemaps decompressed** - `.xml.gz` payloads (standard on WordPress/news/large sites) arrived as mojibake and were silently skipped, collapsing discovery to 1-hop links. Magic-byte sniff + decompressed-size cap (zip-bomb guard).
+- **Article extractor: only ADJACENT duplicate blocks collapse** - the global dedup deleted legitimate non-consecutive repeats (refrains, repeated legal clauses), contradicting its own docstring.
+- **ForexFactory: non-dict feed elements skipped** - one junk element crashed the whole calendar with AttributeError.
+- **ForexFactory: unknown impact labels pass through verbatim** - previously folded into "Holiday", hiding a potentially high-impact event class on feed drift; empty still -> "Holiday".
+- **ForexFactory: `date_range` validated** - malformed bounds ("2026-6-2", ints, 1-element) raise coded `ff_bad_date_range` instead of silently mis-filtering.
+- **watch: failing sources honor `interval_s`** - an errored check never advanced `last_check`, so a broken URL was re-fetched EVERY 60s tick forever (60x load for a 1h watch). Errors now advance the clock, keep the baseline hash, and surface in poll results; a persist OSError on one watch no longer aborts the rest of the tick.
+- **crawl: real deadline + real error contract** - `ARGUS_TIMEOUT_CRAWL` (180s) was dead config and `deep_crawl`'s `timeout` param was never read: a tarpit crawl could hold the shared Chromium ~50 minutes. Now: per-page `page_timeout`, whole-crawl `asyncio.timeout` at the tool layer, `depth`/`max_pages` clamped (0-5 / 1-200), crawler exceptions -> structured `fetch_failed` (dead `CrawlError` class removed), and the crawl holds a BrowserPool permit so its page loads count against the RAM guard.
+- **cot_report: `date` honored, error codes unmasked** - `date` was silently ignored (wrong-week data served as requested); now filters rows (`requested_date` echoed, non-matching -> honest empty set). `cot_bad_report_type`/`ff_*` codes reach the client instead of being flattened to `fetch_failed`.
+
+### Added
+
+- **Cache eviction** - `Cache.purge(max_age_s=7d)` deletes expired rows + their blobs and sweeps orphaned blob files (a shrink-re-put leaked the old blob forever); runs hourly from the watch loop. Unbounded `~/.argus` growth on the shared VPS (Hermes/SUVA co-tenant) is now bounded.
+- **4 uncached tools now cached** - read_pdf (URL only; `pdf` TTL 24h - repeated Docling parses drop from seconds to ms), forexfactory_calendar + cot_report (`trading` 300s), news_sentiment_feed (`news` 900s). These TTLs existed as dead config since P1. Stale-fallback FF bundles are never cached.
+- **Degraded results are never cached** - a `low_relevance`/failover search, degraded research bundle, incomplete GitHub scan, or degraded news feed retries next call instead of re-serving junk for the full TTL.
+- **`argus_tool_errors_total{code=...}` on /metrics** - errors return as dicts (never raise), so Prometheus previously saw an SSRF block or a dead SearXNG as SUCCESS. Now alertable per error code.
+- **smart_search specialist failover** - a dead/rate-limited GitHub/scholar backend (anon 10 req/min) falls back to general search, flagged `degraded: true` + `specialist_failover` instead of returning a dead error.
+- **github_search surfaces `incomplete_results`** - GitHub's partial-index-scan flag now maps to the project-wide `degraded`/`degraded_reason` convention.
+- **news_sentiment_feed propagates `degraded`** - off-topic or failed-over news is no longer served as clean trading input.
+- **COT live drift detectors** - `identity_failures` (composed accounting identity per row) + `bad_dates` (ISO check) on every response; a CFTC column-layout change now lights up live instead of only in the offline golden test.
+- **watch poller logging** - the server poll loop logs failures (was a bare `pass`).
+
+### Changed
+
+- **Article metadata extraction ~4x cheaper** - `_metadata` used full `bare_extraction` (re-parses the entire body) for 5 header fields; now `extract_metadata` (measured 1.50 -> 0.38 ms/call on the ad-heavy fixture, identical field values). Hot path of read/scrape/batch_read/crawl/research.
+- docs/03-TOOL-SPECS.md refreshed: search/smart_search/github degraded fields, read_pdf modes + caching + `schema_invalid`, crawl `timeout`+clamps, trading contracts (drift detectors, coded errors, cache TTLs), map_urls gzip note.
+
+### Deferred (explicitly)
+
+- `_SEM_FLOOR` recalibration + semantic-rescue/guard alignment: they change rerank scores, so they are gated on the live semantic A/B harness (SearXNG + LLM judge) - not shippable on unit tests alone.
+- Proxy pool, LLM tier default-on, multi-worker uvicorn: owner decisions, unchanged by design.
 
 ## [0.3.2] - 2026-07-02 - Relevance guard: majority rule
 

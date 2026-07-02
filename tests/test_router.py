@@ -192,3 +192,37 @@ def test_tiebreak_news_beats_it():
     top = max(out["scores"].values())
     assert out["scores"]["news"] == top
     assert out["scores"]["it"] == top
+
+
+# --- modal 'may' must not be a news signal -------------------------------------
+
+MODAL_MAY_QUERIES = [
+    "what may cause a memory leak",
+    "which laptop may be best for students",
+    "this approach may not scale",
+    "what may happen if I mix these chemicals",
+    "the compiler may optimize this away",
+    "a faulty sensor may report wrong values",
+    "what may improve battery life",
+    "this may be a bug in the driver",
+    "which diet may lower cholesterol",
+    "the motor may overheat under load",
+]
+
+DATE_MAY_QUERIES = [
+    "may 2026 fed rate decision",
+    "15 may earnings report",
+    "may 15 product announcement",
+    "election results in may",
+    "early may product launch",
+]
+
+
+@pytest.mark.parametrize("q", MODAL_MAY_QUERIES)
+def test_modal_may_does_not_route_news(q):
+    assert classify(q)["route"] != "news"
+
+
+@pytest.mark.parametrize("q", DATE_MAY_QUERIES)
+def test_date_anchored_may_routes_news(q):
+    assert classify(q)["route"] == "news"

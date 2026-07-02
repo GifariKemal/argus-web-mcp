@@ -440,3 +440,91 @@ def test_ssrf_gate_still_blocks_loopback():
     from argus.security.ssrf import is_blocked_ip
 
     assert is_blocked_ip("127.0.0.1") is True
+
+
+# --------------------------------------------------------------------------- #
+# Round-6 hardening: parser robustness, impact passthrough, range validation, #
+# COT date filter + drift detectors, news degraded propagation                #
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_ff_calendar_skips_non_dict_elements():
+    valid = {"title": "CPI m/m", "country": "USD", "date": "2026-01-01T08:30:00-05:00",
+             "impact": "High", "forecast": "0.3%", "previous": "0.2%", "actual": "0.4%"}
+    parsed = forexfactory.parse_ff_calendar([valid, "junk", None, 42, ["x"]])
+    assert len(parsed) == 1
+    assert parsed[0] == {"time": "2026-01-01T08:30:00-05:00", "currency": "USD",
+                         "event": "CPI m/m", "impact": "High", "actual": "0.4%",
+                         "forecast": "0.3%", "previous": "0.2%"}
+
+
+def test_unknown_impact_label_passes_through_verbatim():
+    parsed = forexfactory.parse_ff_calendar(
+        [{"title": "X", "country": "USD", "date": "2026-01-01T00:00:00-05:00",
+          "impact": "High Impact Expected"}]
+    )
+    assert parsed[0]["impact"] == "High Impact Expected"  # visible drift, not "Holiday"
+
+
+@pytest.mark.parametrize("bad", [("2026-6-2", "2026-06-03"), ("2026-06-01",),
+                                 (1, 2), ("garbage", "2026-06-03")])
+async def test_forexfactory_bad_date_range_raises_coded(bad):
+    body = FF_FIXTURE.read_bytes()
+    async with _mock_client(body) as client:
+        with pytest.raises(forexfactory.ForexFactoryError) as ei:
+            await forexfactory.forexfactory_calendar(date_range=bad, client=client)
+    assert ei.value.code == "ff_bad_date_range"
+
+
+async def test_cot_report_date_filter_match_and_mismatch():
+    body = COT_FIXTURE.read_bytes()
+    async with _mock_client(body) as client:
+        all_out = await cot.cot_report(client=client)
+        the_date = all_out["rows"][0]["report_date"]
+        hit = await cot.cot_report(date=the_date, client=client)
+        miss = await cot.cot_report(date="1999-01-01", client=client)
+    assert hit["count"] == all_out["count"]
+    assert hit["requested_date"] == the_date
+    assert miss["count"] == 0  # honest empty set, never the wrong week
+    assert miss["requested_date"] == "1999-01-01"
+
+
+async def test_cot_drift_detectors_zero_on_golden():
+    body = COT_FIXTURE.read_bytes()
+    async with _mock_client(body) as client:
+        out = await cot.cot_report(client=client)
+    assert out["identity_failures"] == 0
+    assert out["bad_dates"] == 0
+
+
+async def test_cot_drift_detected_on_shifted_columns():
+    """Inserting a column shifts every numeric field - the live drift detectors must
+    light up instead of serving silently wrong positioning data."""
+    lines = COT_FIXTURE.read_text(encoding="utf-8").strip().splitlines()
+    shifted = "\n".join(
+        ",".join(cells[:6] + ["SHIM"] + cells[6:])
+        for line in lines
+        if (cells := line.split(","))
+    )
+    async with _mock_client(shifted.encode()) as client:
+        out = await cot.cot_report(client=client)
+    assert out["count"] > 0
+    assert out["identity_failures"] == out["count"]
+
+
+async def test_news_feed_propagates_degraded(monkeypatch):
+    degraded_search = {**CANNED_SEARCH, "degraded": True, "degraded_reason": "low_relevance"}
+
+    async def fake_search(query, **kwargs):
+        return degraded_search
+
+    monkeypatch.setattr(news, "web_search", fake_search)
+    out = await news.news_sentiment_feed("gold")
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "low_relevance"
+
+
+async def test_news_feed_clean_search_not_degraded(canned_search):
+    out = await news.news_sentiment_feed("gold")
+    assert out["degraded"] is False
+    assert "degraded_reason" not in out

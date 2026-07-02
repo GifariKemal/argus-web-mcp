@@ -205,10 +205,16 @@ async def github_search(
 
     mapper = _MAPPERS[mode]
     results = [mapper(item) for item in items[:limit]]
+    # GitHub sets incomplete_results=true when its search timed out server-side and
+    # scanned only part of the index - surface it via the project-wide degraded
+    # convention (search.py) instead of silently serving a partial answer as complete.
+    incomplete = bool(data.get("incomplete_results"))
     return {
         "query": query,
         "mode": mode,
         "total_count": data.get("total_count", len(results)),
         "results": results,
         "count": len(results),
+        "degraded": incomplete,
+        "degraded_reason": "incomplete_results" if incomplete else None,
     }

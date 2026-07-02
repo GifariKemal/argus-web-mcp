@@ -75,6 +75,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 ---
 
 ## P4 - Operate [~] LIVE
+- [x] **Round-6 hardening (2026-07-02, CHANGELOG 0.4.0):** 49-agent audit -> 30 fixes shipped (cache self-heal + eviction + key-casing, throttle concurrency, render anti-wedge + challenge-page gate, crawl deadline/clamps/semaphore, 4 tools cached + degraded-never-cached, `argus_tool_errors_total` metrics, smart_search failover, trading drift detectors + coded errors, watch interval-on-error, PDF pages/magic/slice, gzip sitemaps, rerank floor backfill + query-param dedup + stopword guard, router modal-'may'). Suite 640 -> 722, coverage 94% held. Deferred: `_SEM_FLOOR` recalibration (needs live A/B).
 - [x] Hermes watchdog curls `/health`; Prometheus `/metrics` for error-rate / active-context.
 - [x] Safe auto-update timer keeps the VPS in sync with `main` (ff-only, health-gated, auto-rollback).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).

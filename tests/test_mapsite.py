@@ -326,3 +326,114 @@ async def test_malformed_sitemap_falls_through_to_links(monkeypatch):
         res = await map_site("https://x.test/", client=c)
     assert res["source"] == "links"
     assert "https://x.test/recovered" in res["urls"]
+
+
+# --- gzipped sitemaps (.xml.gz payloads) ---------------------------------------
+
+
+async def test_gzipped_sitemap_is_decompressed(monkeypatch):
+    import gzip
+
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    locs = [f"https://x.test/p{i}" for i in range(100)]
+    gz_body = gzip.compress(_sitemap(locs).encode("utf-8"))
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(
+                200, text="Sitemap: https://x.test/sitemap.xml.gz\n"
+            )
+        if p == "/sitemap.xml.gz":
+            return httpx.Response(
+                200, content=gz_body, headers={"content-type": "application/gzip"}
+            )
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        res = await map_site("https://x.test/", client=c)
+    assert res["count"] == 100
+    assert res["source"] == "robots+sitemap"
+
+
+async def test_gz_url_already_decompressed_still_parses(monkeypatch):
+    """httpx may have un-gzipped via Content-Encoding: a .gz URL serving plain XML must
+    still parse (magic sniff, not URL suffix)."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://x.test/sitemap.xml.gz\n")
+        if p == "/sitemap.xml.gz":
+            return httpx.Response(200, text=_sitemap(["https://x.test/only"]))
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        res = await map_site("https://x.test/", client=c)
+    assert res["urls"] == ["https://x.test/only"]
+
+
+async def test_corrupt_gzip_sitemap_skipped_not_fatal(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://x.test/sitemap.xml.gz\n")
+        if p == "/sitemap.xml.gz":
+            return httpx.Response(200, content=b"\x1f\x8btruncated-garbage")
+        if p == "/":
+            return httpx.Response(200, text='<a href="https://x.test/fallback">f</a>')
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        res = await map_site("https://x.test/", client=c)
+    assert res["source"] == "links"  # degraded to link fallback, no crash
+
+
+async def test_sitemap_transport_error_falls_back_to_links(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://x.test/sitemap.xml\n")
+        if p == "/sitemap.xml":
+            raise httpx.ConnectError("refused")
+        if p == "/":
+            return httpx.Response(200, text='<a href="https://x.test/fb">f</a>')
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        res = await map_site("https://x.test/", client=c)
+    assert res["source"] == "links"
+
+
+async def test_gzip_bomb_sitemap_skipped(monkeypatch):
+    """A sitemap whose DECOMPRESSED size exceeds the fetch cap must be skipped, not
+    ballooned into memory."""
+    import gzip
+
+    from argus.fetch import static as static_mod
+
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    monkeypatch.setattr(static_mod, "MAX_FETCH_BYTES", 1024)
+    import argus.mapsite as mapsite_mod
+
+    monkeypatch.setattr(mapsite_mod, "MAX_FETCH_BYTES", 1024)
+    bomb = gzip.compress(b"<urlset>" + b"x" * 10_000 + b"</urlset>")
+
+    def h(req):
+        p = req.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://x.test/sitemap.xml.gz\n")
+        if p == "/sitemap.xml.gz":
+            return httpx.Response(200, content=bomb)
+        if p == "/":
+            return httpx.Response(200, text='<a href="https://x.test/fb">f</a>')
+        return httpx.Response(404)
+
+    async with _client(h) as c:
+        res = await map_site("https://x.test/", client=c)
+    assert res["source"] == "links"  # bomb skipped, discovery degraded gracefully

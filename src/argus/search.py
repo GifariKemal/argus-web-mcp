@@ -71,6 +71,18 @@ _GENERIC_TOKENS = frozenset(
      "tutorial", "example", "overview", "introduction"}
 )
 _GENERIC_WEIGHT = 0.5  # multiply score by this when ALL matched query tokens are generic
+# Stopwords excluded from the RELEVANCE-GUARD overlap check only (never from rerank
+# scoring): a natural-language query ("how to install the hermes agent") shares
+# 'to'/'the'/'install' with almost any English filler page, which let a garbage result
+# set masquerade as majority-relevant. 1-char words are already dropped by _tokens.
+_STOPWORDS = frozenset(
+    {"the", "to", "of", "in", "on", "for", "and", "or", "is", "are", "be", "an",
+     "with", "at", "by", "from", "as", "it", "this", "that", "what", "which",
+     "how", "do", "does", "can"}
+)
+# Tracking params stripped for URL dedup; every other query param is MEANINGFUL
+# (?v=, ?id=, ?p= key distinct pages and must not collapse into one).
+_TRACKING_PARAMS = frozenset({"fbclid", "gclid", "msclkid", "srsltid", "ref", "ref_src", "spm"})
 
 
 class SearchError(Exception):
@@ -100,10 +112,22 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2}
 
 
+def _is_tracking_param(param: str) -> bool:
+    name = param.split("=")[0].lower()
+    return name.startswith("utm_") or name in _TRACKING_PARAMS
+
+
 def _norm_url(url: str) -> str:
-    """Normalize for dedup: drop scheme, query, fragment, and trailing slash."""
+    """Normalize for dedup: drop scheme, fragment, trailing slash, and tracking params.
+
+    Meaningful query params are KEPT (sorted, so param-order permutations still dedup)
+    - two watch?v= / thread?id= pages are distinct resources, not duplicates. Param
+    values stay case-sensitive (?v=AAA vs ?v=aaa differ); only host/path lowercase.
+    """
     parts = urlsplit(url)
-    return f"{parts.netloc}{parts.path}".rstrip("/").lower()
+    base = f"{parts.netloc}{parts.path}".rstrip("/").lower()
+    qs = "&".join(sorted(p for p in parts.query.split("&") if p and not _is_tracking_param(p)))
+    return f"{base}?{qs}" if qs else base
 
 
 def _norm_title(title: str) -> str:
@@ -303,11 +327,13 @@ def rerank(
 
     kept = [s for s in ranked if s[2]]
     if len(kept) < _MIN_KEEP:
-        # Safety floor: keep the backend's original top deduped results (by orig order),
-        # so we never strip down below the floor or return empty when given results.
-        kept = sorted(scored, key=lambda s: s[3])[: max(_MIN_KEEP, len(kept))]
-        # Re-rank the floored set so relevant ones still surface, stable on ties.
-        kept = sorted(kept, key=_key)
+        # Safety floor: BACKFILL with the backend's original top deduped results so we
+        # never drop below the floor - without ever discarding the relevant results we
+        # already kept (replacing the set with first-N-by-index threw away a relevant
+        # tail hit in favor of pure junk).
+        have = {s[3] for s in kept}
+        backfill = [s for s in sorted(scored, key=lambda s: s[3]) if s[3] not in have]
+        kept = sorted(kept + backfill[: _MIN_KEEP - len(kept)], key=_key)
 
     # Relative relevance gate: trim backfill whose score is far below the best result.
     kept = _rel_floor(kept, key=lambda s: s[0])
@@ -344,10 +370,10 @@ def _rerank_hybrid(
     ranked = sorted(rows, key=_key)
     kept = [row for row in ranked if row[3]]
     if len(kept) < _MIN_KEEP:
-        # Safety floor: backfill the backend's top deduped results so we never drop below
-        # the floor or return empty, then re-rank by blended score (stable on ties).
-        kept = sorted(rows, key=lambda row: row[2])[: max(_MIN_KEEP, len(kept))]
-        kept = sorted(kept, key=_key)
+        # Safety floor: BACKFILL around the kept (relevant) rows, never replace them.
+        have = {row[2] for row in kept}
+        backfill = [row for row in sorted(rows, key=lambda row: row[2]) if row[2] not in have]
+        kept = sorted(kept + backfill[: _MIN_KEEP - len(kept)], key=_key)
 
     # Relative relevance gate: trim backfill whose blended score is far below the best.
     kept = _rel_floor(kept, key=lambda row: row[0])
@@ -576,7 +602,7 @@ async def search(
     # results share a query token (title or snippet) with the query, the response is
     # untrustworthy: flag it degraded + reason so callers (research / the agent) never silently
     # treat junk as good results. Deterministic; majority-relevant sets are untouched.
-    qtok = _tokens(q)
+    qtok = _tokens(q) - _STOPWORDS  # guard overlap on content-bearing tokens only
     if qtok and results:
         _overlap = sum(
             1

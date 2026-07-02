@@ -120,3 +120,22 @@ def test_empty_and_whitespace_href_skipped():
     html = "<a href=''>empty</a><a href='   '>ws</a><a href='/ok'>ok</a>"
     res = extract_links_images(html, BASE)
     assert [link["url"] for link in res["links"]] == ["https://example.com/ok"]
+
+
+def test_images_lazy_loading_fallbacks():
+    """data-src / srcset variants must yield the real URL, never the data: placeholder."""
+    html = """
+    <img data-src="/lazy.jpg" src="data:image/gif;base64,R0lGOD">
+    <img data-src="/only.jpg">
+    <img srcset="/a.jpg 1x, /b.jpg 2x">
+    <img src="/real.jpg" data-src="/shadow.jpg">
+    """
+    out = extract_links_images(html, "https://site.com/page")
+    srcs = [i["src"] for i in out["images"]]
+    assert srcs == [
+        "https://site.com/lazy.jpg",
+        "https://site.com/only.jpg",
+        "https://site.com/a.jpg",
+        "https://site.com/real.jpg",  # real src still wins over data-src
+    ]
+    assert not any(s.startswith("data:") for s in srcs)

@@ -51,7 +51,14 @@ def extract_links_images(
     images: list[dict] = []
     seen_imgs: set[str] = set()
     for node in sel.css("img"):
+        # Lazy-loading fallback chain: src -> data-src -> first srcset candidate. Modern
+        # sites ship a 1px data: placeholder in src with the real URL in data-src/srcset;
+        # reading only src returned near-zero images on exactly those pages.
         s = (node.attrib.get("src") or "").strip()
+        if not s or s.startswith("data:"):
+            s = (node.attrib.get("data-src") or "").strip()
+        if not s or s.startswith("data:"):
+            s = ((node.attrib.get("srcset") or "").split(",")[0].split() or [""])[0]
         if not s or s.startswith("data:"):
             continue
         src_abs = urljoin(base_url, s)

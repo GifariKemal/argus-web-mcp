@@ -16,22 +16,22 @@ URL -> clean main content.
 ## `search(query, count=10, category="general", time_range=null, lang=null, include_domains=null, exclude_domains=null, safesearch=0)`
 Web search via self-hosted SearXNG (unlimited).
 - **in:** `query` (str|str[]), `count` (1-50, paginate SearXNG ~20/page), `category`  in  {general,news,science,it}, `time_range`  in  {day,week,month,year}, `lang`, `include_domains`/`exclude_domains` (str[] allow/deny), `safesearch` (0|1|2).
-- **out:** `{query, results:[{title,url,snippet,engine,published?}], count, engines_used, from_cache}`.
+- **out:** `{query, results:[{title,url,snippet,engine,published?}], count, engines_used, backend, degraded, degraded_reason, from_cache}`. `degraded: true` + `degraded_reason` in {`low_relevance`, `backend_failover`} signal an untrustworthy/failed-over result set (advisory - nothing dropped); degraded sets are never cached.
 - **backing:** SearXNG `GET /search?format=json`.
 - **errors:** search_backend_down, no_results.
 
 ## `smart_search(query, count=10)`
 Auto-route a query to the best backend (deterministic classifier, no LLM): github / scholar / news / it / general; calls the matched tool.
 - **in:** `query` (str), `count`.
-- **out:** `{query, route, reason, result}` where `result` is the wrapped tool's normal return shape.
+- **out:** `{query, route, reason, result}` where `result` is the wrapped tool's normal return shape. If a specialist backend errors (`no_results`/`search_backend_down`, e.g. GitHub anonymous rate limit), smart_search falls back to general `search` and returns `route:"general"` + `degraded: true`, `degraded_reason:"specialist_failover"`.
 - **backing:** `router.classify` -> `github_search` / `scholar_search` / `search(category=news|it|general)`.
 
 ## `read_pdf(url_or_path, pages=null, mode="text", timeout=60)`
 PDF -> markdown (+ tables).
-- **in:** `url_or_path` (http/https; local paths gated by `ARGUS_ALLOW_LOCAL_PDF=1` - LFI guard on remote), `pages` (e.g. "1-5" or null=all), `mode`  in  {text,tables,figures,quality}; `quality` routes to Docling for scanned/complex.
+- **in:** `url_or_path` (http/https; local paths gated by `ARGUS_ALLOW_LOCAL_PDF=1` - LFI guard on remote), `pages` (e.g. "1-5" or null=all), `mode`  in  {text,tables,quality} (unknown mode -> schema_invalid); `quality` routes to Docling for scanned/complex and honors `pages` (the PDF is sliced before Docling).
 - **out:** `{source, ...result}` (result carries pages_total/pages_returned, content (markdown), tables, metadata).
-- **backing:** pymupdf4llm (fast, digital) -> Docling (`mode="quality"`: tables/scanned). 64 MiB byte cap.
-- **errors:** ssrf_blocked, fetch_failed, not_pdf, parse_failed.
+- **backing:** pymupdf4llm (fast, digital) -> Docling (`mode="quality"`: tables/scanned). 64 MiB byte cap. URL fetches cached (`pdf` TTL 24h, + `from_cache`); local paths never cached.
+- **errors:** ssrf_blocked, fetch_failed, not_pdf, parse_failed, schema_invalid (bad mode / malformed or out-of-document `pages`).
 
 ## `scrape(url, wait_for=null, actions=null, screenshot=false, format="markdown", timeout=45)`
 JS-rendered fetch + optional interactions.
@@ -53,9 +53,9 @@ URL(s) -> schema-validated JSON.
 - **backing:** parsel (CSS/XPath, deterministic) -> LLM over an owned endpoint (`mode="llm"`/fallback in `auto`; needs `ARGUS_LLM_API_KEY`/`OPENAI_API_KEY` + `ARGUS_ENABLE_LLM`). `auto` tries selector first, LLM fallback only if selectors come back invalid and an LLM is available.
 - **errors:** ssrf_blocked, schema_invalid, extraction_failed, fetch_failed.
 
-## `crawl(seed_url, depth=2, max_pages=50, include=null, exclude=null, same_domain=true, respect_robots=true)`
+## `crawl(seed_url, depth=2, max_pages=50, include=null, exclude=null, same_domain=true, respect_robots=true, timeout=180)`
 Deep-crawl a site (robots-respecting, confined to the seed host by default).
-- **in:** `seed_url`, `depth`, `max_pages`, `include`/`exclude` (URL pattern lists), `same_domain` (bool), `respect_robots` (bool).
+- **in:** `seed_url`, `depth` (clamped to 0-5), `max_pages` (clamped to 1-200), `include`/`exclude` (URL pattern lists), `same_domain` (bool), `respect_robots` (bool), `timeout` (s; whole-crawl wall clock, default `ARGUS_TIMEOUT_CRAWL`=180).
 - **out:** crawl bundle (`{pages:[...], link_graph}`-shaped) from `deep_crawl`.
 - **backing:** Crawl4AI deep-crawl + Playwright (browser tier required).
 - **errors:** ssrf_blocked, fetch_failed, render_failed.
@@ -78,7 +78,7 @@ Deep research in one call (search -> read -> consolidate).
 Discover a site's URLs via sitemap.xml / robots.txt / 1-hop links (no full fetch).
 - **in:** `url`, `max_urls`, `include_subdomains` (bool).
 - **out:** URL-list bundle from `map_site` (+ `from_cache`).
-- **backing:** sitemap/robots parse + 1-hop link discovery (no render).
+- **backing:** sitemap/robots parse (gzipped `.xml.gz` sitemaps transparently decompressed, zip-bomb capped) + 1-hop link discovery (no render).
 - **errors:** ssrf_blocked, fetch_failed.
 
 ## `find_similar(url_or_text, count=10)`
@@ -91,7 +91,7 @@ Find pages semantically similar to a URL's content or a text snippet (local embe
 ## `github_search(query, mode="repositories", language=null, sort=null, order="desc", limit=10)`
 Structured GitHub search - repos / code / issues with stars/language/sort. Complements `search(category="it")`.
 - **in:** `query`, `mode`  in  {repositories,code,issues}, `language`, `sort`, `order`  in  {asc,desc}, `limit`. `code` mode needs `GITHUB_TOKEN`; optional token raises rate limits.
-- **out:** structured GitHub result bundle (`{results:[...], ...}`, + `from_cache`).
+- **out:** structured GitHub result bundle (`{results:[...], total_count, degraded, degraded_reason, ...}`, + `from_cache`). `degraded: true` + `degraded_reason:"incomplete_results"` when GitHub's search timed out server-side (partial index scan); degraded results are never cached.
 - **backing:** GitHub Search API.
 - **errors:** search_backend_down, no_results, schema_invalid.
 
@@ -105,7 +105,7 @@ Structured academic-paper search (Semantic Scholar -> CrossRef fallback). Free, 
 ## `watch(url, webhook, interval_minutes=60, selector=null)`
 Register a watch: poll `url` (optionally a CSS/XPath `selector`) and POST a change event to `webhook` (e.g. Telegram). Webhook is SSRF-guarded at delivery. No paid equivalent.
 - **in:** `url`, `webhook` (both SSRF-checked at register), `interval_minutes` (floored to 60s), `selector`.
-- **out:** `{id, url, selector, interval_s, webhook}`.
+- **out:** `{id, url, selector, interval_s, webhook}`. A failing source is retried on its own `interval_s` (never every poller tick); errors keep the previous baseline hash.
 - **errors:** ssrf_blocked, fetch_failed.
 
 ## `list_watches()`
@@ -122,9 +122,9 @@ Remove a watch by id.
 ---
 
 ## Trading-specialized (behind `read`/`extract_structured` - the moat)
-- `forexfactory_calendar(date_range=null)` -> ForexFactory economic calendar (FairEconomy JSON feed) in **Aurix `calendar_client` shape** (field-map `time->date`, `event->name`; replaces deprecated FMP). Errors: fetch_failed.
-- `cot_report(report_type="legacy_futures", date=null)` -> CFTC Commitments of Traders positioning JSON. Errors: fetch_failed.
-- `news_sentiment_feed(query, since=null, sentiment=false)` -> ranked news feed (+ optional owned-LLM sentiment score when `sentiment=true`). Errors: no_results, search_backend_down, extraction_failed.
+- `forexfactory_calendar(date_range=null)` -> ForexFactory economic calendar (FairEconomy JSON feed) in **Aurix `calendar_client` shape** (field-map `time->date`, `event->name`; replaces deprecated FMP). Unknown non-empty impact labels pass through verbatim (feed drift stays visible); `date_range` bounds are validated ISO dates. Cached (`trading` TTL 300s) except stale-fallback bundles. Errors: ff_bad_date_range, ff_bad_feed, ff_fetch_failed, fetch_failed.
+- `cot_report(report_type="legacy_futures", date=null)` -> CFTC Commitments of Traders positioning JSON + live drift detectors `identity_failures`/`bad_dates` (>0 = treat as degraded data) + `requested_date` echo when `date` filters rows (non-matching date -> honest empty set). Cached (`trading` TTL 300s). Errors: cot_bad_report_type, cot_fetch_failed, fetch_failed.
+- `news_sentiment_feed(query, since=null, sentiment=false)` -> ranked news feed (+ optional owned-LLM sentiment score when `sentiment=true`); propagates `degraded`/`degraded_reason` from the search layer. Cached (`news` TTL 900s) unless degraded. Errors: no_results, search_backend_down, extraction_failed.
 
 **Golden-file tested, >=99% field accuracy gate before live Aurix use.**
 

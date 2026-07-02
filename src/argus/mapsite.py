@@ -17,13 +17,21 @@ block on the seed propagates as ``SSRFError`` before any discovery work happens.
 
 from __future__ import annotations
 
+import gzip
+import io
 import re
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
 import httpx
 
-from .fetch.static import _DEFAULT_PORTS, FetchError, fetch_static
+from .fetch.static import (
+    _DEFAULT_PORTS,
+    MAX_FETCH_BYTES,
+    FetchError,
+    _get_guarded,
+    fetch_static,
+)
 from .security.ssrf import (
     SSRFError,
     build_safe_async_client,
@@ -104,6 +112,31 @@ def _robots_sitemaps(robots: str, base: str) -> list[str]:
     return out
 
 
+async def _get_sitemap_xml(url: str, *, client: httpx.AsyncClient, timeout: int) -> str | None:
+    """Fetch a sitemap as XML text, transparently un-gzipping ``.xml.gz`` payloads.
+
+    Sniffs the gzip magic (not the URL suffix): httpx already un-gzips
+    Content-Encoding responses, so a ``.gz`` URL may arrive as plain XML, and a plain
+    URL may serve a raw gzip file. The DECOMPRESSED size is hard-capped at
+    ``MAX_FETCH_BYTES`` (zip-bomb guard). Returns None on any fetch/decompress failure.
+    """
+    try:
+        resp, data = await _get_guarded(url, client=client, timeout=timeout, max_redirects=5)
+    except FetchError:
+        return None
+    if resp.status_code != 200:
+        return None
+    if data[:2] == b"\x1f\x8b":
+        try:
+            raw = gzip.GzipFile(fileobj=io.BytesIO(data)).read(MAX_FETCH_BYTES + 1)
+        except (OSError, EOFError):
+            return None
+        if len(raw) > MAX_FETCH_BYTES:
+            return None
+        data = raw
+    return data.decode("utf-8", "replace")
+
+
 async def _collect_from_sitemaps(
     sitemap_urls: list[str], *, client: httpx.AsyncClient, timeout: int
 ) -> list[str]:
@@ -113,7 +146,7 @@ async def _collect_from_sitemaps(
     children_fetched = 0
     while pending:
         sm = pending.pop(0)
-        xml = await _get(sm, client=client, timeout=timeout)
+        xml = await _get_sitemap_xml(sm, client=client, timeout=timeout)
         if xml is None:
             continue
         try:
