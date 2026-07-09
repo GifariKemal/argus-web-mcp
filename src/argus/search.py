@@ -418,7 +418,8 @@ async def _search_once(
             unresponsive = data.get("unresponsive_engines", []) or unresponsive
         except (httpx.HTTPError, ValueError) as exc:
             raise SearchError(
-                "search_backend_down", f"SearXNG request failed: {exc}"
+                "search_backend_down",
+                f"SearXNG request failed: {type(exc).__name__}: {exc}",
             ) from exc
 
         added = 0

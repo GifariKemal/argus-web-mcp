@@ -134,6 +134,7 @@ async def test_backend_connect_error():
     with pytest.raises(SearchError) as exc:
         await search("q", base_url=BASE)
     assert exc.value.code == "search_backend_down"
+    assert "ConnectError" in str(exc.value)
 
 
 @respx.mock
