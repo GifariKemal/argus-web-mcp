@@ -1142,12 +1142,16 @@ async def test_err_counts_metric_increments_and_exports(app_state):
         _crawler = object()
         active_contexts = 0
 
+    from argus.models import record_stage
+    record_stage("fetch.static_ok")
+
     old = server._S
     server._S = server.State(client=None, cache=None, browser=_B())
     try:
         m = await server.metrics(None)
         body = bytes(m.body).decode()
         assert 'argus_tool_errors_total{code="ssrf_blocked"}' in body
+        assert 'argus_pipeline_stage_total{stage="fetch.static_ok"}' in body
     finally:
         server._S = old
 

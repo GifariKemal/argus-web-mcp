@@ -5,6 +5,7 @@ and returns a lean result dict. See docs/03-TOOL-SPECS.md.
 """
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -13,8 +14,11 @@ from urllib.parse import urlsplit
 import httpx
 
 import argus.semantic as semantic
+from argus.models import record_stage
 from argus.router import classify
 from argus.security.ssrf import SSRFError, build_safe_async_client, validate_url
+
+logger = logging.getLogger("argus.search")
 
 _VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
 _VALID_TIME_RANGES = frozenset({"day", "week", "month", "year"})  # SearXNG-accepted values
@@ -473,6 +477,9 @@ def _bench_engines(engines) -> None:
         name = _engine_name(e)
         if name:
             _engine_cooldowns[name] = deadline
+            record_stage("search.engine_benched")
+    logger.info("search: benched unresponsive engines for %.0fs: %s",
+                _ENGINE_COOLDOWN, [_engine_name(e) for e in engines])
 
 
 def _healthy_engines(candidates: list[str]) -> list[str]:
@@ -651,6 +658,8 @@ async def search(
                     results = None
                     continue
                 backend, degraded, degraded_reason = fb, True, "backend_failover"
+                record_stage("search.backend_failover")
+                logger.warning("search: primary backend down; failed over to %s", fb)
                 break
             if results is None:
                 raise primary_exc
@@ -693,6 +702,8 @@ async def search(
     low_relevance = _is_low_relevance(q, results)
     if low_relevance:
         degraded = True
+        record_stage("search.low_relevance")
+        logger.info("search[%r]: low-relevance result set flagged degraded", q)
         if degraded_reason is None:
             degraded_reason = "low_relevance"
 

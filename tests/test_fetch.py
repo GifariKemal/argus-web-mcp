@@ -572,3 +572,55 @@ async def test_static_bogus_meta_charset_falls_back_to_utf8(monkeypatch):
         res = await fetch_static("http://example.com/", client=c)
     assert res["status"] == 200
     assert "hello world" in res["html"]  # decoded via utf-8 fallback, no exception
+
+
+# --------------------------------------------------------------------------- #
+# Pipeline-stage observability (Wave 1): fetch-ladder hops record STAGE_COUNTS.
+# --------------------------------------------------------------------------- #
+async def test_static_ok_records_stage(monkeypatch):
+    import argus.models as models
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    models.STAGE_COUNTS.clear()
+
+    def h(req):
+        return httpx.Response(200, text=ARTICLE)
+
+    async with _client(h) as c:
+        await fetch("http://example.com/", client=c)
+    assert models.STAGE_COUNTS.get("fetch.static_ok") == 1
+
+
+async def test_archive_fallback_records_stages(monkeypatch):
+    import argus.models as models
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    models.STAGE_COUNTS.clear()
+
+    def h(req):
+        host = req.url.host
+        if host == "blocked.example":
+            raise httpx.ConnectError("blocked egress")
+        if host == "archive.org":
+            return httpx.Response(200, text=_avail_json(SNAPSHOT_URL))
+        return httpx.Response(200, text=SNAPSHOT_HTML)
+
+    async with _client(h) as c:
+        await fetch("http://blocked.example/", client=c, browser=None)
+    assert models.STAGE_COUNTS.get("fetch.static_fail") == 1
+    assert models.STAGE_COUNTS.get("fetch.fallback_archive_ok") == 1
+
+
+async def test_exhausted_fallback_records_stage(monkeypatch):
+    import argus.models as models
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    models.STAGE_COUNTS.clear()
+
+    def h(req):
+        host = req.url.host
+        if host == "blocked.example":
+            raise httpx.ConnectError("blocked egress")
+        return httpx.Response(200, text='{"archived_snapshots":{}}')
+
+    async with _client(h) as c:
+        with pytest.raises(FetchError):
+            await fetch("http://blocked.example/", client=c, browser=None)
+    assert models.STAGE_COUNTS.get("fetch.fallback_exhausted") == 1

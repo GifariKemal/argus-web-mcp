@@ -7,13 +7,17 @@ twice. SSRF is enforced in the static hop guard and the browser pre-check.
 
 from __future__ import annotations
 
+import logging
 import re
 from urllib.parse import urlsplit
 
+from ..models import record_stage
 from ..security.ssrf import SSRFError
 from .fallback import fetch_via_archive
 from .render import BrowserPool
 from .static import FetchError, _guard, fetch_static
+
+logger = logging.getLogger("argus.fetch")
 
 # Below this many chars of visible (non-script) text, a static page is treated as
 # JS-rendered/thin and escalated to the browser tier.
@@ -74,6 +78,8 @@ async def _do_fetch(
         if browser is None:
             raise FetchError("render_failed", "render requested but no browser available")
         await _guard(url)  # SSRF resolve-then-validate before navigating (browser tier too)
+        record_stage("fetch.forced_browser")
+        logger.debug("fetch[%s]: forced browser render", url)
         r = await browser.render(
             url, wait_for=wait_for, actions=actions, screenshot=screenshot,
             timeout=max(timeout, 45),
@@ -94,13 +100,18 @@ async def _do_fetch(
         # Transport/connect/timeout - the host is unreachable/blocked from this box.
         # SSRFError is a different type and is NOT caught here: a blocked URL must
         # propagate without any fallback attempt. Recover via server-side mirrors.
+        record_stage("fetch.static_fail")
+        logger.info("fetch[%s]: static hop failed (%s); trying fallbacks", url, exc)
         # 1) stealth browser tier (may route/behave differently than the httpx hop).
         if browser is not None:
             try:
                 r = await browser.render(url, stealth=True, timeout=max(timeout, 45))
-            except FetchError:
-                pass
+            except FetchError as rexc:
+                record_stage("fetch.fallback_stealth_fail")
+                logger.info("fetch[%s]: stealth fallback failed (%s)", url, rexc)
             else:
+                record_stage("fetch.fallback_stealth_ok")
+                logger.info("fetch[%s]: recovered via stealth browser", url)
                 return {
                     "final_url": r["final_url"],
                     "status": 200,
@@ -112,15 +123,26 @@ async def _do_fetch(
         # 2) latest Wayback Machine snapshot (never raises; None if no snapshot).
         archived = await fetch_via_archive(url, client=client, timeout=timeout)
         if archived is not None:
+            record_stage("fetch.fallback_archive_ok")
+            logger.info("fetch[%s]: recovered via Wayback archive", url)
             return archived
         # 3) all fallbacks exhausted - surface the original transport failure.
+        record_stage("fetch.fallback_exhausted")
+        logger.warning("fetch[%s]: all fallbacks exhausted; raising transport failure", url)
         raise exc
 
     if browser is not None and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS:
+        record_stage("fetch.thin_escalate")
+        logger.info("fetch[%s]: thin static content (<%d chars); escalating to browser",
+                    url, ESCALATE_BELOW_CHARS)
         try:
             r = await browser.render(url, timeout=max(timeout, 45))
-        except FetchError:
+        except FetchError as rexc:
+            record_stage("fetch.thin_escalate_fail")
+            logger.info("fetch[%s]: escalation failed (%s); keeping thin static result",
+                        url, rexc)
             return res  # ponytail: keep the thin static result rather than failing the read
+        record_stage("fetch.thin_escalate_ok")
         return {
             "final_url": r["final_url"],
             "status": res["status"],
@@ -128,4 +150,5 @@ async def _do_fetch(
             "render_path": "browser",
             "screenshot": None,
         }
+    record_stage("fetch.static_ok")
     return res

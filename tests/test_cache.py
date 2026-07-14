@@ -217,3 +217,30 @@ def test_purge_leaves_fresh_blob_files(cache):
     assert cache.purge() == 0
     assert blob.exists()
     assert cache.get_stale(k) == {"content": "y" * 40000}
+
+
+# 7. blob compression (0.4.7): blobs are gzip on disk; legacy plain blobs still read.
+def test_blob_is_gzip_compressed_on_disk(cache):
+    k = cache.key("https://big.com", {})
+    payload = {"content": "z" * 40000}  # highly compressible
+    cache.put(k, payload, source="read")
+    blob = cache.blob_dir / k
+    raw = blob.read_bytes()
+    assert raw[:2] == b"\x1f\x8b"  # gzip magic
+    assert len(raw) < len(json.dumps(payload).encode("utf-8"))  # actually smaller
+    assert cache.get(k, ttl_seconds=3600) == payload  # round-trips
+
+
+def test_legacy_plaintext_blob_still_reads(cache):
+    """A blob written before 0.4.7 (plain UTF-8 JSON) must still decode."""
+    k = cache.key("https://legacy.com", {})
+    payload = {"content": "y" * 40000}
+    blob = cache.blob_dir / k
+    blob.write_text(json.dumps(payload), encoding="utf-8")  # legacy uncompressed
+    cache.conn.execute(
+        "INSERT OR REPLACE INTO entries (key, payload, blob_path, source, created) "
+        "VALUES (?, NULL, ?, ?, ?)",
+        (k, str(blob), "read", __import__("time").time()),
+    )
+    cache.conn.commit()
+    assert cache.get(k, ttl_seconds=3600) == payload

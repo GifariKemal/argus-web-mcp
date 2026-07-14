@@ -39,7 +39,7 @@ from .fetch.static import FetchError, fetch_bytes
 from .gh_search import GitHubSearchError
 from .gh_search import github_search as _gh_search
 from .mapsite import MapError, map_site
-from .models import ERR_COUNTS, err
+from .models import ERR_COUNTS, STAGE_COUNTS, err
 from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
@@ -1126,6 +1126,13 @@ async def metrics(_request):
     lines.append("# TYPE argus_tool_errors_total counter")
     for code, n in sorted(ERR_COUNTS.items()):
         lines.append(f'argus_tool_errors_total{{code="{code}"}} {n}')
+
+    # Pipeline-stage counters (fetch-ladder hops + search fallbacks). Shows which
+    # fallback/escalation fires most - the durable signal for tuning the tiers.
+    lines.append("# HELP argus_pipeline_stage_total pipeline fallback/escalation stages")
+    lines.append("# TYPE argus_pipeline_stage_total counter")
+    for stage, n in sorted(STAGE_COUNTS.items()):
+        lines.append(f'argus_pipeline_stage_total{{stage="{stage}"}} {n}')
 
     # Latency histogram buckets (Prometheus-style)
     lines.append("# HELP argus_tool_latency_seconds MCP tool call latency")

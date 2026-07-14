@@ -6,6 +6,7 @@ so failures are never cached here. ``get_stale`` enables stale-serve fallback
 when an upstream is transiently down.
 """
 
+import gzip
 import hashlib
 import json
 import sqlite3
@@ -70,7 +71,12 @@ class Cache:
         payload, blob_path = row[0], row[1]
         try:
             if blob_path is not None:
-                return json.loads(Path(blob_path).read_text(encoding="utf-8"))
+                raw = Path(blob_path).read_bytes()
+                try:
+                    text = gzip.decompress(raw).decode("utf-8")
+                except (OSError, EOFError):
+                    text = raw.decode("utf-8")  # legacy uncompressed blob (pre-0.4.7)
+                return json.loads(text)
             return json.loads(payload)
         except (OSError, ValueError):
             # Self-heal: drop the dead row AND its orphaned blob file (a corrupt blob would
@@ -129,7 +135,9 @@ class Cache:
         data = json.dumps(payload)
         if len(data.encode("utf-8")) > _INLINE_LIMIT:
             blob_path = self.blob_dir / key
-            blob_path.write_text(data, encoding="utf-8")
+            # gzip on disk: full-page content compresses ~5-10x, so the blob store stays
+            # small on the VPS. Read path auto-detects gzip vs legacy plain (see _load).
+            blob_path.write_bytes(gzip.compress(data.encode("utf-8")))
             inline, blob = None, str(blob_path)
         else:
             inline, blob = data, None

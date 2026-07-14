@@ -14,6 +14,37 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.7] - 2026-07-14 - Observability, compression
+
+Make every fallback visible (so future tuning is data-driven) and shrink what goes
+over the wire and onto disk. All additive; no behavior change to a healthy request.
+
+### Added
+
+- **Pipeline-stage observability.** Each fetch-ladder hop and search fallback now
+  increments a stage counter exported at `/metrics` as `argus_pipeline_stage_total{stage=...}`
+  (`fetch.static_ok`, `fetch.static_fail`, `fetch.fallback_stealth_ok/fail`,
+  `fetch.fallback_archive_ok`, `fetch.fallback_exhausted`, `fetch.thin_escalate*`,
+  `fetch.forced_browser`, `search.engine_benched`, `search.backend_failover`,
+  `search.low_relevance`). Shows which fallback fires most - the durable signal for
+  tuning the tiers without grepping logs.
+- **Per-step logging.** The same hops log at INFO on any fallback/escalation and at
+  DEBUG for the happy path (raise `ARGUS_LOG_LEVEL=DEBUG` for the full per-step trace).
+
+### Changed
+
+- **Cache blobs are gzip-compressed on disk.** Full-page content compresses ~5-10x, so
+  the on-disk blob store stays small on the VPS. The read path auto-detects gzip vs a
+  legacy plain blob, so existing cache entries keep working with no migration.
+- **nginx gzip for tool responses.** `application/json` + text responses are compressed
+  over the wire (engages only when the client sends `Accept-Encoding: gzip`; works with
+  `proxy_buffering off`). Cuts bandwidth on the large full-content bundles.
+
+### Pruned
+
+- Repo-wide over-engineering audit: no dead code, hand-rolled stdlib, or unused config
+  found in `src/argus` (prior rounds already trimmed it). No churn.
+
 ## [0.4.6] - 2026-07-14 - Live-log-driven resilience pass
 
 Improvements from a 7-day production journald audit (search-engine throttling, timeout

@@ -50,3 +50,16 @@ def err(code: str, message: str, detail: str | None = None) -> dict:
         raise ValueError(f"unknown error code: {code}")
     ERR_COUNTS[code] = ERR_COUNTS.get(code, 0) + 1
     return ToolError(error=message, code=code, detail=detail).model_dump()
+
+
+# Per-stage counts of pipeline decisions (fetch-ladder hops, search fallbacks) since
+# process start, exported as argus_pipeline_stage_total{stage=...} by /metrics. This is
+# the durable "where do fallbacks fire?" signal for tuning - which tier/rescue runs most
+# tells you where to invest, without grepping logs. Single-process/single-loop deploy, so
+# a plain dict is safe (same pattern as ERR_COUNTS).
+STAGE_COUNTS: dict[str, int] = {}
+
+
+def record_stage(stage: str) -> None:
+    """Increment a pipeline-stage counter (fetch/search fallback observability)."""
+    STAGE_COUNTS[stage] = STAGE_COUNTS.get(stage, 0) + 1
