@@ -19,6 +19,9 @@ dependency, never exposed to the public internet.
 
 ## 1. Set the secret key (required before first run)
 
+> [!IMPORTANT]
+> Do this before the first start. The placeholder `CHANGE_ME_GENERATE_RANDOM` is public in this repo - starting with it leaves a known secret key.
+
 `server.secret_key` in `settings.yml` ships as the placeholder
 `CHANGE_ME_GENERATE_RANDOM`. Replace it with a real random value:
 
@@ -43,6 +46,9 @@ confirm `search.formats` in `settings.yml` includes `json` and restart:
 `docker compose restart`.
 
 ## Notes
+
+> [!WARNING]
+> Do not change the `127.0.0.1` prefix in the compose port mapping. Without it the instance is reachable from the network, and `limiter: false` means it has no request throttling.
 
 - **Loopback binding** is enforced by the compose port mapping
   `127.0.0.1:8888:8080`. Do not change the `127.0.0.1` prefix - without it the

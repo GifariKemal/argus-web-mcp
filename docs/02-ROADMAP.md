@@ -1,8 +1,12 @@
 # Argus - Step-by-Step Roadmap (no gaps)
 
-> **Status (updated 2026-07-02; deployed 2026-06-25):** P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. Remaining owner item: `ARGUS_S2_API_KEY` (F1).
+> [!NOTE]
+> Status (updated 2026-07-02; deployed 2026-06-25): P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. Remaining owner item: `ARGUS_S2_API_KEY` (F1).
 
 Build **locally first**, prove it via QA/QC + benchmark, then wrap as our MCP and deploy to the VPS. Each phase has an explicit **exit gate** - do not advance until it passes.
+
+> [!IMPORTANT]
+> Execute phases in order. Do not advance until a phase's exit gate passes.
 
 ## Contents
 
@@ -26,7 +30,10 @@ Build **locally first**, prove it via QA/QC + benchmark, then wrap as our MCP an
 ## P1 - MVP, built & validated LOCALLY (Windows dev box) [x] DONE (2026-06-24)
 Goal: a running FastMCP server (stdio for local dev) with the core tools, beating free competitors on the benchmark, before any server touch.
 
-**Exit gate verified (2026-06-24):** 153 offline tests green + 2 browser + 1 slow-skipped (Docling not installed); **SSRF 100% line+branch**; core coverage 86% (>=80%); ruff clean; FastMCP boots (in-memory Client live-read of example.com/paulgraham + SSRF block confirmed). Benchmark gate **PASS** - Argus median ROUGE-L 1.000 >= best free baseline (raw_trafilatura 0.964), success 100%, truncation 1.000 on long-form. (!) Known caveat: P1 gold curated with Argus (home advantage) -> benchmark gate is *relative* (>= best free baseline), not absolute; P2 must re-curate gold independently. Local-path `read_pdf` flagged for P3 LFI lockdown.
+**Exit gate verified (2026-06-24):** 153 offline tests green + 2 browser + 1 slow-skipped (Docling not installed); **SSRF 100% line+branch**; core coverage 86% (>=80%); ruff clean; FastMCP boots (in-memory Client live-read of example.com/paulgraham + SSRF block confirmed). Benchmark gate **PASS** - Argus median ROUGE-L 1.000 >= best free baseline (raw_trafilatura 0.964), success 100%, truncation 1.000 on long-form.
+
+> [!CAUTION]
+> P1 gold was curated with Argus (home advantage), so the benchmark gate is *relative* (>= best free baseline), not absolute; P2 must re-curate gold independently. Local-path `read_pdf` flagged for P3 LFI lockdown.
 
 1. **Project skeleton** - `src/argus/` Python pkg (3.11), `pyproject.toml` (deps: fastmcp, crawl4ai, trafilatura, httpx, readability-lxml, markdownify, pymupdf4llm, docling, parsel, pydantic, instructor), `uv`/venv, ruff config. `crawl4ai-setup` + `crawl4ai-doctor`.
 2. **Fetch core** (`src/argus/fetch/`) - tiered: `static.py` (httpx) -> `render.py` (Crawl4AI/Playwright) -> stealth hook. Shared browser pool + asyncio.Semaphore in lifespan.
@@ -57,7 +64,7 @@ After the P2 gate, a 200-scenario benchmark + 3-way comparison (vs Claude Code &
 - **New tools:** `research(deep/quick/answer)`, `map_urls`, `find_similar` (Exa-style semantic), `github_search` (repos/code/issues) -> **15 MCP tools** total.
 - **Egress fallback:** stealth-browser -> Wayback archive on connect-fail/block.
 - **Multi-agent QA/QC end-to-end:** 387 offline + browser + slow green; SSRF 100%; ruff clean; security Round-2 (`deploy/SECURITY-AUDIT.md`) no Critical/High; live smoke of all 15 tools (zero crashes). Repo tidied (`chore: tidy repo`).
-- Durable benchmark record: `benchmark/RESULTS.md`.
+- Durable benchmark record: `benchmark/reports/RESULTS.md`.
 
 ---
 
@@ -75,12 +82,19 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 ---
 
 ## P4 - Operate [~] LIVE
+
+<details>
+<summary>Hardening rounds 6-10 (2026-07-02, CHANGELOG 0.4.0 - 0.4.5)</summary>
+
 - [x] **Round-6 hardening (2026-07-02, CHANGELOG 0.4.0):** 49-agent audit -> 30 fixes shipped (cache self-heal + eviction + key-casing, throttle concurrency, render anti-wedge + challenge-page gate, crawl deadline/clamps/semaphore, 4 tools cached + degraded-never-cached, `argus_tool_errors_total` metrics, smart_search failover, trading drift detectors + coded errors, watch interval-on-error, PDF pages/magic/slice, gzip sitemaps, rerank floor backfill + query-param dedup + stopword guard, router modal-'may'). Suite 640 -> 722, coverage 94% held. Deferred: `_SEM_FLOOR` recalibration (needs live A/B).
 - [x] **Round-7 hardening (2026-07-02, CHANGELOG 0.4.1):** gap-scan round 7 -> 8 verified fixes (run-aware article dedup for trafilatura whole-body dup, SSRF DNS off the event loop w/ `ARGUS_DNS_TIMEOUT`, `research()` wall-clock timeout, highlights from full pre-cap content, `search` invalid-category -> `schema_invalid`, read/scrape/screenshot `blocked_by_antibot` via `FetchError.code` + `batch_read` ok=False, recycle wedged stealth crawler). Suite 722 -> 735, coverage 94% held.
 - [x] **Round-8 hardening (2026-07-02, CHANGELOG 0.4.2):** gap-scan round 8 -> 10 long-tail fixes (read/scrape/batch_read `format` enum + `search` `time_range` enum -> `schema_invalid`, static meta-charset sniff for legacy encodings, `research` highlights try/except guard, `batch_read` crash isolation, `map_site` robots-sitemap seed cap, corrupt-blob file unlink, wired `ARGUS_LOG_LEVEL`, env-var + TOOL-SPECS doc drift + drift-guard test). Suite 735 -> 746, coverage 94% held.
 - [x] **Round-9 hardening (2026-07-02, CHANGELOG 0.4.3):** gap-scan round 9 -> 4 code + 6 doc fixes (low_relevance guard now credits semantic rescues on the hybrid path, `screenshot` antibot via `FetchError.code`, `map_urls` `max_urls` trust-boundary clamp, bogus-charset LookupError-fallback test; version lockstep 0.4.3, README/AGENTS/ROADMAP + env-var docs sync). Coverage 94% held.
 - [x] **Round-10 benchmark/tuning (2026-07-02, CHANGELOG 0.4.4):** end-to-end benchmark follow-up -> active benchmark scope reset to non-trading by default (160 search scenarios, 40 compare IDs, 16 URL items, 8 search-query items), deterministic tool-surface benchmark added for 19 active non-trading tool boundaries, search routing/relevance rescue tightened, large-PDF fast text path and static-fallback timeout tuned. Final gates: 763 offline passed, SSRF 100%, ruff clean, browser/slow/network markers green. Live search smoke over 16 non-trading scenarios: 100% success, 0% throttle; `dev` remains flagged for overlap/degraded review.
 - [x] **Round-10 final gap-scan (2026-07-02, CHANGELOG 0.4.5):** 4-agent review of a802678/v0.4.4 found 3 real fixes plus doc drift: preserve `backend_failover` through category rescue, wrap `smart_search` with final structured-error handling, make 40-id Codex merge strict by default, and sync science/rescued-category/current benchmark docs. Final gates: 767 offline passed, SSRF 100%, ruff clean, browser/slow/network markers green.
+
+</details>
+
 - [x] Hermes watchdog curls `/health`; Prometheus `/metrics` for error-rate / active-context.
 - [x] Safe auto-update timer keeps the VPS in sync with `main` (ff-only, health-gated, auto-rollback).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).

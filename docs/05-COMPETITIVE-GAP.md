@@ -1,8 +1,17 @@
 # Argus - Competitive Feature Gap Analysis (vs paid web tooling)
 
 > _Created 2026-06-24._ Maps the web read/search/scrape feature sets of the leading **paid** products against Argus's tool surface at the time of analysis, then ranks what to adopt - favoring **self-hostable (OSS, no paid API)** options. All competitor features verified against official docs (URLs cited per section). Items we could not verify are flagged `[UNVERIFIED]`.
->
-> **Status note (2026-06-25):** this is a point-in-time analysis record. Several gaps flagged "P3-only / not built" below were subsequently **shipped** - `map` (`map_urls`), `watch` / `list_watches` / `unwatch`, `find_similar`, `research(answer)`, and domain filters are now live in the 20-tool set. The tables are preserved as the original gap-analysis snapshot; see `CHANGELOG.md` and `docs/03-TOOL-SPECS.md` for what shipped.
+
+> [!NOTE]
+> Status note (2026-06-25): this is a point-in-time analysis record. Several gaps flagged "P3-only / not built" below were subsequently **shipped** - `map` (`map_urls`), `watch` / `list_watches` / `unwatch`, `find_similar`, `research(answer)`, and domain filters are now live in the 20-tool set. The tables are preserved as the original gap-analysis snapshot; see `CHANGELOG.md` and `docs/03-TOOL-SPECS.md` for what shipped.
+
+## Contents
+
+- [Argus baseline (the 12, for reference)](#argus-baseline-the-12-for-reference)
+- [1. Per-product feature tables](#1-per-product-feature-tables)
+- [2. Missing / partial in Argus - ranked adoption list](#2-missing--partial-in-argus---ranked-adoption-list)
+- [3. What Argus already matches or beats](#3-what-argus-already-matches-or-beats)
+- [Top 5 self-hostable gaps to adopt (ranked)](#top-5-self-hostable-gaps-to-adopt-ranked)
 
 ## Argus baseline (the 12, for reference)
 
@@ -15,6 +24,9 @@
 Legend: [x] = Argus has it / [ ] = missing / [~] = partial. Docs cited at end of each table.
 
 ### 1.1 Jina AI - Reader (`r.jina.ai`) / Search (`s.jina.ai`) / DeepSearch
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Params / option | Argus? | Notes |
 |---|---|:--:|---|
@@ -38,7 +50,12 @@ Legend: [x] = Argus has it / [ ] = missing / [~] = partial. Docs cited at end of
 
 Docs: https://jina.ai/reader/ / https://jina.ai/deepsearch/
 
+</details>
+
 ### 1.2 Brave Search API
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Params | Argus? | Notes |
 |---|---|:--:|---|
@@ -55,7 +72,12 @@ Docs: https://jina.ai/reader/ / https://jina.ai/deepsearch/
 
 Docs: https://api-dashboard.search.brave.com/app/documentation/web-search/query
 
+</details>
+
 ### 1.3 Firecrawl - scrape / crawl / map / extract / search
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Params | Argus? | Notes |
 |---|---|:--:|---|
@@ -82,7 +104,12 @@ Docs: https://api-dashboard.search.brave.com/app/documentation/web-search/query
 
 Docs: https://docs.firecrawl.dev/api-reference/introduction / https://docs.firecrawl.dev/features/scrape
 
+</details>
+
 ### 1.4 Exa - search / contents / findSimilar / answer
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Params | Argus? | Notes |
 |---|---|:--:|---|
@@ -104,7 +131,12 @@ Docs: https://docs.firecrawl.dev/api-reference/introduction / https://docs.firec
 
 Docs: https://exa.ai/docs/reference/getting-started / OpenAPI: https://github.com/exa-labs/openapi-spec
 
+</details>
+
 ### 1.5 Tavily - search / extract / crawl / map
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Params | Argus? | Notes |
 |---|---|:--:|---|
@@ -124,7 +156,12 @@ Docs: https://exa.ai/docs/reference/getting-started / OpenAPI: https://github.co
 
 Docs: https://docs.tavily.com/documentation/api-reference/endpoint/search / /extract / /crawl
 
+</details>
+
 ### 1.6 Bright Data - Web Unlocker / SERP API / proxies / Browser API / Scraper
+
+<details>
+<summary>Feature table</summary>
 
 | Feature | Capability | Argus? | Notes |
 |---|---|:--:|---|
@@ -138,6 +175,8 @@ Docs: https://docs.tavily.com/documentation/api-reference/endpoint/search / /ext
 | Scraper Studio | AI scraper builder w/ auto-maintenance | [ ] | none |
 
 Docs: https://docs.brightdata.com/scraping-automation/web-unlocker/introduction / https://docs.brightdata.com/proxy-networks/residential/introduction / https://brightdata.com/products
+
+</details>
 
 ---
 

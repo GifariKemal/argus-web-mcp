@@ -1,4 +1,7 @@
-# Argus Web MCP — QA/QC Comprehensive Assessment Report (120+ Scenarios)
+> [!NOTE]
+> Historical record (2026-06-25 QA run). Kept for provenance; current status lives in the root CLAUDE.md and CHANGELOG.md.
+
+# Argus Web MCP - QA/QC Comprehensive Assessment Report (120+ Scenarios)
 
 **Repository:** `https://github.com/GifariKemal/argus-web-mcp`  
 **Server:** `argus.gifariksuryo.xyz` (SURIOTA VPS)  
@@ -20,7 +23,7 @@
 | Pass rate (overall) | **81.3%** |
 | Pass rate after retest | **100% functional** (timeouts are transient/latency-induced) |
 
-**Bottom line:** Argus is **functionally solid** across all 20 tools. No tool is broken. The 24 timeout cases (100% retestable as pass) reveal **systemic latency sensitivity** — not bugs. Core gaps are operational: **missing health metrics, no per-tool timeout config, no rate limiting, and no structured error taxonomy.**
+**Bottom line:** Argus is **functionally solid** across all 20 tools. No tool is broken. The 24 timeout cases (100% retestable as pass) reveal **systemic latency sensitivity** - not bugs. Core gaps are operational: **missing health metrics, no per-tool timeout config, no rate limiting, and no structured error taxonomy.**
 
 ### Risk Matrix
 
@@ -40,18 +43,18 @@
 
 | Category | Count | Purpose |
 |---|---|---|
-| Functional — Read | 12 | Static HTML, JS-rendered, redirects, 404, unicode, fragments |
-| Functional — Search | 10 | General, Indonesian, news, IT, long queries, empty, special chars |
-| Functional — Smart Search | 6 | Router accuracy (github/scholar/news/it/general/mixed) |
-| Functional — Scrape | 6 | JS tables, redirects, forms, delays, 403 |
-| Functional — Batch Read | 4 | 2 URLs, suriota pages, mixed OK+404, large count |
-| Functional — Research | 6 | Quick, answer, deep, empty, short, complex |
-| Functional — GitHub Search | 6 | Repos, code, issues, empty, org filter, language filter |
-| Functional — Scholar Search | 4 | Broad, niche, Indonesian, empty |
-| Functional — Map/Crawl/Screenshot | 6 | Sitemap, depth-0/1 crawl, screenshot light/heavy |
-| Functional — PDF / Structured / Similar | 6 | PDF text/metadata, CSS/XPath extraction, semantic similarity |
-| Security — SSRF | 8 | 127.0.0.1, 10.x, 172.16.x, 192.168.x, ::1, file://, search bypass |
-| Security — Auth & Leakage | 4 | No-token access, error detail leak, env leak |
+| Functional - Read | 12 | Static HTML, JS-rendered, redirects, 404, unicode, fragments |
+| Functional - Search | 10 | General, Indonesian, news, IT, long queries, empty, special chars |
+| Functional - Smart Search | 6 | Router accuracy (github/scholar/news/it/general/mixed) |
+| Functional - Scrape | 6 | JS tables, redirects, forms, delays, 403 |
+| Functional - Batch Read | 4 | 2 URLs, suriota pages, mixed OK+404, large count |
+| Functional - Research | 6 | Quick, answer, deep, empty, short, complex |
+| Functional - GitHub Search | 6 | Repos, code, issues, empty, org filter, language filter |
+| Functional - Scholar Search | 4 | Broad, niche, Indonesian, empty |
+| Functional - Map/Crawl/Screenshot | 6 | Sitemap, depth-0/1 crawl, screenshot light/heavy |
+| Functional - PDF / Structured / Similar | 6 | PDF text/metadata, CSS/XPath extraction, semantic similarity |
+| Security - SSRF | 8 | 127.0.0.1, 10.x, 172.16.x, 192.168.x, ::1, file://, search bypass |
+| Security - Auth & Leakage | 4 | No-token access, error detail leak, env leak |
 | Boundary / Edge Cases | 12 | Empty URL, whitespace, no protocol, long URLs, unicode, emoji, negative/huge count |
 | Trading Data | 8 | ForexFactory calendar, COT report variants, news sentiment |
 | Watch / Monitoring | 6 | Add, list, remove, nonexistent, double-add |
@@ -107,7 +110,7 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | stress_read_2 | httpbin.org/get | ok | 19.1 s |
 | stress_read_3 | icanhazip.com | ok | 16.1 s |
 
-**Total wall-clock time:** 31.8 s (not 3x sequential — evident concurrency benefit, but limited by browser pool or server capacity).
+**Total wall-clock time:** 31.8 s (not 3x sequential - evident concurrency benefit, but limited by browser pool or server capacity).
 
 ### 3.4 Security Summary
 
@@ -141,25 +144,25 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | R09 | read_nonexistent_domain | ok | 21.9 s | Graceful error |
 | R10 | read_404_page | ok | 20.0 s | Graceful error |
 | R11 | read_js_heavy (suriota.com) | ok | 58.9 s | JS content rendered |
-| R12 | read_unicode_content (id.wikipedia.org/wiki/Batam) | ok | — | Inferred from log |
+| R12 | read_unicode_content (id.wikipedia.org/wiki/Batam) | ok | - | Inferred from log |
 
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
 | S01 | search_generic (Arduino Modbus RTU) | ok | 21.1 s | 2 results |
 | S02 | search_specific_phrase (PT Surya Inovasi Prioritas) | ok | 23.3 s | suriota.com present |
-| S03 | search_indonesian (sensor suhu RS-485) | ok | — | Inferred |
-| S04 | search_numbers (ESP32-S3 datasheet 2024) | ok | — | Inferred |
-| S05 | search_long_query | ok | — | Inferred |
-| S06 | search_empty_yields | ok | — | Inferred |
+| S03 | search_indonesian (sensor suhu RS-485) | ok | - | Inferred |
+| S04 | search_numbers (ESP32-S3 datasheet 2024) | ok | - | Inferred |
+| S05 | search_long_query | ok | - | Inferred |
+| S06 | search_empty_yields | ok | - | Inferred |
 | S07 | search_special_chars (C++ MQTT) | ok | 33.3 s | Correct |
 | S08 | search_code_errors | ok | 23.4 s | Relevant |
-| S09 | search_news_category (emas hari ini) | ok | — | Inferred |
+| S09 | search_news_category (emas hari ini) | ok | - | Inferred |
 | S10 | search_it_category (docker compose mqtt broker) | ok | 45.7 s | Correct |
 
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
 | SC01 | scrape_light (example.com) | ok | 19.4 s | Heading correct |
-| SC02 | scrape_js_tables (suriota.com) | ok | — | Inferred (log truncated) |
+| SC02 | scrape_js_tables (suriota.com) | ok | - | Inferred (log truncated) |
 | SC03 | scrape_with_wait (httpbin delay/3) | **timeout** | 60.0 s | **Retest: ok 30.9s** |
 | SC04 | scrape_redirect (httpbin redirect/2) | ok | 39.7 s | Follows redirect |
 | SC05 | scrape_form_page (httpbin forms/post) | **timeout** | 60.0 s | Heavy JS? |
@@ -173,8 +176,8 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | SR02 | smart_scholar | **timeout** | 60.0 s | scholar |
 | SR03 | smart_news | **timeout** | 60.0 s | news |
 | SR04 | smart_it | **timeout** | 60.0 s | it |
-| SR05 | smart_general | ok | — | general |
-| SR06 | smart_mixed | ok | 40.9 s | — |
+| SR05 | smart_general | ok | - | general |
+| SR06 | smart_mixed | ok | 40.9 s | - |
 
 **Router Verdict:** Routing logic (`router.py`) is robust. The timeouts are downstream tool latency, not mis-routing.
 
@@ -183,11 +186,11 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
 | RE01 | research_quick_iot | ok | 16.1 s | Source count returned |
-| RE02 | research_quick_short (gold) | ok | — | Inferred |
+| RE02 | research_quick_short (gold) | ok | - | Inferred |
 | RE03 | research_answer (Modbus RTU) | ok | 37.3 s | Correct answer |
 | RE04 | research_answer_complex (CFTC) | **timeout** | 60.0 s | **Retest: ok 57.2s** |
 | RE05 | research_deep_short (HTTP status codes) | **timeout** | 60.0 s | Multi-step heavy |
-| RE06 | research_empty | ok | — | Handled gracefully |
+| RE06 | research_empty | ok | - | Handled gracefully |
 
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
@@ -204,8 +207,8 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | GH02 | gh_search_repo_lang (mqtt broker python) | ok | 34.4 s | Language filter works |
 | GH03 | gh_search_code (mqtt_client_init C) | **timeout** | 60.0 s | GitHub code search slow |
 | GH04 | gh_search_issues (ESP32 crash) | ok | 58.4 s | Issue returned |
-| GH05 | gh_search_empty | ok | — | Graceful empty |
-| GH06 | gh_search_org (org:espressif) | ok | — | Correct |
+| GH05 | gh_search_empty | ok | - | Graceful empty |
+| GH06 | gh_search_org (org:espressif) | ok | - | Correct |
 
 ### 4.5 PDF, Structured, Similar
 
@@ -222,11 +225,11 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
-| MU01 | map_suriota | ok | — | URLs discovered |
+| MU01 | map_suriota | ok | - | URLs discovered |
 | MU02 | map_github (espressif) | **timeout** | 60.0 s | GitHub robots/sitemap heavy |
 | CR01 | crawl_depth0 (example.com) | **timeout** | 60.0 s | Surprisingly slow |
 | CR02 | crawl_depth1 (httpbin.org) | **timeout** | 60.0 s | BFS overhead |
-| SS01 | screenshot_example | ok | — | PNG returned |
+| SS01 | screenshot_example | ok | - | PNG returned |
 | SS02 | screenshot_small (icanhazip.com) | **timeout** | 60.0 s | **Retest: ok 13.2s** |
 
 ### 4.7 Watch / Monitoring
@@ -235,10 +238,10 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 |---|---|---|---|---|
 | W01 | watch_add_suriota | ok | 17.2 s | Watch ID returned |
 | W02 | watch_list | ok | 11.4 s | Count returned |
-| W03 | watch_remove (test123) | ok | — | Handled |
-| W04 | watch_add_httpbin | ok | — | Watch ID returned |
-| W05 | watch_add_nonexistent | ok | — | Error handled |
-| W06 | watch_double_add | ok | — | Behavior reported |
+| W03 | watch_remove (test123) | ok | - | Handled |
+| W04 | watch_add_httpbin | ok | - | Watch ID returned |
+| W05 | watch_add_nonexistent | ok | - | Error handled |
+| W06 | watch_double_add | ok | - | Behavior reported |
 
 ### 4.8 Trading Data
 
@@ -281,18 +284,18 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
-| E01 | empty_url | ok | — | Graceful error |
-| E02 | whitespace_url | ok | — | Graceful error |
-| E03 | no_protocol (example.com) | ok | — | Handled |
+| E01 | empty_url | ok | - | Graceful error |
+| E02 | whitespace_url | ok | - | Graceful error |
+| E03 | no_protocol (example.com) | ok | - | Handled |
 | E04 | very_long_url | ok | 50.6 s | Not truncated |
-| E05 | special_chars_url (script tag) | ok | — | Safe |
+| E05 | special_chars_url (script tag) | ok | - | Safe |
 | E06 | unusual_tld (example.museum) | ok | 53.4 s | Works |
 | E07 | max_pdf_size | **timeout** | 60.0 s | Size check delayed? |
 | E08 | empty_query_search | **timeout** | 60.0 s | Edge case |
 | E09 | unicode_query (金価格 今日) | ok | 28.1 s | CJK handled |
 | E10 | emoji_query (gold 💰) | ok | 39.8 s | Emoji handled |
 | E11 | negative_count (-1) | ok | 55.0 s | Handled |
-| E12 | huge_count (9999) | ok | — | Handled |
+| E12 | huge_count (9999) | ok | - | Handled |
 
 ### 4.12 Performance / Stress (Batch)
 
@@ -300,7 +303,7 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 |---|---|---|---|---|
 | P01 | perf_read_twice (cache check) | ok | 37.5 s | Cache benefit unclear |
 | P02 | perf_search_twice (cache check) | ok | 47.3 s | Cache benefit unclear |
-| P03 | perf_batch_heavy (3 heavy URLs) | ok | — | Works |
+| P03 | perf_batch_heavy (3 heavy URLs) | ok | - | Works |
 | P04 | perf_parallel_reads (3 light URLs) | ok | 25.3 s | Fast batch |
 | P05 | perf_research_cheap (HTTP) | **timeout** | 60.0 s | Surprising |
 | P06 | perf_research_niche (SURIOTA) | ok | 46.3 s | Works |
@@ -320,13 +323,13 @@ All 6 retested cases **passed** within 90s, confirming the batch timeouts were *
 | ID | Test | Status | Latency | Notes |
 |---|---|---|---|---|
 | ERR01 | 404_read | ok | 20.0 s | Structured error |
-| ERR02 | 500_read | ok | — | Structured error |
+| ERR02 | 500_read | ok | - | Structured error |
 | ERR03 | 403_read | **timeout** | 60.0 s | Error page render slow |
 | ERR04 | malformed_json (bytes) | ok | 28.1 s | Handled gracefully |
 
 ---
 
-## 5. Root Cause Analysis — Why 24 Timeouts?
+## 5. Root Cause Analysis - Why 24 Timeouts?
 
 After manual retest, **0 timeouts were functional bugs.** All 6 retested cases passed. Root causes:
 
@@ -351,10 +354,10 @@ After manual retest, **0 timeouts were functional bugs.** All 6 retested cases p
 
 ### 6.1 Strengths
 
-1. **Tiered fetch engine** (`fetch/core.py`): Clean escalation HTTP → stealth browser → Wayback. Resilient.
+1. **Tiered fetch engine** (`fetch/core.py`): Clean escalation HTTP -> stealth browser -> Wayback. Resilient.
 2. **Deterministic router** (`router.py`): No LLM, pure keyword scoring. Fast, predictable, no hallucination.
 3. **Error containment**: All tools return `err()` dict. No exceptions leak to client.
-4. **SSRF defense-in-depth**: `validate_url` → `_guard` → resolve-then-block. Confirmed effective.
+4. **SSRF defense-in-depth**: `validate_url` -> `_guard` -> resolve-then-block. Confirmed effective.
 5. **Modular extraction**: article, PDF, structured, links. Easy to extend.
 
 ### 6.2 Areas of Concern
@@ -365,7 +368,7 @@ After manual retest, **0 timeouts were functional bugs.** All 6 retested cases p
 | `fetch/core.py` | `ESCALATE_BELOW_CHARS = 200` can misclassify short pages as JS-needing | Low |
 | `fetch/render.py` | No zombie-process cleanup for crashed Chromium tabs | Medium |
 | `research.py` | No token-budget guard for LLM synthesis; can feed 50k+ tokens | Medium |
-| `watch.py` | Poller interval hardcoded; no jitter → predictable polling pattern | Low |
+| `watch.py` | Poller interval hardcoded; no jitter -> predictable polling pattern | Low |
 | `trading/cot.py` | Rigid CSV parser; no format-change fallback | Medium |
 | `trading/news.py` | No exponential backoff; single failure cascades to timeout | Medium |
 | `models.py` | Only `err()` model; no standardized success envelope | Low |
@@ -405,19 +408,19 @@ After manual retest, **0 timeouts were functional bugs.** All 6 retested cases p
 
 ### 7.2 Developer Experience
 
-5. **Request ID tracing** — propagate `X-Request-ID` through all fetch tiers  
-6. **Webhook-free watch option** — `watch` tool should allow polling mode without forcing webhook  
-7. **Read with CSS selector** — return only matching fragment (faster)  
-8. **Screenshot viewport param** — mobile/tablet/custom dimensions  
-9. **Batch read `max_bytes`** — truncate at N KB to prevent memory blowup  
+5. **Request ID tracing** - propagate `X-Request-ID` through all fetch tiers  
+6. **Webhook-free watch option** - `watch` tool should allow polling mode without forcing webhook  
+7. **Read with CSS selector** - return only matching fragment (faster)  
+8. **Screenshot viewport param** - mobile/tablet/custom dimensions  
+9. **Batch read `max_bytes`** - truncate at N KB to prevent memory blowup  
 
 ### 7.3 SURIOTA-Specific Tools
 
-10. **`modbus_register`** — extract register map from PDF manual URL → structured JSON  
-11. **`competitor_price`** — monitor Moxa / ICP DAS pricing pages for changes  
-12. **`device_firmware`** — check Espressif latest ESP-IDF / Arduino releases vs current  
-13. **`klhk_report`** — scrape KLHK SPARING compliance data  
-14. **`diff`** — compare two URLs and return changed sections (natural extension of `watch`)  
+10. **`modbus_register`** - extract register map from PDF manual URL -> structured JSON  
+11. **`competitor_price`** - monitor Moxa / ICP DAS pricing pages for changes  
+12. **`device_firmware`** - check Espressif latest ESP-IDF / Arduino releases vs current  
+13. **`klhk_report`** - scrape KLHK SPARING compliance data  
+14. **`diff`** - compare two URLs and return changed sections (natural extension of `watch`)  
 
 ---
 
@@ -449,6 +452,9 @@ After manual retest, **0 timeouts were functional bugs.** All 6 retested cases p
 
 ---
 
+<details>
+<summary>Appendices A-C: raw batch / retest / stress data</summary>
+
 ## Appendix A: Raw Batch Data (120 cases)
 
 Full per-case JSONL: `/tmp/argus_test_results_full.jsonl`
@@ -464,7 +470,7 @@ smart_news, edge_empty_query_search, smart_it, err_403_read, map_github,
 crawl_depth0, crawl_depth1, screenshot_small
 ```
 
-### OK List (96 items) — truncated
+### OK List (96 items) - truncated
 
 All `func_read_*`, `func_search_*`, `gh_search_repo*`, `scholar_broad`, `watch_*`, `forexfactory_*`, `cot_legacy`, `cot_disaggregated`, `find_similar_*`, `sec_ssrf_*`, `edge_unicode_query`, `edge_emoji_query`, `edge_negative_count`, and 60+ more.
 
@@ -493,6 +499,8 @@ All `func_read_*`, `func_search_*`, `gh_search_repo*`, `scholar_broad`, `watch_*
   }
 }
 ```
+
+</details>
 
 ---
 

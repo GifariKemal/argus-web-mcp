@@ -38,24 +38,18 @@ The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-RO
 
 ## Architecture
 
-```
-Claude Code CLI (HTTPS Bearer)
-    |
-    +-> nginx (argus.<domain>, TLS, fail2ban)
-    |       |
-    |       +-> /mcp           --> uvicorn 127.0.0.1:8090
-    |       +-> /health        --> (monitoring, no auth)
-    |       +-> /metrics       --> (Prometheus, optional IP allowlist)
-    |
-    +- SearXNG Docker
-           +-> 127.0.0.1:8888 (JSON API, loopback only)
-           +- Shared with Argus via httpx client
+<p align="center">
+  <img src="../assets/architecture.svg" alt="Argus deploy topology: CLI over HTTPS bearer to nginx (TLS, fail2ban), proxied to uvicorn+FastMCP on 127.0.0.1:8090, with SearXNG docker on 127.0.0.1:8888" width="100%">
+</p>
 
-Systemd service:  argus.service (User=argus, EnvironmentFile=/etc/argus/argus.env)
-Auth:             Bearer token (StaticTokenVerifier -> JWTVerifier)
-TLS:              certbot (LetsEncrypt, auto-renewal)
-Rate limit:       fail2ban (401 brute-force protection on /mcp)
-```
+Request flow: **Claude Code CLI** hits nginx over HTTPS with a bearer token. nginx (`argus.<domain>`, TLS, fail2ban) proxies `/mcp` to uvicorn on `127.0.0.1:8090`; `/health` is unauthenticated for monitoring and `/metrics` is Prometheus (optional IP allowlist). SearXNG runs as its own Docker container on `127.0.0.1:8888` (loopback-only JSON API), reached by Argus via an httpx client.
+
+| Layer | Detail |
+|---|---|
+| Systemd service | `argus.service` (`User=argus`, `EnvironmentFile=/etc/argus/argus.env`) |
+| Auth | Bearer token (`StaticTokenVerifier` -> `JWTVerifier`) |
+| TLS | certbot (Let's Encrypt, auto-renewal) |
+| Rate limit | fail2ban (401 brute-force protection on `/mcp`) |
 
 ## Deployment Files
 
@@ -72,6 +66,9 @@ Rate limit:       fail2ban (401 brute-force protection on /mcp)
 | `argus-update.timer` | Polls main every 5 min to trigger the update |
 
 ## Prerequisites
+
+> [!IMPORTANT]
+> The domain in `argus.nginx.conf` and `provision.sh` must be a real subdomain (not the `argus.<domain>` placeholder) before you run certbot, or TLS issuance fails.
 
 Before running deployment, ensure:
 
@@ -141,7 +138,10 @@ sudo bash deploy/provision.sh
 # This script is idempotent - safe to re-run if it fails.
 ```
 
-**What it does:**
+> [!NOTE]
+> `provision.sh` is idempotent - re-run it if a step fails.
+
+<details><summary>What the provision script does (14 steps)</summary>
 
 1. Updates system packages (`apt update && apt upgrade`)
 2. Installs system deps (Python 3.12, nginx, certbot, fail2ban, Docker)
@@ -158,6 +158,8 @@ sudo bash deploy/provision.sh
 13. Starts the Argus service
 14. Verifies `/health` endpoint responds
 
+</details>
+
 **Expected output** at the end:
 ```
 ========== Provisioning Complete [x] ==========
@@ -171,6 +173,9 @@ Bearer Token (save this somewhere safe):
 ```
 
 ## Step 4: Retrieve Bearer Token
+
+> [!IMPORTANT]
+> The bearer token is a secret. Store it in a password manager. Never commit it to git or paste it into a tracked file.
 
 The token is printed at the end of `provision.sh`. Save it externally (password manager, not in git):
 
@@ -288,6 +293,9 @@ systemctl stop argus
 
 ### Regenerate bearer token
 
+> [!CAUTION]
+> Regenerating the token invalidates every existing client. The overwrite of `/etc/argus/argus.env` also drops any other env vars in that file - re-add them after. Every user must re-register in Claude Code with the new token.
+
 ```bash
 # On VPS, as root
 sudo bash -c "echo 'ARGUS_TOKEN=$(openssl rand -hex 32)' > /etc/argus/argus.env"
@@ -310,6 +318,9 @@ systemctl reload nginx
 Certbot should auto-renew 30 days before expiry (via systemd timer).
 
 ### Rollback to previous version
+
+> [!WARNING]
+> `git checkout <previous-commit>` puts the repo in a detached HEAD state; the safe auto-update timer polls `main` and can ff it forward again. Pause the timer (`systemctl disable --now argus-update.timer`) if you need the rollback to hold.
 
 ```bash
 cd /opt/argus
@@ -378,7 +389,8 @@ journalctl -u argus -f  # Verify new settings
 | 8080 | SUVA | 127.0.0.1:8080 | No (local, coexist) |
 | (80 also) | Hermes | 0.0.0.0:80 | Yes (coexist via nginx SNI/host routing) |
 
-**Conflict Risk**: Hermes and Argus both want port 80/443. The provision script does NOT modify Hermes - **you must ensure your nginx upstream config multiplexes both via SNI or Host header routing**. See Hermes deployment guide for how to add Argus as a second upstream block.
+> [!WARNING]
+> **Port 80/443 conflict.** Hermes and Argus both want port 80/443. The provision script does NOT modify Hermes - you must ensure your nginx upstream config multiplexes both via SNI or Host header routing. See the Hermes deployment guide for how to add Argus as a second upstream block.
 
 ## Troubleshooting
 
@@ -475,8 +487,9 @@ incident, now hardened. A no-change cycle is a silent no-op. The timer is indepe
 of `argus.service`; pausing it does not stop the server. Trust boundary is the GitHub
 `main` branch, kept PR-gated.
 
-This is **live** on the VPS. One-time install (run as root, after the repo is at
-`/opt/argus/app`):
+This is **live** on the VPS.
+
+<details><summary>One-time install (run as root, after the repo is at /opt/argus/app)</summary>
 
 ```bash
 install -m 0755 /opt/argus/app/deploy/argus-update.sh /opt/argus/app/deploy/argus-update.sh
@@ -485,6 +498,8 @@ cp /opt/argus/app/deploy/argus-update.timer   /etc/systemd/system/argus-update.t
 systemctl daemon-reload
 systemctl enable --now argus-update.timer
 ```
+
+</details>
 
 Operate it:
 

@@ -4,6 +4,31 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 
 20 live tools (source of truth: `src/argus/server.py` `TOOLS` tuple): read, search, smart_search, read_pdf, scrape, batch_read, extract_structured, crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search, watch, list_watches, unwatch, forexfactory_calendar, cot_report, news_sentiment_feed.
 
+> [!NOTE]
+> Every tool is SSRF-guarded and returns full content (no silent truncation). Errors come back as `{error, code, detail}` - tools never raise to the client.
+
+## Contents
+
+- [`read`](#readurl-formatmarkdown-cleantrue-include_linksfalse-extract_mediafalse-timeout60)
+- [`search`](#searchquery-count10-categorygeneral-time_rangenull-langnull-include_domainsnull-exclude_domainsnull-safesearch0)
+- [`smart_search`](#smart_searchquery-count10)
+- [`read_pdf`](#read_pdfurl_or_path-pagesnull-modetext-timeout90)
+- [`scrape`](#scrapeurl-wait_fornull-actionsnull-screenshotfalse-formatmarkdown-timeout90)
+- [`batch_read`](#batch_readurls-concurrency8-formatmarkdown-cleantrue)
+- [`extract_structured`](#extract_structuredurl_or_urls-schema-promptnull-modeauto)
+- [`crawl`](#crawlseed_url-depth2-max_pages50-includenull-excludenull-same_domaintrue-respect_robotstrue-timeout180)
+- [`screenshot`](#screenshoturl-timeout60)
+- [`research`](#researchquery-modedeep-max_sources5-highlightsfalse-max_chars_per_sourcenull-timeout120)
+- [`map_urls`](#map_urlsurl-max_urls500-include_subdomainstrue)
+- [`find_similar`](#find_similarurl_or_text-count10)
+- [`github_search`](#github_searchquery-moderepositories-languagenull-sortnull-orderdesc-limit10)
+- [`scholar_search`](#scholar_searchquery-limit10-year_fromnull-open_accessfalse)
+- [`watch`](#watchurl-webhook-interval_minutes60-selectornull)
+- [`list_watches`](#list_watches)
+- [`unwatch`](#unwatchwatch_id)
+- [Trading-specialized](#trading-specialized-behind-readextract_structured---the-moat)
+- [Conventions](#conventions)
+
 ---
 
 ## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=60)`
@@ -122,11 +147,18 @@ Remove a watch by id.
 ---
 
 ## Trading-specialized (behind `read`/`extract_structured` - the moat)
+
+> [!IMPORTANT]
+> Golden-file tested, >=99% field accuracy gate before live Aurix use.
+
+<details>
+<summary>forexfactory_calendar / cot_report / news_sentiment_feed contracts</summary>
+
 - `forexfactory_calendar(date_range=null)` -> ForexFactory economic calendar (FairEconomy JSON feed) in **Aurix `calendar_client` shape** (field-map `time->date`, `event->name`; replaces deprecated FMP). Unknown non-empty impact labels pass through verbatim (feed drift stays visible); `date_range` bounds are validated ISO dates. Cached (`trading` TTL 300s) except stale-fallback bundles. Errors: ff_bad_date_range, ff_bad_feed, ff_fetch_failed, fetch_failed.
 - `cot_report(report_type="legacy_futures", date=null)` -> CFTC Commitments of Traders positioning JSON + live drift detectors `identity_failures`/`bad_dates` (>0 = treat as degraded data) + `requested_date` echo when `date` filters rows (non-matching date -> honest empty set). Cached (`trading` TTL 300s). Errors: cot_bad_report_type, cot_fetch_failed, fetch_failed.
 - `news_sentiment_feed(query, since=null, sentiment=false)` -> ranked news feed (+ optional owned-LLM sentiment score when `sentiment=true`); propagates `degraded`/`degraded_reason` from the search layer. Cached (`news` TTL 900s) unless degraded. Errors: no_results, search_backend_down, extraction_failed.
 
-**Golden-file tested, >=99% field accuracy gate before live Aurix use.**
+</details>
 
 ## Conventions
 snake_case tools/params / ISO-8601 dates / all URLs SSRF-checked / every tool has a unit test (fixtured) + integration test (local fixture server) / timeouts on every fetch / structured errors, never exceptions to client.

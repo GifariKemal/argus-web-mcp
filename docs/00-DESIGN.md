@@ -1,6 +1,21 @@
 # Argus - Design Document
 
-> _Status: design complete (autonomous brainstorm, 2026-06-24); **fully built and DEPLOYED LIVE** 2026-06-25 at `https://argus.gifariksuryo.xyz/mcp` - 20 MCP tools (this doc captures the original design; the shipped tool surface grew past the P1 table below - see `docs/03-TOOL-SPECS.md` and `CHANGELOG.md` for the live 20-tool set). Self-directed per owner's "full autonomous, no questions" directive - decisions documented here in lieu of an interactive approval gate._
+> [!NOTE]
+> Status: design complete (autonomous brainstorm, 2026-06-24); **fully built and DEPLOYED LIVE** 2026-06-25 at `https://argus.gifariksuryo.xyz/mcp` - 20 MCP tools. This doc captures the original design; the shipped tool surface grew past the P1 table below - see `docs/03-TOOL-SPECS.md` and `CHANGELOG.md` for the live 20-tool set. Self-directed per owner's "full autonomous, no questions" directive - decisions documented here in lieu of an interactive approval gate.
+
+## Contents
+
+- [1. Goal & constraints](#1-goal--constraints)
+- [2. Architecture (layers)](#2-architecture-layers)
+- [3. MCP tool surface](#3-mcp-tool-surface)
+- [4. MCP framework & transport](#4-mcp-framework--transport)
+- [5. Concurrency](#5-concurrency)
+- [6. Security (hard gates)](#6-security-hard-gates)
+- [7. Reliability](#7-reliability)
+- [8. Observability](#8-observability)
+- [9. Deploy topology (VPS)](#9-deploy-topology-vps)
+- [10. License posture](#10-license-posture)
+- [11. Out of scope (YAGNI for now)](#11-out-of-scope-yagni-for-now)
 
 ## 1. Goal & constraints
 
@@ -14,27 +29,11 @@ Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape /
 
 ## 2. Architecture (layers)
 
-```
-Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.gifariksuryo.xyz, TLS, fail2ban)
-                                         |  proxy_buffering off
-                                         v
-                              uvicorn  127.0.0.1:8090
-                                         |
-                                   FastMCP app  (Streamable HTTP /mcp + /health + /metrics)
-                                         |
-                    +--------------------+-------------------------+
-                 MCP tools          shared services            cache (content-addressed)
-              read/search/scrape    - browser pool (1 Chromium,   SQLite+disk, per-source TTL
-              read_pdf/batch_read     per-req context, semaphore)
-              extract_structured    - httpx pool (static fast-path)
-                                     - SearXNG client (search)
-                                     - owned-LLM client (extract/summarize)
-                    |
-        +-----------+-----------+--------------+---------------+
-   Crawl4AI     trafilatura   SearXNG svc    Docling/        Patchright/Nodriver
-   (render+md)  (article)     (Docker,       pymupdf4llm     (stealth, lazy tier)
-                              :8888 local)   (PDF)
-```
+<p align="center">
+  <img src="../assets/architecture.svg" alt="Argus architecture: Claude Code / Codex CLI over HTTPS to nginx, uvicorn+FastMCP, 20 MCP tools with shared services and SSRF guard, backed by SearXNG / Crawl4AI / trafilatura / Docling" width="100%">
+</p>
+
+Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **nginx** (`argus.<domain>`, TLS, `proxy_buffering off`, fail2ban), which proxies to **uvicorn** on `127.0.0.1:8090` running the **FastMCP** app (Streamable HTTP `/mcp` + `/health` + `/metrics`). The app fans out to the **20 MCP tools**, **shared services** (browser pool, httpx, semantic embeddings, cache, throttle), and the **SSRF guard**, which reach the OSS backends: **SearXNG** (`:8888` docker), **Crawl4AI/Playwright**, **trafilatura/Docling**, and structured/fallback APIs (archive.org, GitHub, Semantic Scholar). Cache is content-addressed (SQLite + disk, per-source TTL).
 
 **Fetch strategy (cheap -> expensive):** httpx static GET -> trafilatura extract. If JS needed / thin content -> Crawl4AI+Playwright. If anti-bot block -> Patchright -> Nodriver. This minimizes browser cost (the expensive path).
 
@@ -67,6 +66,10 @@ Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.gifariksuryo.xyz, TLS, fail2b
 - uvicorn `--workers 1` (shared stateful browser). Horizontal scale later via `stateless_http=True`.
 
 ## 6. Security (hard gates)
+
+> [!WARNING]
+> SSRF resolve-then-validate is a hard gate with 100% test coverage. Do not weaken the private/metadata IP deny, the IP re-pin, or the per-redirect re-check.
+
 - **SSRF: resolve-then-validate** - resolve DNS, deny if IP  in  private ranges (127/8,10/8,172.16/12,192.168/16,169.254/16) or metadata (169.254.169.254 + IPv6 fd00:ec2::254); **re-pin resolved IP** for the connection (anti DNS-rebinding); re-validate each redirect hop. 100% test coverage on this path.
 - Scheme allowlist `http`/`https` only.
 - Auth: bearer token (`StaticTokenVerifier` v1 -> `JWTVerifier` prod) + nginx second-layer auth/IP-allowlist + TLS + fail2ban jail. Secret via `EnvironmentFile`, managed by SSH/scp directly (NOT via Hermes tools - `redact_secrets` masks).
@@ -90,7 +93,13 @@ Claude Code CLI  --HTTPS (Bearer)-->  nginx (argus.gifariksuryo.xyz, TLS, fail2b
 - Ports: SearXNG 8888, Argus 8090 (avoid Hermes :80 / SUVA :8080).
 
 ## 10. License posture
+
+<details>
+<summary>AGPL vs permissive split and the reasoning</summary>
+
 AGPL (SearXNG, pymupdf) is **safe for internal self-hosting** - copyleft triggers only on distributing modified software / SaaS-to-third-parties. Core built on **Crawl4AI Apache-2.0** + **Docling MIT** so that IF Argus ever becomes a distributed product, the load-bearing pieces stay permissive (swap pymupdf->Docling, drop SearXNG forks). We call AGPL services over HTTP (not a derivative work).
+
+</details>
 
 ## 11. Out of scope (YAGNI for now)
 Distributed multi-node crawling, a real owned search index (YaCy), paid residential proxy pool, headed-browser mode, multi-tenant billing. Revisit only if a concrete need appears.

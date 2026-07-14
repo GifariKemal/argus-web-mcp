@@ -1,6 +1,9 @@
 # Argus - Research Findings (2026-06-24, 3-agent + 12-tool survey)
 
-Condensed record. Full reasoning in git history / session. Verify pricing/licenses before relying - web data changes fast.
+Condensed record. Full reasoning in git history / session.
+
+> [!WARNING]
+> Verify pricing/licenses before relying - web data changes fast.
 
 ## A. Incumbent survey (12 tools, scored for our context)
 Top by fit (remote-HTTP MCP + free tier + read/search): **Bright Data** (5k req/mo free, remote, best anti-bot) / **Firecrawl** (remote OAuth, full features) / **Exa** (semantic search) / **Claude built-in WebSearch/WebFetch** (zero setup/RAM, no JS/anti-bot, US-only search) / **Tavily** ((!) Nebius acquisition). Note 2026 changes: **Brave killed free tier**, Exa raised prices, Tavily acquired. **Conclusion that triggered Argus:** all meter/truncate/cost - self-hosting OSS removes all three.
@@ -29,4 +32,10 @@ Top by fit (remote-HTTP MCP + free tier + read/search): **Bright Data** (5k req/
 - **QA hard gates:** SSRF resolve-then-validate (100% cov) / trading-parser field accuracy >=99% / success >=95% / truncation >=0.98 long-form / ROUGE-L >= best free competitor / load test (no OOM/leak) / security SAST + deps-audit.
 
 ## Key sources
-Crawl4AI github.com/unclecode/crawl4ai / SearXNG github.com/searxng/searxng + docs.searxng.org/dev/search_api.html / FastMCP gofastmcp.com + pypi.org/project/fastmcp / Claude Code MCP code.claude.com/docs/en/mcp / trafilatura.readthedocs.io/evaluation / Docling github.com/docling-project/docling / Playwright stealth Patchright/Nodriver (ianlpaterson.com benchmark 2026) / OWASP SSRF cheat sheet / Crawl4AI install docs.crawl4ai.com/core/installation. (Full URL list in session transcript.)
+
+<details>
+<summary>Primary URLs (full list in session transcript)</summary>
+
+Crawl4AI github.com/unclecode/crawl4ai / SearXNG github.com/searxng/searxng + docs.searxng.org/dev/search_api.html / FastMCP gofastmcp.com + pypi.org/project/fastmcp / Claude Code MCP code.claude.com/docs/en/mcp / trafilatura.readthedocs.io/evaluation / Docling github.com/docling-project/docling / Playwright stealth Patchright/Nodriver (ianlpaterson.com benchmark 2026) / OWASP SSRF cheat sheet / Crawl4AI install docs.crawl4ai.com/core/installation.
+
+</details>

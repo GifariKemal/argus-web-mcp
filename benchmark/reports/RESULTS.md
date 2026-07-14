@@ -1,11 +1,24 @@
 # Argus benchmark RESULTS (durable summary)
 
-_Run 2026-06-24/25. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked historical record._
+> [!NOTE]
+> Run 2026-06-24/25. Raw data (`argus_200.json`, `argus_research_*.json`, `claude_*.json`, `codex_25/`, `compare-report.md`) is gitignored/regenerable; this file is the tracked historical record.
 
-Historical 2026-06-24/25 runs used 200 queries x 10 categories and 50 compare IDs. Current v0.4.4 harness scope is 160 non-trading queries x 8 categories and 40 compare IDs, with Codex outputs under `benchmark/codex_compare/`. See [README.md](README.md) for current harness usage.
+Historical 2026-06-24/25 runs used 200 queries x 10 categories and 50 compare IDs. Current v0.4.4 harness scope is 160 non-trading queries x 8 categories and 40 compare IDs, with Codex outputs under `benchmark/codex_compare/`. See [README.md](../README.md) for current harness usage.
+
+## At a glance
+
+| Metric | Argus | Result |
+|---|---|---|
+| Search success (200 scenarios, 10 categories) | 100% success / 0% throttle / 0 no-results | pass |
+| Search latency | p50 1.42s / p95 2.51s | pass |
+| 3-way discovery (n=50) | 50/50 found | parity with Claude/Codex |
+| 3-way depth (n=50) | 7,321 words FULL content/query | Argus edge |
+| Semantic rerank nDCG@5 (n=50) | lexical 0.7373 -> hybrid 0.8428 | +14.3% |
+| Rerank on conceptual/how-to subset (n=19) | lexical 0.6074 -> hybrid 0.7729 | +27.3% |
 
 ## Contents
 
+- [At a glance](#at-a-glance)
 - [Argus search - 200 scenarios](#argus-search---200-scenarios-paced-4s)
 - [3-way: Argus vs Claude WebSearch vs Codex CLI](#3-way-argus-vs-claude-websearch-vs-codex-cli-n25-then-n50)
 - [Burst re-validation](#burst-re-validation-un-paced-15-queries)
@@ -60,6 +73,9 @@ Researched Jina / Brave / Firecrawl / Exa / Tavily / Bright Data. Adopted the to
 
 ## Semantic rerank A/B - quantified gain (2026-06-24)
 
+> [!IMPORTANT]
+> Hard gate: semantic rerank must show a quantified nDCG gain. Confirmed +27.3% nDCG@5 on the conceptual/how-to subset (n=19).
+
 Same SearXNG candidate pool reranked two ways via `argus.search.rerank` (lexical vs hybrid),
 scored nDCG@5. Judge = an INDEPENDENT embedding model (all-MiniLM, different family from the
 reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quota (see finding).
@@ -74,7 +90,8 @@ reranker's bge-small) - the neutral gpt-4o-mini judge was blocked by OpenAI quot
 - Gain is largest on conceptual/how-to queries (+27%) - the exact weak spot the lexical relevance proxy flagged in the 200-run. Confirmed.
 - **Caveat:** the embedding judge leans semantic, so treat the magnitude as an upper-ish bound; a neutral LLM judge would tighten it. Direction (hybrid > lexical, biggest on conceptual) is robust.
 
-### Finding: OpenAI key has no quota (429 insufficient_quota)
+<details>
+<summary><strong>Finding: OpenAI key has no quota (429 insufficient_quota)</strong></summary>
 
 `OPENAI_API_KEY` is set but the account is out of credit. Impact: Argus's LLM-dependent features
 (`research(mode='answer')`, `extract_structured` llm/auto) will FAIL at runtime with this key even
@@ -82,9 +99,16 @@ though `llm_available()` returns True (it checks key presence, not quota). FIX b
 LLM features: top up OpenAI, OR point `ARGUS_LLM_BASE_URL`/`ARGUS_LLM_API_KEY` at a self-hosted
 (VPS Kimi) / Groq OpenAI-compatible endpoint (the provider-agnostic path already supports this).
 
+</details>
+
 ## 4-way: Claude/Codex x WITH vs WITHOUT Argus (n=25 stratified, 2026-06-25)
 
+<details>
+<summary>Method</summary>
+
 Harness `benchmark/run_4way.py` (token+cost+speed). One web-research prompt per scenario, 4 conditions. Claude cost = CLI-reported ACTUAL; Codex cost = ESTIMATE (subscription auth reports only total tokens; blended gpt-5.5 $10/1M, ~20% output, marked `*`). Per-call hard-cap 180s.
+
+</details>
 
 | condition | success% | mean_tok | median_tok | cost/query | lat p50 | lat p95 | urls | words |
 |---|---|---|---|---|---|---|---|---|

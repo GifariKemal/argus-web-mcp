@@ -1,6 +1,9 @@
 # Argus - OSS Study Guide & References
 
-What to clone/study from each project, the key modules/APIs, and the URLs. Read these (fetch the docs/repos) before/while building each component so we adopt proven patterns, not reinvent.
+What to clone/study from each project, the key modules/APIs, and the URLs.
+
+> [!TIP]
+> Read these (fetch the docs/repos) before/while building each component so we adopt proven patterns, not reinvent.
 
 ## Core - CLONE & improve
 ### Crawl4AI (Apache-2.0) - the reader/render core

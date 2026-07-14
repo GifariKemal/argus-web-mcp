@@ -39,7 +39,7 @@ the benchmark reset/search/PDF tuning pass.
   `search.rescued_category`.
 - Removed stale trading seams/text from the active tool-surface benchmark.
 - Corrected status/date/benchmark-gate drift in `CLAUDE.md`, `docs/02-ROADMAP.md`, and
-  `benchmark/RESULTS.md`.
+  `benchmark/reports/RESULTS.md`.
 
 ### Tested
 
@@ -304,7 +304,7 @@ Multi-agent analysis (14-agent workflow: 7 code deep-dive + 6 external-SOTA rese
 
 ### Fixed
 
-- **`research()` throttle bypass** - `research`/`_deep_bundle`/`_read_one` now thread the per-host `HostThrottle`, and the `research` server tool passes `throttle=s.throttle` (every other fetch tool already did). A deep-research call no longer fires parallel same-host fetches with zero courtesy delay and no circuit-breaker - a politeness/reliability defect flagged in `benchmark/RESULTS.md`.
+- **`research()` throttle bypass** - `research`/`_deep_bundle`/`_read_one` now thread the per-host `HostThrottle`, and the `research` server tool passes `throttle=s.throttle` (every other fetch tool already did). A deep-research call no longer fires parallel same-host fetches with zero courtesy delay and no circuit-breaker - a politeness/reliability defect flagged in `benchmark/reports/RESULTS.md`.
 
 ### Tested
 
@@ -335,7 +335,7 @@ Live at `https://argus.gifariksuryo.xyz/mcp` on VPS `103.172.172.29` (uvicorn `1
 
 ### Benchmarked
 
-- **4-way harness** (`benchmark/run_4way.py`) + **n=25** head-to-head results recorded; `research()` runs **3-6s in-process** (Argus is not the bottleneck; observed CLI latency is agent + transport, not the server). See [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
+- **4-way harness** (`benchmark/run_4way.py`) + **n=25** head-to-head results recorded; `research()` runs **3-6s in-process** (Argus is not the bottleneck; observed CLI latency is agent + transport, not the server). See [`benchmark/reports/RESULTS.md`](benchmark/reports/RESULTS.md).
 
 ### Security / QA
 
@@ -380,7 +380,7 @@ The full local build: research to a 20-tool, security-audited, benchmarked FastM
 
 ### Benchmarked
 
-- 200-scenario Argus run + 3-way head-to-head vs Claude Code and Codex native (n=50): discovery parity, Argus wins on full-content depth (~7k words/query). See [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
+- 200-scenario Argus run + 3-way head-to-head vs Claude Code and Codex native (n=50): discovery parity, Argus wins on full-content depth (~7k words/query). See [`benchmark/reports/RESULTS.md`](benchmark/reports/RESULTS.md).
 - Competitor feature-gap analysis -> adopted the self-hostable gaps. See [`docs/05-COMPETITIVE-GAP.md`](docs/05-COMPETITIVE-GAP.md).
 
 ### Security / QA

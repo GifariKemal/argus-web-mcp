@@ -154,6 +154,9 @@ python -m argus.server                      # stdio (local dev)
 # or HTTP:  uvicorn argus.server:app --host 127.0.0.1 --port 8090
 ```
 
+> [!TIP]
+> Argus runs fully without an LLM. Leave `ARGUS_ENABLE_LLM` unset - the consuming agent (Claude Code / Codex) does the synthesis from Argus's full-content bundles.
+
 ## Connect a CLI
 
 Register with **Claude Code**:
@@ -173,7 +176,7 @@ bearer_token_env_var = "ARGUS_TOKEN"
 
 ## Benchmarked
 
-Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical queries): **discovery parity**, but Argus wins decisively on **content depth** (full content per query vs hits/summaries), freshness, and cost/ownership. In-process `research()` runs in **3-6s** - Argus is not the latency bottleneck (CLI latency is the consuming agent + MCP transport). Claude+Argus stays token-neutral with the deepest synthesis; Codex+Argus trades +72% tokens for that depth. Semantic rerank quantified at **+27% nDCG** on conceptual queries. Full report: [`benchmark/RESULTS.md`](benchmark/RESULTS.md) ([harness](benchmark/README.md)).
+Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical queries): **discovery parity**, but Argus wins decisively on **content depth** (full content per query vs hits/summaries), freshness, and cost/ownership. In-process `research()` runs in **3-6s** - Argus is not the latency bottleneck (CLI latency is the consuming agent + MCP transport). Claude+Argus stays token-neutral with the deepest synthesis; Codex+Argus trades +72% tokens for that depth. Semantic rerank quantified at **+27% nDCG** on conceptual queries. Full report: [`benchmark/reports/RESULTS.md`](benchmark/reports/RESULTS.md) ([harness](benchmark/README.md)).
 
 ## Repo map
 
@@ -181,7 +184,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 |---|---|
 | `src/argus/` | the package - `server.py` (20 tools), `fetch/`, `extract/`, `security/ssrf.py`, `trading/`, `semantic.py`, `cache.py`, `watch.py` |
 | `docs/` | [DESIGN](docs/00-DESIGN.md) / [RESEARCH](docs/01-RESEARCH.md) / [ROADMAP](docs/02-ROADMAP.md) / [TOOL-SPECS](docs/03-TOOL-SPECS.md) / [REFERENCES](docs/04-REFERENCES.md) / [COMPETITIVE-GAP](docs/05-COMPETITIVE-GAP.md) |
-| `benchmark/` | [harness](benchmark/README.md) + [RESULTS](benchmark/RESULTS.md) + head-to-head |
+| `benchmark/` | [harness](benchmark/README.md) + [RESULTS](benchmark/reports/RESULTS.md) + head-to-head |
 | `deploy/` | systemd / nginx / provision.sh / fail2ban / [SECURITY-AUDIT](deploy/SECURITY-AUDIT.md) / [runbook](deploy/README.md) / searxng/ |
 | root docs | [SOUL](SOUL.md) (identity) / [AGENTS](AGENTS.md) (agent guide) / [CHANGELOG](CHANGELOG.md) (history) |
 

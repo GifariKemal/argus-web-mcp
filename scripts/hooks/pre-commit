@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# SURIOTA Markdown house-style gate. Blocks commits that introduce banned
+# glyphs (em/en-dash, smart quotes, unicode arrows) in staged *.md files.
+# Enable once: git config core.hooksPath scripts/hooks
+set -euo pipefail
+
+staged_md=$(git diff --cached --name-only --diff-filter=ACM -- '*.md' || true)
+[ -z "$staged_md" ] && exit 0
+
+python scripts/sanitize_md.py --check $staged_md

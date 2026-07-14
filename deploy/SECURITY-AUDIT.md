@@ -62,6 +62,9 @@ Round-1/2 original findings below (verdicts were pre-remediation).
 
 ## Summary Verdict (original Round-1, pre-remediation)
 
+> [!NOTE]
+> This verdict is the original Round-1 state, kept for the record. Both blockers were remediated before the live deploy - see the remediation tables above.
+
 **NOT READY TO DEPLOY - 2 blockers must be fixed first.**
 
 | Severity | Count | Blockers |
@@ -77,6 +80,9 @@ The SSRF trust boundary (the project's core security requirement) is solid and f
 ---
 
 ## SSRF Boundary Assessment - PASS
+
+> [!IMPORTANT]
+> SSRF resolve-then-validate is the project's core security requirement and a hard gate at 100% test coverage. Any change to `security/ssrf.py`, the guarded httpx client, or a tool's URL entry point must keep this boundary intact.
 
 The SSRF implementation is well-structured and defence-in-depth:
 
@@ -104,6 +110,8 @@ On the VPS, `ProtectSystem=strict` and `ProtectHome=true` in `argus.service` red
 
 **Fix:** Pin `lxml>=6.1.0` in `pyproject.toml` and upgrade in the venv before deploy.
 
+<details><summary>Fix diff</summary>
+
 ```toml
 # pyproject.toml - add explicit lxml lower-bound
 dependencies = [
@@ -114,6 +122,8 @@ dependencies = [
 ```
 
 Then: `.venv/Scripts/pip install "lxml>=6.1.0"` or `uv sync`.
+
+</details>
 
 ---
 
@@ -128,6 +138,8 @@ This is not directly a security vulnerability, but it is a correctness bug in th
 
 **Fix:** Change `instruction=` to `prompt=` in `src/argus/trading/news.py` line 36.
 
+<details><summary>Fix diff</summary>
+
 ```python
 # news.py _score_item - correct kwarg name
 result = await extract_llm(
@@ -139,6 +151,8 @@ result = await extract_llm(
     ),
 )
 ```
+
+</details>
 
 ---
 
@@ -154,6 +168,8 @@ This contrasts with `fetch_bytes` / `read_pdf` which correctly checks `len(data)
 Note: `httpx` does not stream by default - `resp.text` and `resp.content` both materialise the full body.
 
 **Fix:** Add a streaming read with a cap to `fetch_static`, or add a `max_size` parameter:
+
+<details><summary>Fix example</summary>
 
 ```python
 # fetch/static.py - example fix
@@ -171,6 +187,8 @@ async def fetch_static(...) -> dict:
 
 This requires switching `client.get(...)` to a streaming request (`client.stream("GET", ...)`).
 
+</details>
+
 ---
 
 ### MEDIUM - M2: SearXNG `secret_key` placeholder not enforced
@@ -182,6 +200,8 @@ The settings.yml comment correctly instructs the operator to replace it (line 25
 
 **Fix:** In `provision.sh`, add a pre-flight check or automatic substitution:
 
+<details><summary>Fix example</summary>
+
 ```bash
 # provision.sh - before starting SearXNG
 if grep -q "CHANGE_ME_GENERATE_RANDOM" /opt/argus/deploy/searxng/settings.yml; then
@@ -189,6 +209,8 @@ if grep -q "CHANGE_ME_GENERATE_RANDOM" /opt/argus/deploy/searxng/settings.yml; t
         /opt/argus/deploy/searxng/settings.yml
 fi
 ```
+
+</details>
 
 ---
 
@@ -201,6 +223,8 @@ The information exposed (`argus_up`, `argus_browser_up`, `argus_active_contexts`
 
 **Fix:** Uncomment the IP allowlist in the `/metrics` location block, restricting to the monitoring server IP and localhost:
 
+<details><summary>Fix example</summary>
+
 ```nginx
 location /metrics {
     allow 127.0.0.1;
@@ -210,6 +234,8 @@ location /metrics {
     proxy_set_header Host $host;
 }
 ```
+
+</details>
 
 ---
 
@@ -398,6 +424,8 @@ The `domain` input is normalised with `.lstrip(".")` (line 90) which prevents a 
 
 **Fix (defence in depth - recommended before any multi-tenant use):**
 
+<details><summary>Fix example</summary>
+
 ```python
 # research.py - wrap each source block in XML-style delimiters to make the
 # content structurally distinct from instructions.
@@ -415,6 +443,8 @@ prompt = (
 )
 ```
 
+</details>
+
 ---
 
 ### MEDIUM - R2-M2: Sitemap response body unbounded in memory (zip-bomb / large sitemap)
@@ -431,6 +461,8 @@ This is the same chunked-body residual gap noted in Round 1 M1 for HTML fetches 
 
 **Fix:** Apply the same streaming cap recommended in Round 1 M1 to `fetch_static`, or add a dedicated sitemap size cap in `_get`. A practical ceiling is 10 MB:
 
+<details><summary>Fix example</summary>
+
 ```python
 # mapsite.py - _get: cap sitemap body size to avoid OOM
 MAX_SITEMAP_BYTES = 10 * 1024 * 1024
@@ -446,6 +478,8 @@ async def _get(url: str, *, client, timeout: int) -> str | None:
 ```
 
 Note: this requires the fix to M1 (streaming read in `fetch_static`) to be fully effective against chunked responses. As a belt-and-suspenders measure the post-fetch check above still catches Content-Length-declared large responses.
+
+</details>
 
 ---
 
@@ -477,6 +511,8 @@ A call like `semantic.embed(["A" * 10_000_000] * 100)` would block the async eve
 
 **Fix (defensive):** Add a per-text char cap inside `embed` before calling the model:
 
+<details><summary>Fix example</summary>
+
 ```python
 _MAX_EMBED_CHARS = 2000  # bge-small-en-v1.5 is 512 tokens ~= ~2000 chars
 
@@ -486,6 +522,8 @@ def embed(texts: list[str]) -> list[list[float]]:
     texts = [t[:_MAX_EMBED_CHARS] for t in texts]
     return [np.asarray(vec, dtype=np.float64).tolist() for vec in _get_embedder().embed(texts)]
 ```
+
+</details>
 
 ---
 

@@ -1,4 +1,7 @@
-# Argus Web MCP QA Report — 200 Scenario Expansion
+> [!NOTE]
+> Historical record (2026-06-25 QA run). Kept for provenance; current status lives in the root CLAUDE.md and CHANGELOG.md.
+
+# Argus Web MCP QA Report - 200 Scenario Expansion
 ## Test Run: 2026-06-25 | Client: Hermes Chat via MCP | Target: argus.gifariksuryo.xyz
 
 ---
@@ -16,7 +19,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 - **Waktu total:** 25 menit 6 detik (4 workers, adaptive timeout)
 - **Server:** argus.gifariksuryo.xyz (kode produksi, belum deploy fix adaptive timeout)
 
-**Inti temuan:** Argus stabil — tidak ada crash, error tak terduga, atau SSRF bypass. Semua timeout adalah client-side (subprocess timeout) dan mayoritas terjadi pada sumber daya eksternal atau operasi berat yang masuk akal.
+**Inti temuan:** Argus stabil - tidak ada crash, error tak terduga, atau SSRF bypass. Semua timeout adalah client-side (subprocess timeout) dan mayoritas terjadi pada sumber daya eksternal atau operasi berat yang masuk akal.
 
 ---
 
@@ -34,7 +37,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 ### Runner
 
 - Batch runner `runner_200.py` dengan `ThreadPoolExecutor(4 workers)`
-- Setiap test dijalankan via `hermes chat -q` → LLM interpretation → `mcp_argus_*` tool invocation
+- Setiap test dijalankan via `hermes chat -q` -> LLM interpretation -> `mcp_argus_*` tool invocation
 - Adaptive timeout per kategori (bukan hardcoded 60s)
 - Log ke `/tmp/argus_test_200_results.jsonl` (JSONL)
 
@@ -42,7 +45,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 
 ## 2. Hasil per Kategori
 
-### 2.1 Light [49 tests] — Cache, Watch, Security, Boundary
+### 2.1 Light [49 tests] - Cache, Watch, Security, Boundary
 
 **Score: 45 OK (91.8%) | 4 TIMEOUT | 0 ERROR**
 
@@ -59,7 +62,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 
 ---
 
-### 2.2 Medium [56 tests] — Screenshot, Structured, Batch, Similar
+### 2.2 Medium [56 tests] - Screenshot, Structured, Batch, Similar
 
 **Score: 53 OK (94.6%) | 3 TIMEOUT | 0 ERROR**
 
@@ -75,11 +78,11 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 
 ---
 
-### 2.3 Heavy [53 tests] — Crawl, Research, Pipelines, i18n, Performance
+### 2.3 Heavy [53 tests] - Crawl, Research, Pipelines, i18n, Performance
 
 **Score: 51 OK (96.2%) | 2 TIMEOUT | 0 ERROR**
 
-**Temuan:** Crawl depth 0-2 berhasil. Pipelines (search → read → extract) dapat dieksekusi end-to-end. i18n test (JP, AR, RU, CN, KR) semua OK. Batch read 100 dan 200 URLs berhasil (mencapai 200 cap). Sequential burst (10x read, 5x scrape) stabil.
+**Temuan:** Crawl depth 0-2 berhasil. Pipelines (search -> read -> extract) dapat dieksekusi end-to-end. i18n test (JP, AR, RU, CN, KR) semua OK. Batch read 100 dan 200 URLs berhasil (mencapai 200 cap). Sequential burst (10x read, 5x scrape) stabil.
 
 **Timeouts:**
 
@@ -90,7 +93,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 
 ---
 
-### 2.4 API [42 tests] — GitHub, Scholar, Smart Router, Trading
+### 2.4 API [42 tests] - GitHub, Scholar, Smart Router, Trading
 
 **Score: 38 OK (90.5%) | 4 TIMEOUT | 0 ERROR**
 
@@ -101,7 +104,7 @@ Pelengkap dari laporan 128 skenario sebelumnya, batch ini menaikkan coverage **A
 | ID | Test | Analisis |
 |---|---|---|
 | `174_smart_router_code` | `smart_search 'function pointer C++'` | Route determinasi + tool execution membutuhkan waktu >90s karena ambiguity tinggi |
-| `178_trade_ff_default` | `forexfactory_calendar default` | Timezone scalping scraper timeout — **external dependency** |
+| `178_trade_ff_default` | `forexfactory_calendar default` | Timezone scalping scraper timeout - **external dependency** |
 | `179_trade_ff_range` | `forexfactory_calendar date range` | ForexFactory scraper lambat/tidak stabil |
 | `180_trade_ff_past` | `forexfactory_calendar past date` | ForexFactory scraper tidak responsive pada range historis |
 
@@ -135,17 +138,17 @@ Area yang sebelumnya **tidak tercover** dan sekarang tervalidasi:
 
 | Area | Skenario | Hasil |
 |---|---|---|
-| **Cache behavior** | 12 skenario: read/search/research/github/scholar/map 2× | Semua OK (1 timeout karena overhead) |
+| **Cache behavior** | 12 skenario: read/search/research/github/scholar/map 2x | Semua OK (1 timeout karena overhead) |
 | **Watch deep** | 12 skenario: selector, SSRF, double watch, unwatch all | Semua OK (1 timeout overhead) |
 | **extract_structured** | 13 skenario: selector/XPath/LLM/auto, nested, multi-field | 12 OK, 1 timeout (multi-field) |
 | **find_similar** | 13 skenario: URL, text, CJK, scores, exclusion | 12 OK, 1 timeout (negative count) |
 | **Crawl boundary** | 15 skenario: depth 0-3, max_pages, include/exclude | 15 OK |
 | **Batch boundary** | 15 skenario: empty, 1/5/20/200 URLs, mix OK+404+SSRF | 13 OK, 2 timeout (200 cap, suriota) |
-| **Pipelines** | 20 skenario: search→read, smart→scholar, crawl→batch | 20 OK |
+| **Pipelines** | 20 skenario: search->read, smart->scholar, crawl->batch | 20 OK |
 | **i18n & Encoding** | 15 skenario: JP, AR, RU, CN, KR, CJK scholar, RTL | 15 OK |
 | **Security edge cases** | 12 skenario: AWS metadata, IPv6 ::1, data URI, FTP | 12 OK |
 | **Negative / Error paths** | 15 skenario: 500/502/503, infinite redirect, empty research | 12 OK, 3 timeout (503, infinite redirect, browser unavailable) |
-| **Performance / Load** | 15 skenario: 10× sequential, batch 100/200, mixed burst | 13 OK, 2 timeout (batch 200, suriota) |
+| **Performance / Load** | 15 skenario: 10x sequential, batch 100/200, mixed burst | 13 OK, 2 timeout (batch 200, suriota) |
 | **Smart Router extended** | 10 skenario: repo, paper, IT, news, brand, ambiguous | 9 OK, 1 timeout (code query ambiguity) |
 | **Trading extended** | 10 skenario: ForexFactory ranges, COT types, sentiment | 7 OK, 3 timeout (ForexFactory) |
 
@@ -153,13 +156,13 @@ Area yang sebelumnya **tidak tercover** dan sekarang tervalidasi:
 
 ## 5. Key Findings
 
-1. **Stabilitas 100% — 0 error fungsional.** Tidak ada crash, stack trace, atau response malformed pada 200 skenario.
+1. **Stabilitas 100% - 0 error fungsional.** Tidak ada crash, stack trace, atau response malformed pada 200 skenario.
 2. **SSRF guard bekerja sempurna.** Semua attempts (127.0.0.1, AWS metadata, IPv6, data URI, FTP) di-block tanpa leak.
 3. **Smart Router akurat.** Kecuali 1 timeout pada query ambiguity tinggi, route determinasi lancar.
 4. **ForexFactory adalah single point of failure.** 4/10 trading tests timeout karena scraper eksternal lambat. Perlu circuit breaker / cache fallback.
 5. **Batch read mencapai 200 URL cap** dengan aman; latency tinggi karena server timeout lama, bukan bug.
 6. **i18n berfungsi penuh.** CJK, RTL, Cyrillic semua ter-render dan terindeks dengan benar.
-7. **Cache internal aktif** tetapi tidak expose `from_cache` di response — pertimbangkan expose flag ini untuk debugging.
+7. **Cache internal aktif** tetapi tidak expose `from_cache` di response - pertimbangkan expose flag ini untuk debugging.
 8. **extract_structured dengan multi-field schema** membutuhkan adaptive timeout saat ini belum deploy.
 
 ---
@@ -171,7 +174,7 @@ Area yang sebelumnya **tidak tercover** dan sekarang tervalidasi:
 2. **Restart service Argus** untuk apply timeout baru (read 60s, scrape 90s, research 120s, dll.).
 
 ### Short-term
-3. **Tambahkan circuit breaker** untuk `forexfactory_calendar` dan `cot_report` → cache dengan TTL 4-6 jam; fallback ke cached jika scraper timeout.
+3. **Tambahkan circuit breaker** untuk `forexfactory_calendar` dan `cot_report` -> cache dengan TTL 4-6 jam; fallback ke cached jika scraper timeout.
 4. **Expose `from_cache: bool`** di `read`, `search`, `research`, `github_search`, `scholar_search` response untuk observability.
 5. **Validasi `count` parameter** di `find_similar` agar negative/zero langsung reject dengan `VALIDATION_ERROR` daripada memicu processing panjang.
 
@@ -182,13 +185,13 @@ Area yang sebelumnya **tidak tercover** dan sekarang tervalidasi:
 
 ---
 
-## 7. Appendix A — Raw Data
+## 7. Appendix A - Raw Data
 
 - **Test commands:** `/tmp/test_commands_200.json`
 - **Raw results (JSONL):** `/tmp/argus_test_200_results.jsonl`
 - **Batch runner:** `/tmp/runner_200.py`
 - **Test generator:** `/tmp/gen_tests.py`
-- **Next commit target:** `docs/QA_REPORT_200.md`
+- **Next commit target:** `docs/qa/QA_REPORT_200.md`
 
 ---
 

@@ -35,7 +35,8 @@ uv pip install -e ".[dev]"          # base + test/lint deps
 # ".[pdf-quality]"  -> docling (read_pdf mode='quality')
 crawl4ai-setup && crawl4ai-doctor   # one-time Chromium for the browser tier
 ```
-Use the venv Python explicitly (Windows): `./.venv/Scripts/python.exe`, `./.venv/Scripts/ruff.exe`.
+> [!NOTE]
+> Use the venv Python explicitly (Windows): `./.venv/Scripts/python.exe`, `./.venv/Scripts/ruff.exe`.
 
 ## Commands
 
@@ -50,9 +51,13 @@ Use the venv Python explicitly (Windows): `./.venv/Scripts/python.exe`, `./.venv
 | Run (HTTP) | `uvicorn argus.server:app --host 127.0.0.1 --port 8090` |
 | SearXNG backend | `cd deploy/searxng && docker compose up -d` |
 
-Test markers: `browser` (needs Chromium), `slow` (Docling model), `network` (live internet). The default run excludes all three and is fully offline + deterministic.
+> [!TIP]
+> Test markers: `browser` (needs Chromium), `slow` (Docling model), `network` (live internet). The default run excludes all three and is fully offline + deterministic.
 
 ## Hard gates - never compromise
+
+> [!IMPORTANT]
+> These gates are non-negotiable. Do not weaken one "temporarily" to land a change.
 
 1. **SSRF coverage = 100%** on `argus.security.ssrf` (line + branch). Every outbound fetch of a user-influenced URL goes through `validate_url` + the IP-pinning safe client / `_guard`.
 2. **Tools never raise to the client** - they return a structured `err(code, msg, detail)` dict (`argus.models`). Every server tool has a final `except Exception` -> `err(...)`.
@@ -88,12 +93,17 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 
 ## Secrets & deploy
 
-- Manage VPS secrets via SSH/scp directly - **not** via Hermes tools (`redact_secrets` masks them).
-- Never commit a real `secret_key`/token. `*.bak` and benchmark run-artifacts are gitignored.
-- **Already live** at `https://argus.gifariksuryo.xyz/mcp` (`103.172.172.29`). A systemd timer auto-deploys `main`: poll every 5 min -> fast-forward only -> restart -> `/health` gate -> auto-rollback (docs/benchmark-only commits skip the restart). So a merged change to `main` ships itself - keep `main` green. Runbook: [`deploy/README.md`](deploy/README.md).
+> [!IMPORTANT]
+> Manage VPS secrets via SSH/scp directly - **not** via Hermes tools (`redact_secrets` masks them). Never commit a real `secret_key`/token.
+
+- `*.bak` and benchmark run-artifacts are gitignored.
+
+> [!WARNING]
+> **Already live** at `https://argus.gifariksuryo.xyz/mcp` (`103.172.172.29`). A systemd timer auto-deploys `main`: poll every 5 min -> fast-forward only -> restart -> `/health` gate -> auto-rollback (docs/benchmark-only commits skip the restart). So a merged change to `main` ships itself - keep `main` green. Runbook: [`deploy/README.md`](deploy/README.md).
 
 ## Don't
 
-- Don't add a paid web API to "fix" search - Argus is self-hosted by design (SearXNG + proxy).
-- Don't make Argus depend on an LLM - the consuming agent is the brain.
-- Don't leave TODO/placeholder without a logged note. Don't weaken a hard gate "temporarily".
+> [!CAUTION]
+> - Don't add a paid web API to "fix" search - Argus is self-hosted by design (SearXNG + proxy).
+> - Don't make Argus depend on an LLM - the consuming agent is the brain.
+> - Don't leave TODO/placeholder without a logged note. Don't weaken a hard gate "temporarily".
