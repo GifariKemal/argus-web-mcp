@@ -14,6 +14,37 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.6] - 2026-07-14 - Live-log-driven resilience pass
+
+Improvements from a 7-day production journald audit (search-engine throttling, timeout
+long-tails, benign teardown noise). All additive; no behavior change to a healthy request.
+
+### Added
+
+- **Client-side per-engine cooldown (`search`).** When SearXNG reports an engine
+  `unresponsive` (rate-limited/CAPTCHA on a datacenter IP), Argus benches it for a window
+  (`ARGUS_ENGINE_COOLDOWN`, default 120s) so the next general fan-out stops requesting it and
+  concentrates on engines that answer. Complements SearXNG's server-side `suspended_times`;
+  cuts the dominant log signal (~1200 "engines unresponsive" events/7d) and wasted sub-requests.
+  Safety floor: never benches below 2 fan-out engines.
+
+### Fixed
+
+- **`scrape` wall-clock now bounded by its own `timeout`.** The normal->stealth escalation ran
+  two renders (each up to `timeout + grace`), so a scrape could take ~2x its configured timeout
+  (observed p99 ~184s at a 90s setting). Wrapped in an outer `asyncio.timeout(timeout)` ->
+  structured `fetch_failed` "scrape timed out", matching the `research`/`crawl` pattern.
+- **Client-inflated `timeout` clamped to the server ceiling.** `timeout` is a tool parameter, so
+  a caller could pass `timeout=900` and blow past the intended bound (a likely cause of the
+  `research` p99 ~858s tail). The metrics middleware now clamps every tool's `timeout` arg to
+  `TIMEOUTS[name]` before dispatch (a caller may request less, never more).
+
+### Changed
+
+- **Log hygiene.** A loop exception handler demotes known-benign async-teardown tracebacks
+  (client-disconnect `ClosedResourceError`, browser `net::ERR_ABORTED` / detached-frame futures)
+  to a single debug line. Real errors still pass through to the default handler untouched.
+
 ## [0.4.5] - 2026-07-02 - Round 10 final gap-scan
 
 Final gap-scan over the deployed a802678/v0.4.4 tree, focused on code added during

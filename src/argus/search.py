@@ -7,6 +7,7 @@ and returns a lean result dict. See docs/03-TOOL-SPECS.md.
 import asyncio
 import os
 import re
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -24,6 +25,14 @@ _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 # Spread `general` load across many free engines so DuckDuckGo isn't the sole source
 # (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
 _DEFAULT_ENGINES = ["duckduckgo", "bing", "brave", "mojeek", "startpage", "qwant"]
+# Client-side per-engine cooldown: when SearXNG reports an engine `unresponsive`
+# (rate-limited/CAPTCHA on this datacenter IP), bench it for a window so the next
+# general fan-out stops requesting it - cutting wasted sub-requests and the log spam,
+# and concentrating the fan-out on engines that are actually answering. Complements
+# SearXNG's own server-side suspended_times. Env-tunable; monotonic-clocked.
+_ENGINE_COOLDOWN = float(os.getenv("ARGUS_ENGINE_COOLDOWN", "120"))
+_MIN_FANOUT_ENGINES = 2  # never bench so many that fewer than this remain in the fan-out
+_engine_cooldowns: dict[str, float] = {}  # engine name -> monotonic deadline it may be used again
 _DEFAULT_LANG_ENV = "ARGUS_DEFAULT_SEARCH_LANG"
 _DEFAULT_LANG = "en"
 _MIN_KEEP = 3  # safety floor: never drop below this many of the backend's results
@@ -434,6 +443,7 @@ async def _search_once(
         if len(results) >= count or added == 0:
             break
 
+    _bench_engines(unresponsive)
     return results, unresponsive
 
 
@@ -444,6 +454,39 @@ def _fallback_base_urls(explicit: list[str] | None) -> list[str]:
         return explicit
     raw = os.getenv("ARGUS_SEARXNG_FALLBACKS", "")
     return [u.strip() for u in raw.split(",") if u.strip()]
+
+
+def _engine_name(item) -> str:
+    """SearXNG `unresponsive_engines` entries are either a bare name or a
+    ``[name, reason]`` pair - normalise to the engine name."""
+    if isinstance(item, (list, tuple)) and item:
+        return str(item[0])
+    return str(item)
+
+
+def _bench_engines(engines) -> None:
+    """Put each reported-unresponsive engine on cooldown until now + _ENGINE_COOLDOWN."""
+    if not engines or _ENGINE_COOLDOWN <= 0:
+        return
+    deadline = time.monotonic() + _ENGINE_COOLDOWN
+    for e in engines:
+        name = _engine_name(e)
+        if name:
+            _engine_cooldowns[name] = deadline
+
+
+def _healthy_engines(candidates: list[str]) -> list[str]:
+    """Drop engines currently on cooldown. Safety floor: if benching would leave
+    fewer than _MIN_FANOUT_ENGINES, use the full candidate list (better to retry a
+    maybe-recovered engine than fan out too thin)."""
+    now = time.monotonic()
+    healthy = [e for e in candidates if _engine_cooldowns.get(e, 0.0) <= now]
+    return healthy if len(healthy) >= _MIN_FANOUT_ENGINES else list(candidates)
+
+
+def _reset_engine_cooldowns() -> None:
+    """Test helper: clear the per-engine cooldown registry."""
+    _engine_cooldowns.clear()
 
 
 def _default_lang() -> str | None:
@@ -558,7 +601,7 @@ async def search(
     if engines is not None:
         params["engines"] = ",".join(engines)
     elif categories == "general":
-        params["engines"] = ",".join(_DEFAULT_ENGINES)
+        params["engines"] = ",".join(_healthy_engines(_DEFAULT_ENGINES))
     if time_range:
         params["time_range"] = time_range
     effective_lang = lang if lang is not None else _default_lang()

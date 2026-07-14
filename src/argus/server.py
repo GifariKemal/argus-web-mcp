@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from . import semantic
 from .cache import Cache, ttl_for
-from .config import HEALTH_LATENCY_BUCKETS, TIMEOUTS
+from .config import HEALTH_LATENCY_BUCKETS, TIMEOUTS, clamp_timeout
 from .extract.article import extract_article
 from .extract.links import extract_links_images
 from .extract.llm import extract_llm, llm_available
@@ -138,6 +138,40 @@ def _state() -> State:
     return _S
 
 
+# Known-benign async-teardown noise. A client disconnecting mid-stream surfaces as an
+# anyio ClosedResourceError from the MCP transport's task group; a site aborting a
+# browser navigation surfaces as a Playwright net::ERR_ABORTED / detached-frame future.
+# Both are already handled where they matter (the tool returns a structured error, or the
+# client is simply gone), so the loop-level "exception was never retrieved" traceback is
+# pure noise. Demote those to a single debug line; anything else passes through untouched.
+_BENIGN_ASYNC_NOISE = ("ClosedResourceError", "net::ERR_ABORTED", "frame was detached")
+
+
+def _is_benign_async_noise(context: dict) -> bool:
+    exc = context.get("exception")
+    text = f"{context.get('message', '')} {type(exc).__name__ if exc else ''} {exc or ''}"
+    return any(marker in text for marker in _BENIGN_ASYNC_NOISE)
+
+
+def _install_log_hygiene() -> None:
+    """Route the running loop's unhandled-exception noise: benign teardown -> one debug
+    line, everything else -> the previous/default handler (real errors stay loud)."""
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+
+    def handler(loop, context):
+        if _is_benign_async_noise(context):
+            logger.debug("benign async teardown: %s",
+                         context.get("message") or context.get("exception"))
+            return
+        if previous is not None:
+            previous(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 @asynccontextmanager
 async def lifespan(_server: FastMCP):
     global _S, _STARTUP_TIME
@@ -157,6 +191,7 @@ async def lifespan(_server: FastMCP):
         watch_store=WatchStore(),
     )
     await _S.browser.start()
+    _install_log_hygiene()
     # Pre-warm the local embedding model off the event loop so the FIRST research/find_similar
     # doesn't eat the one-time ~5s HF model load. Best-effort: never blocks/fails startup
     # (no-op when the [semantic] extra is absent).
@@ -416,10 +451,15 @@ async def scrape(
         return err("render_failed", "browser tier unavailable")
 
     try:
-        res = await fetch(
-            url, render=True, wait_for=wait_for, actions=actions, screenshot=screenshot,
-            timeout=timeout, browser=s.browser, client=s.client, throttle=s.throttle,
-        )
+        # Outer wall-clock bound so the normal->stealth escalation (two renders, each
+        # up to timeout + grace) cannot sum past the tool's own `timeout`.
+        async with asyncio.timeout(timeout):
+            res = await fetch(
+                url, render=True, wait_for=wait_for, actions=actions, screenshot=screenshot,
+                timeout=timeout, browser=s.browser, client=s.client, throttle=s.throttle,
+            )
+    except TimeoutError:
+        return err("fetch_failed", "scrape timed out", f"{timeout}s")
     except SSRFError as e:
         return err("ssrf_blocked", "URL blocked by SSRF guard", _safe_detail(e))
     except FetchError as e:
@@ -986,6 +1026,17 @@ class _MetricsMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         name = getattr(getattr(context, "message", None), "name", "unknown")
         _TOOL_CALLS[name] = _TOOL_CALLS.get(name, 0) + 1
+
+        # Clamp a client-inflated `timeout` arg to the server ceiling before dispatch.
+        # The innermost call_next reads context.message.arguments at call time, so
+        # mutating the dict in place binds the clamped value for the tool. Guarded:
+        # a clamp failure must never break the tool call.
+        args = getattr(getattr(context, "message", None), "arguments", None)
+        if isinstance(args, dict) and "timeout" in args:
+            try:
+                args["timeout"] = clamp_timeout(name, args["timeout"])
+            except Exception:  # noqa: BLE001, S110 - metrics/clamp must not break dispatch
+                pass
 
         t0 = time.perf_counter()
         try:

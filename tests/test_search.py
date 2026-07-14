@@ -26,6 +26,15 @@ def semantic_off(monkeypatch):
     monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _clean_engine_cooldowns():
+    """Per-engine cooldown state is module-global; clear it around every test so a
+    benched engine never leaks across tests."""
+    argus.search._reset_engine_cooldowns()
+    yield
+    argus.search._reset_engine_cooldowns()
+
+
 def _result(i, engine="duckduckgo", url=None, published=None):
     r = {
         "title": f"Result {i}",
@@ -1796,3 +1805,59 @@ async def test_guard_still_flags_low_cosine_junk(monkeypatch):
     ])))
     out = await search("quantum entanglement teleportation", base_url=BASE)
     assert out["degraded"] is True and out["degraded_reason"] == "low_relevance"
+
+
+# --------------------------------------------------------------------------- #
+# Per-engine cooldown (P1): bench engines SearXNG reports unresponsive so the
+# next general fan-out stops requesting them.
+# --------------------------------------------------------------------------- #
+def test_engine_name_normalizes_pair_and_bare():
+    assert argus.search._engine_name(["brave", "timeout"]) == "brave"
+    assert argus.search._engine_name("google") == "google"
+
+
+def test_bench_then_healthy_drops_cooled_engine():
+    argus.search._bench_engines(["brave", "google"])
+    healthy = argus.search._healthy_engines(
+        ["duckduckgo", "bing", "brave", "mojeek", "startpage", "qwant"]
+    )
+    assert "brave" not in healthy and "google" not in healthy
+    assert "duckduckgo" in healthy and "bing" in healthy
+
+
+def test_healthy_safety_floor_uses_full_list_when_too_many_benched():
+    cands = ["duckduckgo", "bing", "brave"]
+    argus.search._bench_engines(["duckduckgo", "bing"])  # would leave only 1 (< floor 2)
+    assert argus.search._healthy_engines(cands) == cands
+
+
+def test_cooldown_expires(monkeypatch):
+    monkeypatch.setattr(argus.search, "_ENGINE_COOLDOWN", 0.0)  # zero window -> never bench
+    argus.search._bench_engines(["brave"])
+    assert "brave" in argus.search._healthy_engines(["duckduckgo", "bing", "brave"])
+
+
+@respx.mock
+async def test_unresponsive_engine_dropped_from_next_fanout():
+    seen_engines = []
+
+    def responder(request):
+        eng = _query_of(request).get("engines", [""])[0]
+        seen_engines.append(eng)
+        # First call: brave/qwant unresponsive but we still return results.
+        if len(seen_engines) == 1:
+            return httpx.Response(200, json={
+                "results": [_result(1)],
+                "unresponsive_engines": [["brave", "timeout"], ["qwant", "too many requests"]],
+            })
+        return httpx.Response(200, json=_page([_result(2)]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    await search("first query", base_url=BASE, count=1)
+    await search("second query", base_url=BASE, count=1)
+
+    # Second fan-out must have dropped the benched engines.
+    assert "brave" in seen_engines[0] and "qwant" in seen_engines[0]
+    assert "brave" not in seen_engines[1] and "qwant" not in seen_engines[1]
+    assert "duckduckgo" in seen_engines[1]  # healthy engines still present

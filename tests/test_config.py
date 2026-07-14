@@ -60,6 +60,25 @@ def test_int_falls_back_on_bad_value(monkeypatch):
         importlib.reload(config)
 
 
+def test_clamp_timeout_caps_at_ceiling():
+    ceiling = config.TIMEOUTS["scrape"]
+    assert config.clamp_timeout("scrape", ceiling + 500) == ceiling
+    assert config.clamp_timeout("research", 99999) == config.TIMEOUTS["research"]
+
+
+def test_clamp_timeout_allows_lower_and_floors_at_one():
+    assert config.clamp_timeout("scrape", 5) == 5
+    assert config.clamp_timeout("scrape", 0) == 1
+    assert config.clamp_timeout("scrape", -10) == 1
+
+
+def test_clamp_timeout_passes_through_non_numeric_and_unknown_tool():
+    assert config.clamp_timeout("scrape", None) is None
+    assert config.clamp_timeout("scrape", "60") == "60"
+    assert config.clamp_timeout("scrape", True) is True  # bool is not a real timeout
+    assert config.clamp_timeout("no_such_tool", 999) == 999
+
+
 def test_tool_specs_doc_timeouts_match_config():
     """docs/03-TOOL-SPECS.md tool-signature timeout literals must match config.TIMEOUTS
     (guards the drift that had 5 of 6 stale)."""

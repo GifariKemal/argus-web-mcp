@@ -40,6 +40,20 @@ TIMEOUTS: dict[str, int] = {
     "unwatch": _int("ARGUS_TIMEOUT_WATCH", 30),
 }
 
+def clamp_timeout(name: str, requested):
+    """Clamp a CLIENT-supplied per-tool ``timeout`` to the server ceiling.
+
+    ``timeout`` is a tool parameter, so a caller can pass any value; without a ceiling
+    an inflated ``timeout=900`` lets a single scrape/research call run far past the
+    intended bound (observed p99 tails). A client may ask for LESS but never MORE than
+    ``TIMEOUTS[name]``. Non-numeric values pass through untouched (the tool validates).
+    """
+    ceiling = TIMEOUTS.get(name)
+    if ceiling is None or isinstance(requested, bool) or not isinstance(requested, (int, float)):
+        return requested
+    return max(1, min(int(requested), ceiling))
+
+
 # DNS resolution guard (seconds). The SSRF resolver runs off the event loop; this
 # bounds it so a slow/hung resolver can't stall concurrent tool calls on the single worker.
 DNS_TIMEOUT = _int("ARGUS_DNS_TIMEOUT", 5)

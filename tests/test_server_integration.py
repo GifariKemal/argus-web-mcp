@@ -310,6 +310,90 @@ async def test_metrics_middleware_no_longer_requires_state():
     assert len(server._tool_latencies["scrape"]) == 1
 
 
+async def test_metrics_middleware_clamps_inflated_timeout():
+    """A client-inflated `timeout` arg is clamped to the server ceiling before dispatch."""
+    server._TOOL_CALLS.clear()
+    mw = server._MetricsMiddleware()
+    captured = {}
+
+    class _Ctx:
+        class message:
+            name = "scrape"
+            arguments = {"timeout": 9999}
+
+    async def _next(ctx):
+        captured["timeout"] = ctx.message.arguments["timeout"]
+        return "ok"
+
+    out = await mw.on_call_tool(_Ctx(), _next)
+    assert out == "ok"
+    assert captured["timeout"] == server.TIMEOUTS["scrape"]
+
+
+async def test_metrics_middleware_leaves_reasonable_timeout():
+    mw = server._MetricsMiddleware()
+    captured = {}
+
+    class _Ctx:
+        class message:
+            name = "scrape"
+            arguments = {"timeout": 5}
+
+    async def _next(ctx):
+        captured["timeout"] = ctx.message.arguments["timeout"]
+        return "ok"
+
+    await mw.on_call_tool(_Ctx(), _next)
+    assert captured["timeout"] == 5
+
+
+async def test_scrape_times_out(app_state, monkeypatch):
+    """scrape must return a structured timeout error (not hang) when the render tier
+    exceeds the tool's wall-clock bound - covers the normal->stealth 2x escalation."""
+    import asyncio as _asyncio
+
+    async def slow_fetch(*a, **k):
+        await _asyncio.sleep(5)
+
+    monkeypatch.setattr(server, "fetch", slow_fetch)
+    out = await server.scrape("https://example.com", timeout=1)
+    assert out["code"] == "fetch_failed"
+    assert "timed out" in out["error"]
+
+
+def test_is_benign_async_noise_matches_known_and_ignores_others():
+    closed = type("ClosedResourceError", (Exception,), {})()
+    assert server._is_benign_async_noise({"exception": closed})
+    assert server._is_benign_async_noise(
+        {"message": "Future exception was never retrieved",
+         "exception": RuntimeError("net::ERR_ABORTED; maybe frame was detached?")}
+    )
+    # A real error must NOT be classified benign.
+    assert not server._is_benign_async_noise(
+        {"message": "Task exception was never retrieved",
+         "exception": ValueError("something actually broke")}
+    )
+    assert not server._is_benign_async_noise({"message": "generic loop warning"})
+
+
+async def test_install_log_hygiene_suppresses_benign_delegates_real():
+    import asyncio as _asyncio
+
+    loop = _asyncio.get_running_loop()
+    original = loop.get_exception_handler()
+    seen = []
+    loop.set_exception_handler(lambda _loop, ctx: seen.append(ctx))
+    try:
+        server._install_log_hygiene()
+        handler = loop.get_exception_handler()
+        closed = type("ClosedResourceError", (Exception,), {})()
+        handler(loop, {"exception": closed})            # benign -> swallowed
+        handler(loop, {"message": "boom", "exception": ValueError("x")})  # real -> delegated
+        assert seen == [{"message": "boom", "exception": seen[0]["exception"]}]
+    finally:
+        loop.set_exception_handler(original)
+
+
 def test_latency_percentiles_empty():
     server._tool_latencies.pop("nonesuch", None)
     assert server._latency_percentiles("nonesuch") == {}
