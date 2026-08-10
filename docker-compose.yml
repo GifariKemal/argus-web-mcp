@@ -1,0 +1,43 @@
+# Argus, fully local in Docker: `docker compose up -d` = MCP live at
+# http://127.0.0.1:8090/mcp ; `docker compose down` = MCP gone.
+# No auth (ARGUS_TOKEN unset) because both ports are loopback-only.
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: argus-searxng
+    restart: unless-stopped
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    # ponytail: no host port - only Argus talks to it, over the compose network.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  argus:
+    build: .
+    container_name: argus
+    restart: unless-stopped
+    depends_on: [searxng]
+    ports:
+      - "127.0.0.1:8090:8090"   # loopback only - never expose this
+    environment:
+      - ARGUS_SEARXNG_URL=http://searxng:8080
+    shm_size: 1gb               # Chromium crashes on the default 64m
+    volumes:
+      - argus-cache:/root/.argus
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 30s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  argus-cache:

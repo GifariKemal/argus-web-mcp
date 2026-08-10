@@ -140,7 +140,20 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 - **Resilience** - content-addressed cache (per-source TTL, stale-serve), per-host courtesy delay + circuit breaker, archive egress-fallback.
 - **Secure deploy** - bearer/JWT auth + nginx TLS + fail2ban; runs unprivileged via systemd; secrets via `EnvironmentFile`.
 
-## Quickstart (local)
+## Quickstart (all-in-Docker)
+
+Argus plus its SearXNG backend in one stack. Container up = MCP up, container down = MCP down.
+
+```bash
+docker compose up -d --build          # MCP live at http://127.0.0.1:8090/mcp
+docker compose down                   # MCP gone
+claude mcp add --transport http argus-local http://127.0.0.1:8090/mcp
+```
+
+Loopback-only, no auth token needed (nothing is exposed off-host). Cache lives in the
+`argus-cache` volume.
+
+## Quickstart (local, no Docker for Argus itself)
 
 ```bash
 uv venv --python 3.12 && uv pip install -e ".[dev]"

@@ -23,6 +23,9 @@ logger = logging.getLogger("argus.search")
 _VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
 _VALID_TIME_RANGES = frozenset({"day", "week", "month", "year"})  # SearXNG-accepted values
 _MAX_PAGES = 5
+# SearXNG backend. Loopback by default (systemd/VPS); overridden to the compose service
+# name when Argus itself runs in Docker (`ARGUS_SEARXNG_URL=http://searxng:8080`).
+_SEARXNG_URL = os.getenv("ARGUS_SEARXNG_URL", "http://127.0.0.1:8888")
 _TIMEOUT = 15.0
 _CONNECT_TIMEOUT = 2.0  # fast-fail a dead/hung SearXNG instead of hanging _TIMEOUT seconds
 _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
@@ -564,7 +567,7 @@ async def search(
     category: str = "general",
     time_range: str | None = None,
     lang: str | None = None,
-    base_url: str = "http://127.0.0.1:8888",
+    base_url: str = _SEARXNG_URL,
     client: "httpx.AsyncClient | None" = None,
     retries: int = 2,
     engines: list[str] | None = None,

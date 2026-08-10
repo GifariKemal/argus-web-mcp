@@ -14,6 +14,37 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.8] - 2026-08-10 - Local Docker mode
+
+Run the whole stack on a workstation with one command, so the MCP's lifetime equals the
+Docker container's: `docker compose up -d` starts it, `docker compose down` stops it. The
+VPS systemd deployment is unchanged.
+
+### Added
+
+- **`Dockerfile`** - self-contained image (python:3.12-slim, `.[semantic]` extra, Chromium
+  via `playwright install --with-deps`), serving `uvicorn argus.server:app` on `:8090`.
+- **`docker-compose.yml`** (repo root) - `argus` + `searxng` in one stack. Argus publishes
+  `127.0.0.1:8090` only; SearXNG has no host port at all and is reachable solely over the
+  compose network. `shm_size: 1gb` (Chromium), named `argus-cache` volume for `~/.argus`,
+  `restart: unless-stopped`, and a `/health` healthcheck. No bearer token: nothing is
+  exposed off-host.
+
+### Changed
+
+- **`ARGUS_SEARXNG_URL`** now overrides the SearXNG backend base URL (default unchanged at
+  `http://127.0.0.1:8888`, so the systemd/VPS path is untouched). Compose sets it to
+  `http://searxng:8080`.
+
+### Verified
+
+`/health` -> `{"status":"ok","browser":true}`; `search()` inside the container returns
+results with `backend: http://searxng:8080`; Chromium renders a live page (tier `normal`);
+`claude mcp list` -> `argus: http://127.0.0.1:8090/mcp - Connected`; ruff clean; the 191
+search tests stay green.
+
+---
+
 ## [0.4.7] - 2026-07-14 - Observability, compression
 
 Make every fallback visible (so future tuning is data-driven) and shrink what goes
