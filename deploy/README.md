@@ -47,6 +47,11 @@ curl -s -X POST -H "Authorization: Bearer $EP_TOKEN" -H "Content-Type: applicati
 # container-level view
 sudo docker compose -p argus_argus ps
 sudo docker compose -p argus_argus logs --tail 50 argus
+
+# SearXNG reads settings.yml and limiter.toml through a bind mount, and compose does
+# not recreate a container when a mounted file's CONTENT changes - a deploy that only
+# touches those files leaves the old config loaded in memory. Restart it by hand:
+sudo docker restart argus_argus-searxng-1
 ```
 
 The panel itself is at `https://panel.gifariksuryo.xyz` (Traefik-issued Let's

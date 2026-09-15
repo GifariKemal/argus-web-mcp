@@ -3,7 +3,13 @@
 # Keep the upstream defaults, minus the onion engines: they need a tor proxy this
 # instance does not have, and without one they log "can't register engine" at every start.
 use_default_settings:
-  engines:
+  # Blocked or unreachable from the SURIOTA VPS (Tencent datacenter IP), verified
+# 2026-09-15 with a fresh suspension state: mojeek never answers (25 s with no
+# response at all), duckduckgo returns a CAPTCHA instantly, qwant returns access
+# denied. Leaving them on costs a 6 s timeout per search and an ERROR line in the
+# SearXNG log for every query, and returns nothing. Re-enable them if this ever
+# runs behind a residential proxy or from a different network.
+engines:
     remove:
       - ahmia
       - torch
@@ -64,15 +70,15 @@ outgoing:
 # keeps the rest; these entries (re)enable the resilient ones for the general category.
 engines:
   - name: mojeek
-    disabled: false
+    disabled: true
   - name: bing
     disabled: false
   - name: duckduckgo
-    disabled: false
+    disabled: true
   - name: brave
     disabled: false
   - name: qwant
-    disabled: false
+    disabled: true
   - name: startpage
     disabled: false
   - name: wikipedia

@@ -44,6 +44,23 @@ real warning stands out.
   depend on the HF Hub being reachable. The Dockerfile bakes `BAAI/bge-small-en-v1.5`
   into the image instead, so the container starts offline and quiet.
 
+### Changed
+
+- **Disabled three search engines that this host cannot reach.** Verified from the VPS
+  with a fresh suspension state: mojeek never answers (25 s, no response at all),
+  duckduckgo returns a CAPTCHA instantly, qwant returns access denied - all three are
+  blocks on the datacenter IP range. Leaving them enabled cost a 6 s timeout on every
+  search plus an ERROR line per query, and returned nothing. Re-enable them behind a
+  residential proxy or on a different network. `bing`, `brave`, `startpage`,
+  `marginalia`, `wikipedia` and `wikidata` answer normally and stay on.
+
+### Note
+
+SearXNG reads `settings.yml` and `limiter.toml` through a bind mount, and compose does
+not recreate a container when a mounted file's content changes. A deploy that only edits
+those files leaves the old config loaded - `docker restart argus_argus-searxng-1` after
+one. Documented in `deploy/README.md`.
+
 ---
 
 ## [0.4.11] - 2026-09-15 - Clean compose for a shared host
