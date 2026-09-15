@@ -1,6 +1,9 @@
-# Argus, fully local in Docker: `docker compose up -d` = MCP live at
-# http://127.0.0.1:8090/mcp ; `docker compose down` = MCP gone.
-# No auth (ARGUS_TOKEN unset) because both ports are loopback-only.
+# Argus in Docker. Two consumers:
+#   local     `docker compose up -d` -> MCP at http://127.0.0.1:8090/mcp, no auth
+#             (ARGUS_TOKEN empty) because the published port is loopback-only.
+#   Easypanel Compose service on the VPS -> Traefik routes the public domain to
+#             the `argus` service on 8090, and ARGUS_TOKEN is set there, so the
+#             public endpoint requires a bearer token.
 services:
   searxng:
     image: searxng/searxng:latest
@@ -10,6 +13,10 @@ services:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
+      # SEARXNG_SECRET overrides server.secret_key from settings.yml. The default
+      # only ever applies to the loopback-only local stack; the Easypanel deploy
+      # sets a real random value in its service env.
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-local-loopback-only-not-a-real-secret}
     # ponytail: no host port - only Argus talks to it, over the compose network.
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
@@ -26,6 +33,9 @@ services:
       - "127.0.0.1:8090:8090"   # loopback only - never expose this
     environment:
       - ARGUS_SEARXNG_URL=http://searxng:8080
+      # Empty locally (loopback-only, no auth); the Easypanel deploy sets a real
+      # token in its service env because there the endpoint is public.
+      - ARGUS_TOKEN=${ARGUS_TOKEN:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
     volumes:
       - argus-cache:/root/.argus
