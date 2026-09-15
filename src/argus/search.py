@@ -37,10 +37,12 @@ _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 # free engines block or CAPTCHA whole datacenter IP ranges, and the block differs per
 # provider. `ARGUS_SEARCH_ENGINES` (comma-separated) lets a deployment narrow the
 # fan-out to what its own IP can reach - the VPS sets it, local runs keep the default.
+# `or` not a getenv default: compose passes the variable through as an empty string when
+# the deployment leaves it unset, and an empty fan-out would return nothing at all.
 _DEFAULT_ENGINES = [
     e.strip()
-    for e in os.getenv(
-        "ARGUS_SEARCH_ENGINES", "duckduckgo,bing,brave,mojeek,startpage,qwant"
+    for e in (
+        os.getenv("ARGUS_SEARCH_ENGINES") or "duckduckgo,bing,brave,mojeek,startpage,qwant"
     ).split(",")
     if e.strip()
 ]

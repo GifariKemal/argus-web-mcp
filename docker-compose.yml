@@ -37,6 +37,8 @@ services:
       # Empty locally (loopback-only, no auth); the Easypanel deploy sets a real
       # token in its service env because there the endpoint is public.
       - ARGUS_TOKEN=${ARGUS_TOKEN:-}
+      # Which free engines answer depends on the host's IP; empty = built-in default.
+      - ARGUS_SEARCH_ENGINES=${ARGUS_SEARCH_ENGINES:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
     volumes:
       - argus-cache:/root/.argus

@@ -1861,3 +1861,20 @@ async def test_unresponsive_engine_dropped_from_next_fanout():
     assert "brave" in seen_engines[0] and "qwant" in seen_engines[0]
     assert "brave" not in seen_engines[1] and "qwant" not in seen_engines[1]
     assert "duckduckgo" in seen_engines[1]  # healthy engines still present
+
+
+def test_engine_fanout_env_override(monkeypatch):
+    """ARGUS_SEARCH_ENGINES selects the fan-out; empty falls back, never to nothing."""
+    import importlib
+
+    import argus.search as search_mod
+
+    monkeypatch.setenv("ARGUS_SEARCH_ENGINES", "bing, brave ,startpage")
+    assert importlib.reload(search_mod)._DEFAULT_ENGINES == ["bing", "brave", "startpage"]
+
+    # compose passes an unset variable through as "" - an empty fan-out finds nothing.
+    monkeypatch.setenv("ARGUS_SEARCH_ENGINES", "")
+    assert importlib.reload(search_mod)._DEFAULT_ENGINES
+
+    monkeypatch.delenv("ARGUS_SEARCH_ENGINES")
+    assert "duckduckgo" in importlib.reload(search_mod)._DEFAULT_ENGINES
