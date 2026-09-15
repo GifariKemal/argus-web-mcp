@@ -5,9 +5,11 @@ and returns a lean result dict. See docs/03-TOOL-SPECS.md.
 """
 
 import asyncio
+import functools
 import logging
 import os
 import re
+import socket
 import time
 from urllib.parse import urlsplit
 
@@ -407,6 +409,15 @@ def _rerank_hybrid(
     return [row[4] for row in kept]
 
 
+@functools.lru_cache(maxsize=1)
+def _client_ip() -> str:
+    """This process's own address, for the X-Real-IP header below."""
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except OSError:
+        return "127.0.0.1"
+
+
 async def _search_once(
     q: str,
     count: int,
@@ -425,8 +436,13 @@ async def _search_once(
     unresponsive: list = []
     for pageno in range(1, _MAX_PAGES + 1):
         try:
+            # SearXNG assumes it sits behind a reverse proxy and logs an error once per
+            # process when a request carries neither X-Real-IP nor X-Forwarded-For.
+            # Argus is the client, not a proxy, so it names itself.
             resp = await client.get(
-                f"{base_url}/search", params={**params, "pageno": pageno}
+                f"{base_url}/search",
+                params={**params, "pageno": pageno},
+                headers={"X-Real-IP": _client_ip()},
             )
             resp.raise_for_status()
             data = resp.json()
