@@ -46,7 +46,13 @@ real warning stands out.
 
 ### Changed
 
-- **Disabled three search engines that this host cannot reach.** Verified from the VPS
+- **`ARGUS_SEARCH_ENGINES` picks the `general` fan-out.** Argus sends SearXNG an explicit
+  engine list, so `disabled: true` in `settings.yml` never applied to its own queries -
+  the blocked engines were still being called. Which engines answer is a property of the
+  host's network, not of the code, so the list is now env-tunable: the VPS sets
+  `bing,brave,startpage,marginalia`, and an unset variable keeps the built-in default for
+  a normal network.
+- **Disabled the same three engines in `settings.yml`.** Verified from the VPS
   with a fresh suspension state: mojeek never answers (25 s, no response at all),
   duckduckgo returns a CAPTCHA instantly, qwant returns access denied - all three are
   blocks on the datacenter IP range. Leaving them enabled cost a 6 s timeout on every

@@ -33,7 +33,17 @@ _CONNECT_TIMEOUT = 2.0  # fast-fail a dead/hung SearXNG instead of hanging _TIME
 _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 # Spread `general` load across many free engines so DuckDuckGo isn't the sole source
 # (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
-_DEFAULT_ENGINES = ["duckduckgo", "bing", "brave", "mojeek", "startpage", "qwant"]
+# Which engines actually answer is a property of the HOST's network, not of this code:
+# free engines block or CAPTCHA whole datacenter IP ranges, and the block differs per
+# provider. `ARGUS_SEARCH_ENGINES` (comma-separated) lets a deployment narrow the
+# fan-out to what its own IP can reach - the VPS sets it, local runs keep the default.
+_DEFAULT_ENGINES = [
+    e.strip()
+    for e in os.getenv(
+        "ARGUS_SEARCH_ENGINES", "duckduckgo,bing,brave,mojeek,startpage,qwant"
+    ).split(",")
+    if e.strip()
+]
 # Client-side per-engine cooldown: when SearXNG reports an engine `unresponsive`
 # (rate-limited/CAPTCHA on this datacenter IP), bench it for a window so the next
 # general fan-out stops requesting it - cutting wasted sub-requests and the log spam,
