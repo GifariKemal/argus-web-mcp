@@ -51,9 +51,12 @@ Let's Encrypt, and serves its panel on `:3000`.
 - Verified end to end over the public endpoint: Let's Encrypt cert issued by Traefik,
   `/health` 200 with `browser: true`, `/mcp` 401 without a token, MCP handshake +
   `tools/list` returning all 20 tools, and a live `search` through SearXNG.
-- **Pending owner action:** the panel is still plain HTTP on `:3000` and the GitHub
-  webhook URL carries a deploy token, so give the panel its own subdomain and put Traefik
-  TLS in front of it, then re-point the webhook at the `https://` URL.
+- **Panel hardening:** the panel is at `https://panel.gifariksuryo.xyz` behind a
+  Traefik-issued Let's Encrypt cert and the GitHub webhook posts there, so its deploy
+  token no longer travels in clear text. `setPanelDomain{"serveOnIp": false}` does not
+  actually stop the panel answering on the raw IP, so `:3000` is dropped from the
+  internet with iptables rules in `INPUT` and `DOCKER-USER`, persisted via
+  `iptables-persistent`.
 
 ---
 

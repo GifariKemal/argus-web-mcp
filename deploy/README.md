@@ -48,11 +48,15 @@ curl -s -X POST -H "Authorization: Bearer $EP_TOKEN" -H "Content-Type: applicati
 sudo docker ps; sudo docker logs --tail 50 argus
 ```
 
-> [!WARNING]
-> The panel is still served over plain HTTP on `:3000`, and the GitHub webhook
-> URL carries a deploy token in the query path. Give the panel its own subdomain
-> (`setPanelDomain`) so Traefik can put TLS in front of it, then re-point the
-> webhook at the `https://` URL.
+The panel itself is at `https://panel.gifariksuryo.xyz` (Traefik-issued Let's
+Encrypt cert), and the GitHub webhook posts to that host so the deploy token in
+its path never crosses the wire in clear text.
+
+> [!NOTE]
+> `setPanelDomain{"serveOnIp": false}` does not actually stop the panel from
+> answering on the raw IP, so `:3000` is dropped from the internet by iptables
+> rules in both `INPUT` and `DOCKER-USER` (saved with `iptables-persistent`).
+> `http://127.0.0.1:3000/api` over SSH stays available as the fallback.
 
 **Rolling back to systemd:** stop the stack (`sudo docker compose -p argus_argus down`,
 or use the panel), then
