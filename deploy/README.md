@@ -27,7 +27,7 @@ support.
 | Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
 | Containers | `argus` (uvicorn `:8090`) and `searxng` (reached at `http://searxng:8080` over the compose network); Docker names them `argus_argus-argus-1` and `argus_argus-searxng-1` |
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
-| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`) |
+| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,startpage,marginalia` - what this IP can reach) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
 
 Everything is drivable over the panel's REST API (`http://127.0.0.1:3000/api`,
@@ -57,6 +57,13 @@ sudo docker restart argus_argus-searxng-1
 The panel itself is at `https://panel.gifariksuryo.xyz` (Traefik-issued Let's
 Encrypt cert), and the GitHub webhook posts to that host so the deploy token in
 its path never crosses the wire in clear text.
+
+> [!WARNING]
+> **`updateComposeEnv` turns off `.env` generation unless you resend
+> `createDotEnv: true`.** Omit it and the panel still shows the new variable while
+> compose interpolates `${VAR}` to an empty string, with no error anywhere. And compose
+> only passes variables the service *declares*: a key in `.env` reaches the container
+> only if `docker-compose.yml` lists it under `environment:`. Both bit this deployment.
 
 > [!NOTE]
 > `setPanelDomain{"serveOnIp": false}` does not actually stop the panel from

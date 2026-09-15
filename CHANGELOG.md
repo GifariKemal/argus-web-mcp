@@ -62,6 +62,17 @@ real warning stands out.
 
 ### Note
 
+Engine availability measured from the VPS on 2026-09-15: `bing` (0.2 s), `startpage`
+(1.6 s) and `marginalia` (1.0 s) answer reliably; `brave` answers but SearXNG suspends it
+with `too many requests` after a burst and it returns on its own after the configured
+300 s. A `WARNING:searx.network.brave` line is therefore real signal, not a
+misconfiguration - the only way to remove it would be to drop a working engine.
+
+Two Easypanel gotchas worth remembering: `updateComposeEnv` silently turns off `.env`
+generation unless `createDotEnv: true` is resent, and compose only passes variables the
+service declares, so a key needs an `environment:` entry to reach the container. Both are
+now in `deploy/README.md`.
+
 SearXNG reads `settings.yml` and `limiter.toml` through a bind mount, and compose does
 not recreate a container when a mounted file's content changes. A deploy that only edits
 those files leaves the old config loaded - `docker restart argus_argus-searxng-1` after
