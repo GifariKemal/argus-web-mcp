@@ -73,7 +73,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 1. **Switch transport to Streamable HTTP** - [x] `app = mcp.http_app(path="/mcp")` (uvicorn `argus.server:app`); `/health` + `/metrics` (Prometheus). Auth `StaticTokenVerifier` from env `ARGUS_TOKEN`. Verified live: /health 200, /metrics OK, /mcp no-token -> 401.
 2. **Deploy artifacts** (`deploy/`) - [x] `argus.service` (systemd, `User=argus`, hardened, EnvironmentFile), `argus.nginx.conf` (TLS, `proxy_buffering off`, /metrics loopback-only), `provision.sh` (idempotent, playwright-as-argus, SearXNG secret_key gen), `fail2ban-argus.conf`, `argus.env.example`, `README` runbook. **Security SAST + deps-audit done (`deploy/SECURITY-AUDIT.md`): 2 HIGH fixed/accepted, mediums/lows fixed.**
 3. **Deploy to the SURIOTA VPS** - [x] **LIVE**, re-provisioned on `43.134.17.144` on 2026-09-15 after `103.172.172.29` died. Via SSH (key-only `gifari_vps_ed25519`, user `ubuntu`): SearXNG :8888, Argus :8090 (`--workers 1`), nginx `argus.gifariksuryo.xyz` + fail2ban; Let's Encrypt TLS pending the DNS repoint. Secret via scp (not Hermes tools).
-4. **Safe auto-update** - [x] `deploy/argus-update.{sh,service,timer}` poll `main` every 5 min, fast-forward only, `/health`-gate, **auto-rollback** on failure, skip-restart on docs-only changes, mode-drift hardened.
+4. **Auto-deploy** - [x] Since 2026-09-15 the VPS runs Argus under Easypanel and a GitHub push webhook redeploys `main`. The earlier mechanism, `deploy/argus-update.{sh,service,timer}` (poll `main` every 5 min, fast-forward only, `/health`-gate, **auto-rollback**, skip-restart on docs-only changes, mode-drift hardened), is disabled on the host and stays in the repo for the panel-less deployment path.
 5. **Security + load test** - [x] security SAST + deps-audit done. [x] **local load test PASS** (`benchmark/loadtest.py`): 1000-read flood x3 rounds 0 errors + RSS flat ~181 MB (no leak); 24 concurrent browser renders x3 rounds 0 errors, peak active_contexts=4=pool concurrency (semaphore bound holds), RSS flat ~216 MB (no context leak); peak well under 2 GB cap.
 6. **Register in Claude Code** - [x] `claude mcp add --transport http argus https://argus.gifariksuryo.xyz/mcp --header Authorization` (user scope); zero local process confirmed.
 7. **Cutover** - point Aurix `calendar_client`/research + general web needs at Argus; optionally retire remaining web-MCP redundancy.
@@ -96,7 +96,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 </details>
 
 - [x] Hermes watchdog curls `/health`; Prometheus `/metrics` for error-rate / active-context.
-- [x] Safe auto-update timer keeps the VPS in sync with `main` (ff-only, health-gated, auto-rollback).
+- [x] The VPS stays in sync with `main` automatically (Easypanel push webhook; previously the ff-only, health-gated, auto-rollback timer).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
 - **Open owner item (F1):** set `ARGUS_S2_API_KEY` (Semantic Scholar) to lift `scholar_search` rate limits.
 - Phase-future (YAGNI): proxy pool, owned search index, 24h soak on the live box.

@@ -203,7 +203,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 
 ## Status
 
-**DEPLOYED LIVE.** Running on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04); public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) resumes when the DNS A record points at that IP: uvicorn `127.0.0.1:8090 --workers 1` behind nginx + Let's Encrypt TLS + fail2ban; SearXNG docker on `127.0.0.1:8888`; `/health` + `/metrics` live. A systemd timer polls `main` every 5 minutes -> fast-forward only -> restart -> `/health` gate -> auto-rollback (and skips restart for docs/benchmark-only commits).
+**DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04), running as an **Easypanel Compose service** built from this repo's `docker-compose.yml`: the `argus` container serves uvicorn on `:8090` and `argus-searxng` answers it over the compose network, with Easypanel's Traefik terminating Let's Encrypt TLS on `:80`/`:443`. `/health` + `/metrics` live. A GitHub push webhook redeploys `main`.
 
 20 tools / **799 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). Only open owner input: set `ARGUS_S2_API_KEY` to enable `scholar_search`'s Semantic Scholar backend (CrossRef is the fallback). See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
 

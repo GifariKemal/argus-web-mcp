@@ -14,6 +14,49 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.10] - 2026-09-15 - Easypanel deployment
+
+The VPS now runs Argus under [Easypanel](https://easypanel.io/) instead of bare systemd,
+so the box has a panel for the other SURIOTA services that still have to be rebuilt after
+the old host died. Easypanel installs Docker + Swarm, runs Traefik on `:80`/`:443` with
+Let's Encrypt, and serves its panel on `:3000`.
+
+### Changed
+
+- **Argus is an Easypanel Compose service**, built from this repo's own
+  `docker-compose.yml` (project `argus`, service `argus`, source git `main`). Compose and
+  not an App service on purpose: Chromium needs more than the default 64 MB of `/dev/shm`,
+  and `shm_size` is a Compose setting Docker Swarm does not support.
+- **Traefik terminates TLS** for `argus.gifariksuryo.xyz` and routes to the `argus`
+  container on `:8090`. nginx, certbot's renewal timer, `argus.service` and
+  `argus-update.timer` are disabled on the host but left installed as a rollback path.
+- **Auto-deploy is a GitHub push webhook** into Easypanel's deploy URL, replacing the
+  poll-every-5-min systemd timer. A broken `docker-compose.yml` or `Dockerfile` now breaks
+  the deploy the same way broken Python would.
+- **The nginx-log fail2ban jail is disabled** because nginx no longer sees traffic; the
+  `sshd` jail still runs. Bearer auth is unaffected - Argus itself returns the 401.
+
+### Added
+
+- **`ARGUS_TOKEN` and `SEARXNG_SECRET` passthrough in `docker-compose.yml`.** Both come
+  from the service env with defaults that leave the loopback-only local stack unchanged:
+  no token locally (nothing is exposed off-host), and a real token on the VPS so `/mcp`
+  stays 401 without a bearer. `SEARXNG_SECRET` overrides `server.secret_key`, so the
+  deployed SearXNG never runs on the placeholder value committed to the repo.
+- **`deploy/README.md`** leads with the Easypanel runbook (panel API calls, rollback to
+  systemd) and keeps the systemd recipe as the panel-less alternative.
+
+### Operations
+
+- Verified end to end over the public endpoint: Let's Encrypt cert issued by Traefik,
+  `/health` 200 with `browser: true`, `/mcp` 401 without a token, MCP handshake +
+  `tools/list` returning all 20 tools, and a live `search` through SearXNG.
+- **Pending owner action:** the panel is still plain HTTP on `:3000` and the GitHub
+  webhook URL carries a deploy token, so give the panel its own subdomain and put Traefik
+  TLS in front of it, then re-point the webhook at the `https://` URL.
+
+---
+
 ## [0.4.9] - 2026-09-15 - Re-provision on a new VPS, provision.sh fixes
 
 The old SURIOTA VPS `103.172.172.29` (Hermes, SUVA, Argus) went down. Argus was

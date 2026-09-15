@@ -1,14 +1,77 @@
 # Argus VPS Deployment Runbook
 
+> [!IMPORTANT]
+> **Since 2026-09-15 production runs on Easypanel, not on the systemd units below.**
+> Read [Easypanel deployment (current)](#easypanel-deployment-current) first. The
+> systemd + nginx + certbot + fail2ban recipe that follows it is still supported
+> and still the right answer for a box without a panel, but on
+> `43.134.17.144` those units are installed-and-disabled.
+
 > **Status: DEPLOYED-LIVE.** Argus runs in production at
-> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `43.134.17.144`
-> (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker `127.0.0.1:8888`,
-> Let's Encrypt TLS, nginx, fail2ban). `/health` returns 200; `/mcp` returns 401
-> without a bearer token. This runbook is the provisioning + operations reference;
-> the steps below were executed for the live deploy and remain the re-provision
-> recipe. The examples use `argus.gifariksuryo.xyz` (the live host).
+> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `43.134.17.144`, as an
+> Easypanel Compose service built from the repo's own `docker-compose.yml`.
+> `/health` returns 200; `/mcp` returns 401 without a bearer token.
+
+## Easypanel deployment (current)
+
+[Easypanel](https://easypanel.io/) owns the host's edge: it installs Docker,
+initialises Swarm, runs **Traefik** on `:80`/`:443` (Let's Encrypt included), and
+serves its own panel on `:3000`. Argus is a **Compose** service, not an App
+service, for one concrete reason: Chromium needs more than the default 64 MB of
+`/dev/shm`, and `shm_size` is a Compose setting that Docker Swarm does not
+support.
+
+| Piece | Value |
+|---|---|
+| Project / service | `argus` / `argus` |
+| Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
+| Containers | `argus` (uvicorn `:8090`), `argus-searxng` (reached at `http://searxng:8080` over the compose network) |
+| Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
+| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`) |
+| Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
+
+Everything is drivable over the panel's REST API (`http://127.0.0.1:3000/api`,
+`Authorization: Bearer <api token>`; the full OpenAPI spec is served at
+`/api/openapi.json`). Useful calls:
+
+```bash
+# health of the deployed stack
+curl -s -H "Authorization: Bearer $EP_TOKEN" \
+  "http://127.0.0.1:3000/api/inspectComposeService?projectName=argus&serviceName=argus"
+
+# redeploy by hand (the push webhook does this for you)
+curl -s -X POST -H "Authorization: Bearer $EP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"projectName":"argus","serviceName":"argus"}' \
+  http://127.0.0.1:3000/api/deployComposeService
+
+# container-level view
+sudo docker ps; sudo docker logs --tail 50 argus
+```
+
+> [!WARNING]
+> The panel is still served over plain HTTP on `:3000`, and the GitHub webhook
+> URL carries a deploy token in the query path. Give the panel its own subdomain
+> (`setPanelDomain`) so Traefik can put TLS in front of it, then re-point the
+> webhook at the `https://` URL.
+
+**Rolling back to systemd:** stop the stack (`sudo docker compose -p argus_argus down`,
+or use the panel), then
+`sudo systemctl enable --now argus nginx argus-update.timer certbot.timer`.
+The units, the nginx vhost and the certbot cert are all still on disk.
+
+## Systemd deployment (panel-less alternative)
+
+The rest of this document provisions Argus directly on a host with
+`deploy/provision.sh`: uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker
+`127.0.0.1:8888`, nginx + Let's Encrypt TLS, fail2ban, and the
+poll-and-health-gate auto-update timer. The steps were executed for the original
+deploy and remain the re-provision recipe. The examples use
+`argus.gifariksuryo.xyz` (the live host).
 
 ## Contents
+
+- [Easypanel deployment (current)](#easypanel-deployment-current)
+- [Systemd deployment (panel-less alternative)](#systemd-deployment-panel-less-alternative)
 
 - [Overview](#overview)
 - [Architecture](#architecture)
