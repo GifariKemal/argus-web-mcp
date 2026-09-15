@@ -1,0 +1,22 @@
+# Optional overlay: routes the engines that block this host's IP through an upstream
+# proxy. Only useful with a provider whose exit IPs those engines accept - Cloudflare
+# WARP was measured on 2026-09-15 and rejected (duckduckgo still CAPTCHAs, qwant and
+# mojeek still return access denied), because its egress range is itself a known VPN.
+#
+#   1. set RESIDENTIAL_PROXY_URL in the service env, e.g.
+#        http://user:pass@gate.example-provider.com:7000
+#      (never in this file - it is tracked in a public repo)
+#   2. add the engines back to ARGUS_SEARCH_ENGINES
+#   3. deploy with this overlay:
+#        docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#   4. verify with: python scripts/check_engines.py
+services:
+  proxy:
+    image: ginuerzh/gost:latest
+    restart: unless-stopped
+    # Listens SOCKS5 on the compose network, forwards to the upstream provider.
+    # settings.yml points `network: proxied` at socks5h://proxy:1080.
+    command: ["-L=socks5://:1080", "-F=${RESIDENTIAL_PROXY_URL:?set RESIDENTIAL_PROXY_URL}"]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

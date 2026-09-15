@@ -14,6 +14,44 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.13] - 2026-09-16 - Traefik middlewares, proxy path, engine checker
+
+### Fixed
+
+- **`/metrics` was reachable from the internet.** Under nginx it was loopback-only; the
+  Easypanel migration routes the whole host to Argus, which published it - a regression
+  introduced by 0.4.10 and caught by re-checking the endpoint. A path-scoped Traefik rule
+  with an `ipAllowList` middleware restores the gate: `/metrics` now answers 403 from
+  outside and 200 from the host, while `/health` and `/mcp` are untouched.
+
+### Added
+
+- **Rate limiting at the edge** (`argus-ratelimit`, 300 requests / 60 s, burst 100) on the
+  public domain, replacing the brute-force protection the retired fail2ban jail provided.
+  Verified: 150 sequential requests all pass, a 20-way parallel burst of 400 takes 248
+  rejections.
+- **`scripts/check_engines.py`** - probes each SearXNG engine from wherever it runs and
+  prints results, median latency and the failure reason, exiting non-zero when an engine
+  answers nothing. Engine availability depends on the host's IP, so it needs measuring
+  after a host move or a proxy change rather than guessing.
+- **A proxy path for the blocked engines.** `settings.yml` defines
+  `outgoing.networks.proxied` and points `mojeek`, `duckduckgo` and `qwant` at it; the
+  target is the compose service `proxy`, so no provider credential is ever committed.
+  `docker-compose.proxy.yml` runs that service from `RESIDENTIAL_PROXY_URL`.
+
+### Note
+
+**Cloudflare WARP was measured as the free option and rejected.** It connects and gives a
+Cloudflare consumer IP, but duckduckgo still returns a CAPTCHA, and qwant and mojeek still
+return access denied - the WARP range is itself a known VPN. Only residential exit IPs
+would change this, which means a paid provider.
+
+Easypanel's free tier also declines metrics retention and log collection (`A license with
+advanced monitoring support is required`), and accepts a notification channel with a 200
+while storing nothing.
+
+---
+
 ## [0.4.12] - 2026-09-15 - Silence the startup log noise
 
 Every line the stack logged at startup was either a warning we caused or a warning we

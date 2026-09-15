@@ -44,6 +44,14 @@ server:
 
 # Give flaky/free upstream engines a little more room before they're marked unresponsive.
 outgoing:
+  # Engines that block this host's IP range route through `network: proxied` below.
+  # The target is a compose service, not a provider URL, so no credentials ever land in
+  # this repo: `docker-compose.proxy.yml` runs that service and reads the upstream URL
+  # from its env. With no proxy service running, nothing requests these engines - the
+  # fan-out is chosen by ARGUS_SEARCH_ENGINES, which omits them by default.
+  networks:
+    proxied:
+      proxies: socks5h://proxy:1080
   request_timeout: 6.0
   max_request_timeout: 15.0
   pool_connections: 100
@@ -70,14 +78,17 @@ outgoing:
 engines:
   - name: mojeek
     disabled: true
+    network: proxied
   - name: bing
     disabled: false
   - name: duckduckgo
     disabled: true
+    network: proxied
   - name: brave
     disabled: false
   - name: qwant
     disabled: true
+    network: proxied
   - name: startpage
     disabled: false
   - name: wikipedia

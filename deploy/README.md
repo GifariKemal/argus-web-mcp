@@ -71,6 +71,38 @@ its path never crosses the wire in clear text.
 > rules in both `INPUT` and `DOCKER-USER` (saved with `iptables-persistent`).
 > `http://127.0.0.1:3000/api` over SSH stays available as the fallback.
 
+### Traefik middlewares (what replaced nginx + fail2ban)
+
+| Middleware | Type | Attached to | Why |
+|---|---|---|---|
+| `argus-ratelimit` | rateLimit, 300/60s, burst 100 | `argus.gifariksuryo.xyz/` | Brute-force protection the fail2ban jail used to give. Measured: 150 sequential requests all pass, a 20-way parallel burst of 400 gets 248 rejections. |
+| `argus-internal-only` | ipAllowList (loopback, host, docker ranges) | `argus.gifariksuryo.xyz/metrics` | `/metrics` was loopback-only under nginx; routing the whole host to Argus published it. Traefik matches the longer path first, so this rule wins for `/metrics` alone. |
+
+> [!NOTE]
+> Easypanel's **metrics retention and log collection need a paid licence** (`A license
+> with advanced monitoring support is required`), and creating a notification channel
+> returns 200 on the free tier but stores nothing. Container logs and `docker stats` cover
+> the same ground - `/metrics` is still scraped from inside the host.
+
+### Search engines and the proxy path
+
+Which free engines answer is a property of the host's IP, so it is configuration, not
+code: `ARGUS_SEARCH_ENGINES` picks the fan-out. Measure the current host with
+
+```bash
+python scripts/check_engines.py --url http://searxng:8080
+```
+
+It exits non-zero when an engine returns nothing, so it also works as a post-deploy gate.
+
+`settings.yml` defines an `outgoing.networks.proxied` network and points the blocked
+engines (`mojeek`, `duckduckgo`, `qwant`) at it. The target is the compose service
+`proxy`, never a provider URL, so no credential is ever committed:
+`docker-compose.proxy.yml` runs that service and reads `RESIDENTIAL_PROXY_URL` from the
+service env. **Cloudflare WARP was measured on 2026-09-15 and does not work** - its
+egress range is itself a known VPN, so duckduckgo still CAPTCHAs and qwant and mojeek
+still return access denied. Only a provider with residential exit IPs will change that.
+
 **Rolling back to systemd:** stop the stack (`sudo docker compose -p argus_argus down`,
 or use the panel), then
 `sudo systemctl enable --now argus nginx argus-update.timer certbot.timer`.
