@@ -19,7 +19,7 @@
 
 ## 1. Goal & constraints
 
-Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape / pdf / extract** as MCP tools, deployed on the SURIOTA VPS (Ubuntu 24.04, `103.172.172.29`, 52 GB - shares the box with Hermes :80 + SUVA :8080). Every Claude Code CLI connects **remotely over HTTP** -> no local process on the client.
+Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape / pdf / extract** as MCP tools, deployed on the SURIOTA VPS (Ubuntu 24.04, `43.134.17.144`, 2 vCPU / 7 GB / 99 GB disk; the previous box `103.172.172.29`, shared with Hermes :80 + SUVA :8080, died on 2026-09-15). Every Claude Code CLI connects **remotely over HTTP** -> no local process on the client.
 
 **Hard requirements:**
 1. Remote HTTP transport (zero client-side process).

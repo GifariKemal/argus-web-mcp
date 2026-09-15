@@ -12,7 +12,11 @@ set -euo pipefail
 ARGUS_USER="argus"
 ARGUS_GROUP="argus"
 ARGUS_HOME="/opt/argus"
-ARGUS_REPO="https://github.com/SURIOTA/argus-web-mcp.git"  # Replace with real URL
+# The repo lives in a subdir of the home dir: argus.service, argus-update.sh and
+# argus-update.service all hardcode /opt/argus/app, while the caches the unit
+# grants write access to (.argus/.cache/.crawl4ai) sit in $ARGUS_HOME itself.
+ARGUS_APP="$ARGUS_HOME/app"
+ARGUS_REPO="https://github.com/GifariKemal/argus-web-mcp.git"
 ARGUS_BRANCH="main"
 PYTHON_VERSION="3.12"
 SEARXNG_COMPOSE_DIR="/opt/searxng"  # Where SearXNG docker-compose lives
@@ -33,8 +37,10 @@ log_info() {
 }
 
 log_error() {
+    # Warning-only: every site that must abort does its own `exit 1`. Returning
+    # non-zero here would trip `set -e` and kill the run on a soft failure
+    # (certbot without DNS, SearXNG slow to answer, /health not up yet).
     echo "[ERROR] $1" >&2
-    return 1
 }
 
 # ====================================================================
@@ -92,21 +98,21 @@ fi
 # Step 5: Clone the Argus repository
 # ====================================================================
 log_section "Step 5: Clone Argus repository"
-if [[ ! -d "$ARGUS_HOME/.git" ]]; then
-    # First clone: use git as a subprocess (not as $ARGUS_USER yet)
-    cd /tmp
-    git clone --branch "$ARGUS_BRANCH" "$ARGUS_REPO" argus-temp
-    # Move to final location
-    mv argus-temp "$ARGUS_HOME"
-    chown -R "$ARGUS_USER:$ARGUS_GROUP" "$ARGUS_HOME"
-    log_info "Repository cloned to '$ARGUS_HOME' [x]"
+if [[ ! -d "$ARGUS_APP/.git" ]]; then
+    # First clone: use git as a subprocess (not as $ARGUS_USER yet).
+    # Clone straight into $ARGUS_APP; git accepts a missing or empty target dir,
+    # and `mv tmp "$ARGUS_APP"` would nest the repo one level deeper if the
+    # directory already exists.
+    git clone --branch "$ARGUS_BRANCH" "$ARGUS_REPO" "$ARGUS_APP"
+    chown -R "$ARGUS_USER:$ARGUS_GROUP" "$ARGUS_APP"
+    log_info "Repository cloned to '$ARGUS_APP' [x]"
 else
     log_info "Repository already exists; updating [x]"
-    cd "$ARGUS_HOME"
+    cd "$ARGUS_APP"
     git pull origin "$ARGUS_BRANCH" || log_info "Git pull failed; continuing anyway"
 fi
 
-cd "$ARGUS_HOME"
+cd "$ARGUS_APP"
 
 # Idempotent git hardening so future auto-updates (`git merge --ff-only`/`git pull`)
 # are never blocked by local working-tree state introduced by this script. Run as the
@@ -134,7 +140,7 @@ log_info "Cache directory created at '$CACHE_DIR' [x]"
 # Step 7: Create Python virtual environment
 # ====================================================================
 log_section "Step 7: Create Python virtual environment"
-VENV_PATH="$ARGUS_HOME/.venv"
+VENV_PATH="$ARGUS_APP/.venv"
 if [[ ! -d "$VENV_PATH" ]]; then
     "python${PYTHON_VERSION}" -m venv "$VENV_PATH"
     chown -R "$ARGUS_USER:$ARGUS_GROUP" "$VENV_PATH"
@@ -153,7 +159,7 @@ sudo -u "$ARGUS_USER" "$VENV_PATH/bin/pip" install --upgrade pip setuptools whee
 
 log_info "Installing Argus dependencies via uv..."
 # Install core dependencies + optional PDF quality tier
-sudo -u "$ARGUS_USER" "$VENV_PATH/bin/uv" pip install -e "$ARGUS_HOME[pdf-quality]"
+sudo -u "$ARGUS_USER" "$VENV_PATH/bin/uv" pip install -e "$ARGUS_APP[pdf-quality]"
 
 log_info "Python dependencies installed [x]"
 
@@ -165,10 +171,15 @@ log_section "Step 9: Install browser binaries (as '$ARGUS_USER')"
 # Hermes/SUVA experience: mismatched user = "Cannot open display" / IPC errors.
 
 log_info "Running crawl4ai-setup..."
-sudo -u "$ARGUS_USER" bash -c "cd '$ARGUS_HOME' && '$VENV_PATH/bin/python' -m crawl4ai.setup"
+# Use the console script; crawl4ai ships no runnable `crawl4ai.setup` module.
+sudo -u "$ARGUS_USER" bash -c "cd '$ARGUS_APP' && '$VENV_PATH/bin/crawl4ai-setup'"
 
 log_info "Installing Playwright Chromium..."
-sudo -u "$ARGUS_USER" "$VENV_PATH/bin/playwright" install --with-deps chromium
+# System libs need root; the browser binaries must land in the argus cache.
+# `--with-deps` as $ARGUS_USER would re-invoke sudo without a TTY and fail.
+"$VENV_PATH/bin/playwright" install-deps chromium
+sudo -u "$ARGUS_USER" "$VENV_PATH/bin/playwright" install chromium
+sudo -u "$ARGUS_USER" "$VENV_PATH/bin/patchright" install chromium 2>/dev/null || log_info "patchright browser missing (optional stealth tier)"
 
 log_info "Running crawl4ai-doctor for validation..."
 sudo -u "$ARGUS_USER" "$VENV_PATH/bin/python" -c "from crawl4ai import AsyncWebCrawler; print('crawl4ai ready')"
@@ -184,8 +195,8 @@ if [[ ! -d "$SEARXNG_COMPOSE_DIR" ]]; then
 fi
 
 # Copy SearXNG docker-compose from deploy/searxng/ to /opt/searxng
-cp "$ARGUS_HOME/deploy/searxng/docker-compose.yml" "$SEARXNG_COMPOSE_DIR/"
-cp "$ARGUS_HOME/deploy/searxng/settings.yml" "$SEARXNG_COMPOSE_DIR/"
+cp "$ARGUS_APP/deploy/searxng/docker-compose.yml" "$SEARXNG_COMPOSE_DIR/"
+cp "$ARGUS_APP/deploy/searxng/settings.yml" "$SEARXNG_COMPOSE_DIR/"
 
 # SECURITY: replace the settings.yml secret_key placeholder with a fresh random value
 # (a known/default SearXNG secret_key is a real vuln). Idempotent: only if placeholder present.
@@ -229,7 +240,7 @@ else
     log_info "SearXNG already running (skipping) [x]"
 fi
 
-cd "$ARGUS_HOME"
+cd "$ARGUS_APP"
 
 # ====================================================================
 # Step 11: Create /etc/argus/ directory for secrets
@@ -252,7 +263,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
     FRESH_TOKEN=$(openssl rand -hex 32)
 
     # Create env file from template
-    cp "$ARGUS_HOME/deploy/argus.env.example" "$ENV_FILE"
+    cp "$ARGUS_APP/deploy/argus.env.example" "$ENV_FILE"
 
     # Replace placeholder with the generated token
     sed -i "s/__GENERATE_WITH_openssl_rand_-hex_32__/${FRESH_TOKEN}/" "$ENV_FILE"
@@ -273,7 +284,7 @@ fi
 # Step 13: Install systemd service
 # ====================================================================
 log_section "Step 13: Install systemd service"
-cp "$ARGUS_HOME/deploy/argus.service" /etc/systemd/system/
+cp "$ARGUS_APP/deploy/argus.service" /etc/systemd/system/
 systemctl daemon-reload
 log_info "systemd unit installed [x]"
 
@@ -292,7 +303,10 @@ if [[ "$DOMAIN_PLACEHOLDER" == "argus.<domain>" ]]; then
     log_info "and replace 'argus.<domain>' with your actual domain before running certbot."
 fi
 
-cp "$ARGUS_HOME/deploy/argus.nginx.conf" /etc/nginx/sites-available/argus
+cp "$ARGUS_APP/deploy/argus.nginx.conf" /etc/nginx/sites-available/argus
+# Render the domain into the installed copy; the repo file keeps the placeholder
+# so the working tree stays clean for the ff-only auto-update.
+sed -i "s|argus\.<domain>|${DOMAIN_PLACEHOLDER}|g" /etc/nginx/sites-available/argus
 ln -sf /etc/nginx/sites-available/argus /etc/nginx/sites-enabled/argus
 
 # Test nginx syntax
@@ -313,14 +327,10 @@ log_info "nginx configured and started [x]"
 # ====================================================================
 log_section "Step 15: Install fail2ban protection"
 mkdir -p /etc/fail2ban/jail.d
-cp "$ARGUS_HOME/deploy/fail2ban-argus.conf" /etc/fail2ban/jail.d/
-
-# Create the filter file
-cat > /etc/fail2ban/filter.d/nginx-argus-bearer-401.conf <<'EOF'
-[Definition]
-failregex = ^<HOST> .* "(?:GET|POST|PUT|PATCH|DELETE) /mcp HTTP/.*" 401 .*$
-ignoreregex =
-EOF
+# Jail + filter live in deploy/fail2ban/; the jail's `filter = argus-mcp`
+# resolves to filter.d/argus-mcp.conf, so these names must stay in sync.
+cp "$ARGUS_APP/deploy/fail2ban/argus.jail.conf" /etc/fail2ban/jail.d/argus.conf
+cp "$ARGUS_APP/deploy/fail2ban/argus-mcp.filter.conf" /etc/fail2ban/filter.d/argus-mcp.conf
 
 systemctl enable fail2ban
 systemctl start fail2ban || systemctl restart fail2ban
@@ -369,6 +379,11 @@ fi
 # Step 18: Verify /health endpoint
 # ====================================================================
 log_section "Step 18: Verify /health endpoint"
+# Startup takes a few seconds (browser warm-up), so poll instead of asking once.
+for _ in $(seq 1 15); do
+    curl -s http://127.0.0.1:8090/health | grep -q '"status"' && break
+    sleep 2
+done
 if curl -s http://127.0.0.1:8090/health | grep -q '"status"'; then
     log_info "/health endpoint responding [x]"
 else

@@ -5,7 +5,7 @@ JSON API. Bound to **loopback only** (`127.0.0.1:8888`) - it is an internal
 dependency, never exposed to the public internet.
 
 > **Status: LIVE.** This container runs in production on the SURIOTA VPS
-> (`103.172.172.29`) as the search backend for the live Argus at
+> (`43.134.17.144`) as the search backend for the live Argus at
 > `https://argus.gifariksuryo.xyz/mcp`. The steps below are the standing
 > setup/operations reference (and the recipe to re-provision or run locally).
 

@@ -99,7 +99,7 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 - `*.bak` and benchmark run-artifacts are gitignored.
 
 > [!WARNING]
-> **Already live** at `https://argus.gifariksuryo.xyz/mcp` (`103.172.172.29`). A systemd timer auto-deploys `main`: poll every 5 min -> fast-forward only -> restart -> `/health` gate -> auto-rollback (docs/benchmark-only commits skip the restart). So a merged change to `main` ships itself - keep `main` green. Runbook: [`deploy/README.md`](deploy/README.md).
+> **Already live** on `43.134.17.144` (public HTTPS at `https://argus.gifariksuryo.xyz/mcp` returns once DNS points there). A systemd timer auto-deploys `main`: poll every 5 min -> fast-forward only -> restart -> `/health` gate -> auto-rollback (docs/benchmark-only commits skip the restart). So a merged change to `main` ships itself - keep `main` green. Runbook: [`deploy/README.md`](deploy/README.md).
 
 ## Don't
 

@@ -1,7 +1,7 @@
 # Argus VPS Deployment Runbook
 
 > **Status: DEPLOYED-LIVE.** Argus runs in production at
-> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `103.172.172.29`
+> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `43.134.17.144`
 > (uvicorn `127.0.0.1:8090 --workers 1`, SearXNG docker `127.0.0.1:8888`,
 > Let's Encrypt TLS, nginx, fail2ban). `/health` returns 200; `/mcp` returns 401
 > without a bearer token. This runbook is the provisioning + operations reference;
@@ -32,7 +32,7 @@
 
 ## Overview
 
-This directory contains the **configuration files** that provision Argus on the SURIOTA VPS (`103.172.172.29`, Ubuntu 24.04). Argus coexists with Hermes (:80) and SUVA (:8080) - it binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it.
+This directory contains the **configuration files** that provision Argus on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04). Argus binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it. The repo lives at `/opt/argus/app`, its venv at `/opt/argus/app/.venv`, and the runtime caches at `/opt/argus/.argus`, `/opt/argus/.cache`, `/opt/argus/.crawl4ai` - `argus.service` and `argus-update.sh` hardcode those paths.
 
 The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-ROADMAP.md)). Re-run the steps below to re-provision or to stand up a second instance; tests must be green locally first.
 
@@ -72,9 +72,9 @@ Request flow: **Claude Code CLI** hits nginx over HTTPS with a bearer token. ngi
 
 Before running deployment, ensure:
 
-1. **VPS Access**: SSH key-only to `103.172.172.29` as user `ai`
+1. **VPS Access**: SSH key-only to `43.134.17.144` as user `ubuntu`
    ```bash
-   ssh -i ~/.ssh/gifari_vps_ed25519 ai@103.172.172.29
+   ssh -i ~/.ssh/gifari_vps_ed25519 ubuntu@43.134.17.144
    ```
 
 2. **Root Privileges**: The provision script runs as root
@@ -100,7 +100,7 @@ Copy the `deploy/` directory to the VPS (as the `ai` user first, then provision.
 
 ```bash
 # From your local machine
-scp -r -i ~/.ssh/gifari_vps_ed25519 deploy/ ai@103.172.172.29:/tmp/argus-deploy
+scp -r -i ~/.ssh/gifari_vps_ed25519 deploy/ ubuntu@43.134.17.144:/tmp/argus-deploy
 
 # On the VPS, as root
 sudo cp -r /tmp/argus-deploy /opt/argus-deploy-staging

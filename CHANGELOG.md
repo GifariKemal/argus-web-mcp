@@ -14,6 +14,62 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.9] - 2026-09-15 - Re-provision on a new VPS, provision.sh fixes
+
+The old SURIOTA VPS `103.172.172.29` (Hermes, SUVA, Argus) went down. Argus was
+re-provisioned from scratch on `43.134.17.144` (Tencent, Ubuntu 24.04, 2 vCPU / 7 GB),
+which was the first end-to-end run of `deploy/provision.sh` on a bare host since the
+original deploy. It surfaced six defects; each is fixed below, so the script now takes a
+fresh Ubuntu 24.04 box to a live Argus in one run.
+
+### Fixed
+
+- **Repo landed in the wrong directory.** Step 5 cloned to `/tmp/argus-temp` then
+  `mv`-ed it onto `$ARGUS_HOME`, which already existed from Step 4, so the repo nested at
+  `/opt/argus/argus-temp` and the next `git config` aborted the run. Clone straight into
+  the target directory instead.
+- **Install layout disagreed with the systemd unit.** `provision.sh` installed the repo
+  and venv at `/opt/argus`, while `argus.service`, `argus-update.sh` and
+  `argus-update.service` all point at `/opt/argus/app` - the service died with
+  `status=203/EXEC`. Added `ARGUS_APP="$ARGUS_HOME/app"` and moved every repo-relative
+  path onto it; the caches the unit grants write access to stay in `$ARGUS_HOME`.
+- **`log_error` tripped `set -e`.** It ended with `return 1`, so every warning-only call
+  site (certbot without DNS, a slow SearXNG, `/health` not up yet) killed the run.
+  Warning sites now only print; the sites that must abort still `exit 1` themselves.
+- **`crawl4ai.setup` is not a runnable module.** Step 9 called
+  `python -m crawl4ai.setup`; use the `crawl4ai-setup` console script the package ships.
+- **`playwright install --with-deps` as the service user.** The `--with-deps` half needs
+  root and re-invokes `sudo` with no TTY, so browser installation failed outright. Install
+  the system libraries as root, then the browser binaries as `$ARGUS_USER` so they land in
+  that user's cache. Patchright's browser is installed best-effort.
+- **fail2ban files were stale.** Step 15 copied a `deploy/fail2ban-argus.conf` that no
+  longer exists and wrote its own weaker inline filter; it now installs the maintained
+  `deploy/fail2ban/argus.jail.conf` + `argus-mcp.filter.conf`.
+
+### Changed
+
+- **`DOMAIN_PLACEHOLDER` is now actually applied.** The installed nginx site gets the
+  domain rendered into it (`sed` on `/etc/nginx/sites-available/argus`); the repo copy
+  keeps the placeholder so the working tree stays clean for the ff-only auto-update.
+- **`ARGUS_REPO`** points at the real repository (`GifariKemal/argus-web-mcp`) instead of
+  a placeholder URL.
+- **Step 18 polls `/health`** for up to 30 s instead of asking once; startup takes a few
+  seconds for the browser warm-up.
+
+### Operations
+
+- New host is SSH key-only (`PasswordAuthentication no`, `PermitRootLogin no`), user
+  `ubuntu`, host key `SHA256:UqvgBndlBJf4+w147tG64yoCSDzbXL22HDsmjaB8Ugw`.
+- Verified on the new host: `/health` 200 with `browser: true`, `/mcp` 401 without a
+  bearer token, MCP handshake + `tools/list` returning all 20 tools, and live `search`
+  (SearXNG) and `read` calls. `argus-update.timer` is enabled and polling.
+- **Pending owner action:** the `argus.gifariksuryo.xyz` A record still points at the dead
+  IP, so certbot cannot validate and nginx is serving a self-signed placeholder cert.
+  After repointing DNS to `43.134.17.144`:
+  `sudo certbot certonly --webroot -w /var/www/letsencrypt -d argus.gifariksuryo.xyz && sudo systemctl reload nginx`
+
+---
+
 ## [0.4.8] - 2026-08-10 - Local Docker mode
 
 Run the whole stack on a workstation with one command, so the MCP's lifetime equals the
