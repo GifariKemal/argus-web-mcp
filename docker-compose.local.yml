@@ -1,0 +1,9 @@
+# Local-only overlay: publish the MCP on loopback so a workstation client can
+# reach it. Never used on the VPS - there Traefik talks to the container over
+# the compose network, and a published host port would only invite conflicts.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  argus:
+    ports:
+      - "127.0.0.1:8090:8090"   # loopback only - never expose this

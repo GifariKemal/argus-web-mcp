@@ -25,7 +25,7 @@ support.
 |---|---|
 | Project / service | `argus` / `argus` |
 | Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
-| Containers | `argus` (uvicorn `:8090`), `argus-searxng` (reached at `http://searxng:8080` over the compose network) |
+| Containers | `argus` (uvicorn `:8090`) and `searxng` (reached at `http://searxng:8080` over the compose network); Docker names them `argus_argus-argus-1` and `argus_argus-searxng-1` |
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
 | Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
@@ -45,7 +45,8 @@ curl -s -X POST -H "Authorization: Bearer $EP_TOKEN" -H "Content-Type: applicati
   http://127.0.0.1:3000/api/deployComposeService
 
 # container-level view
-sudo docker ps; sudo docker logs --tail 50 argus
+sudo docker compose -p argus_argus ps
+sudo docker compose -p argus_argus logs --tail 50 argus
 ```
 
 The panel itself is at `https://panel.gifariksuryo.xyz` (Traefik-issued Let's

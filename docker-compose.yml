@@ -1,13 +1,16 @@
 # Argus in Docker. Two consumers:
-#   local     `docker compose up -d` -> MCP at http://127.0.0.1:8090/mcp, no auth
-#             (ARGUS_TOKEN empty) because the published port is loopback-only.
+#   local     `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
+#             -> MCP at http://127.0.0.1:8090/mcp, no auth (ARGUS_TOKEN empty)
+#             because the override publishes the port on loopback only.
 #   Easypanel Compose service on the VPS -> Traefik routes the public domain to
 #             the `argus` service on 8090, and ARGUS_TOKEN is set there, so the
 #             public endpoint requires a bearer token.
+# Nothing here pins a container_name or publishes a host port: both are
+# per-machine choices that clash with other stacks on a shared host, and
+# Easypanel flags them as issues. The local override adds the port back.
 services:
   searxng:
     image: searxng/searxng:latest
-    container_name: argus-searxng
     restart: unless-stopped
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
@@ -26,11 +29,8 @@ services:
 
   argus:
     build: .
-    container_name: argus
     restart: unless-stopped
     depends_on: [searxng]
-    ports:
-      - "127.0.0.1:8090:8090"   # loopback only - never expose this
     environment:
       - ARGUS_SEARXNG_URL=http://searxng:8080
       # Empty locally (loopback-only, no auth); the Easypanel deploy sets a real

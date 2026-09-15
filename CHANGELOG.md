@@ -14,6 +14,28 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.11] - 2026-09-15 - Clean compose for a shared host
+
+Easypanel flagged three issues on the deployed stack, all of them the same class of
+problem: settings that are fine for a machine running one stack, and wrong for a host
+running many.
+
+### Changed
+
+- **Dropped `container_name` from both services.** A fixed name is global to the Docker
+  daemon, so a second stack on the same host cannot start. Nothing needed the names:
+  Argus reaches SearXNG at `http://searxng:8080`, which is the compose service alias, not
+  the container name. Docker now names them `argus_argus-argus-1` / `argus_argus-searxng-1`.
+- **Moved the published port into `docker-compose.local.yml`.** Publishing
+  `127.0.0.1:8090` is what a workstation needs and exactly what the VPS does not - there
+  Traefik reaches the container over the compose network, and a host port only invites a
+  clash. Local runs become:
+  `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`.
+
+`getComposeIssues` now returns an empty list.
+
+---
+
 ## [0.4.10] - 2026-09-15 - Easypanel deployment
 
 The VPS now runs Argus under [Easypanel](https://easypanel.io/) instead of bare systemd,
