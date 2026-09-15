@@ -1,14 +1,20 @@
 # Bot-detection config for SearXNG. `limiter: false` in settings.yml means none of this
 # is enforced (only Argus, a trusted local client, reaches this instance), but the
 # botdetection module reads this file at startup and warns when it is missing.
-[real_ip]
-x_for = 1
+# Schema follows the image's own searx/limiter.toml - the older [real_ip] section is
+# deprecated and warns on every start.
+[botdetection]
 ipv4_prefix = 32
 ipv6_prefix = 48
+trusted_proxies = [
+  '127.0.0.0/8',
+  '::1',
+]
 
 [botdetection.ip_limit]
+filter_link_local = false
 link_token = false
 
 [botdetection.ip_lists]
-pass_ip = []
 block_ip = []
+pass_ip = []

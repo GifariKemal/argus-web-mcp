@@ -31,7 +31,9 @@ real warning stands out.
   `use_default_settings.engines.remove`.
 - **SearXNG missing `limiter.toml`.** The botdetection module reads that file at startup
   and warns when it is absent, even with `limiter: false`. `deploy/searxng/limiter.toml`
-  now ships with the repo and is mounted alongside `settings.yml`.
+  now ships with the repo and is mounted alongside `settings.yml`. It follows the image's
+  own `searx/limiter.toml` schema - the older `[real_ip]` section is deprecated and warns
+  about each of its keys on every start.
 - **Hugging Face fetch at runtime.** The rerank model was downloaded on first use, which
   printed a progress bar plus an unauthenticated-request warning, and made a cold start
   depend on the HF Hub being reachable. The Dockerfile bakes `BAAI/bge-small-en-v1.5`
