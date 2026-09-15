@@ -9,8 +9,8 @@ gives the same end-to-end coverage (tool -> fetch -> extract -> cache) fully off
 import ipaddress
 import socket
 
-import fitz  # pymupdf
 import httpx
+import pymupdf
 import pytest
 
 ARTICLE_HTML = (
@@ -35,7 +35,7 @@ STRUCT_HTML = (
 
 
 def _make_pdf() -> bytes:
-    doc = fitz.open()
+    doc = pymupdf.open()
     p1 = doc.new_page()
     p1.insert_text((72, 72), "Argus PDF page one alpha")
     p2 = doc.new_page()

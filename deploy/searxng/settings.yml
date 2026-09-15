@@ -1,6 +1,12 @@
 # SearXNG settings for Argus - minimal, JSON-API enabled, loopback-bound.
 # Full reference: https://docs.searxng.org/admin/settings/index.html
-use_default_settings: true
+# Keep the upstream defaults, minus the onion engines: they need a tor proxy this
+# instance does not have, and without one they log "can't register engine" at every start.
+use_default_settings:
+  engines:
+    remove:
+      - ahmia
+      - torch
 
 general:
   instance_name: "argus-search"

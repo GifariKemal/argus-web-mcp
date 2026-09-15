@@ -1,6 +1,6 @@
 """Tests for argus.extract.pdf - pymupdf4llm default path + lazy docling quality path."""
 
-import fitz  # pymupdf
+import pymupdf
 import pytest
 
 from argus.extract.pdf import extract_pdf
@@ -8,7 +8,7 @@ from argus.extract.pdf import extract_pdf
 
 def _make_pdf(pages_text: list[str]) -> bytes:
     """Generate a small digital (text-layer) PDF in memory."""
-    doc = fitz.open()
+    doc = pymupdf.open()
     for text in pages_text:
         page = doc.new_page()
         page.insert_text((72, 100), text, fontsize=14)
@@ -78,12 +78,12 @@ def test_tables_mode_still_returns_content(two_page_pdf):
 
 def _make_ruled_table_pdf() -> bytes:
     """A single-page PDF with a 2x2 ruled grid so find_tables() detects a real table."""
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     x0, y0, x1, y1 = 72, 72, 272, 172
-    page.draw_rect(fitz.Rect(x0, y0, x1, y1))
-    page.draw_line(fitz.Point((x0 + x1) / 2, y0), fitz.Point((x0 + x1) / 2, y1))
-    page.draw_line(fitz.Point(x0, (y0 + y1) / 2), fitz.Point(x1, (y0 + y1) / 2))
+    page.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
+    page.draw_line(pymupdf.Point((x0 + x1) / 2, y0), pymupdf.Point((x0 + x1) / 2, y1))
+    page.draw_line(pymupdf.Point(x0, (y0 + y1) / 2), pymupdf.Point(x1, (y0 + y1) / 2))
     page.insert_text((80, 95), "Name")
     page.insert_text((180, 95), "Score")
     page.insert_text((80, 145), "Gold")

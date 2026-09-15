@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import fitz  # pymupdf
+import pymupdf
 import pymupdf4llm
 
 _FAST_TEXT_MIN_PAGES = 20
@@ -40,7 +40,7 @@ def _parse_pages(pages: str | None, total: int) -> list[int]:
     return indices
 
 
-def _open(data: bytes) -> fitz.Document:
+def _open(data: bytes) -> pymupdf.Document:
     if not data:
         raise ValueError("not_pdf")
     # pymupdf will happily render HTML/XPS/images as a doc; require the PDF magic so a
@@ -51,7 +51,7 @@ def _open(data: bytes) -> fitz.Document:
     if b"%PDF-" not in data[:1024]:
         raise ValueError("not_pdf")
     try:
-        doc = fitz.open(stream=data, filetype="pdf")
+        doc = pymupdf.open(stream=data, filetype="pdf")
     except Exception as exc:  # pymupdf raises FileDataError / RuntimeError
         raise ValueError("not_pdf") from exc
     if doc.page_count == 0:
@@ -60,7 +60,7 @@ def _open(data: bytes) -> fitz.Document:
     return doc
 
 
-def _find_tables(doc: fitz.Document, page_indices: list[int]) -> list[dict[str, Any]]:
+def _find_tables(doc: pymupdf.Document, page_indices: list[int]) -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     for idx in page_indices:
         found = doc[idx].find_tables()
@@ -69,7 +69,7 @@ def _find_tables(doc: fitz.Document, page_indices: list[int]) -> list[dict[str, 
     return tables
 
 
-def _extract_plain_text(doc: fitz.Document, page_indices: list[int]) -> str:
+def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int]) -> str:
     """Fast full-document text path for large PDFs.
 
     pymupdf4llm's markdown pipeline can spend tens of seconds on graphics-heavy

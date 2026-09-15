@@ -930,13 +930,13 @@ def test_min_content_words_reads_env(monkeypatch):
 # --------------------------------------------------------------------------- #
 # 28. deep mode - a .pdf source is routed through PDF->markdown, NOT mangled    #
 # --------------------------------------------------------------------------- #
-import fitz  # noqa: E402 - test-only PDF fixture builder
+import pymupdf  # noqa: E402 - test-only PDF fixture builder
 
 
 def _make_pdf_bytes() -> bytes:
     # Content-rich enough to clear the MIN_CONTENT_WORDS (30) floor, mirroring a
     # real research PDF source (a 5-word stub would legitimately be low_content).
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     line = "Argus PDF page one alpha covers gold market structure and yields."
     for i in range(8):

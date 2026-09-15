@@ -14,6 +14,31 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.12] - 2026-09-15 - Silence the startup log noise
+
+Every line the stack logged at startup was either a warning we caused or a warning we
+could remove. All four are gone now, so a clean start is actually silent and the next
+real warning stands out.
+
+### Fixed
+
+- **pymupdf deprecation.** `argus.extract.pdf` (and three test modules) imported the
+  legacy `fitz` alias, which makes pymupdf print a deprecation warning on every boot.
+  They import `pymupdf` directly now.
+- **SearXNG could not load two engines.** `use_default_settings: true` pulls in the
+  upstream onion engines (`ahmia`, `torch`), which need a tor proxy this instance does not
+  have, so each start logged `can't register engine`. They are dropped explicitly via
+  `use_default_settings.engines.remove`.
+- **SearXNG missing `limiter.toml`.** The botdetection module reads that file at startup
+  and warns when it is absent, even with `limiter: false`. `deploy/searxng/limiter.toml`
+  now ships with the repo and is mounted alongside `settings.yml`.
+- **Hugging Face fetch at runtime.** The rerank model was downloaded on first use, which
+  printed a progress bar plus an unauthenticated-request warning, and made a cold start
+  depend on the HF Hub being reachable. The Dockerfile bakes `BAAI/bge-small-en-v1.5`
+  into the image instead, so the container starts offline and quiet.
+
+---
+
 ## [0.4.11] - 2026-09-15 - Clean compose for a shared host
 
 Easypanel flagged three issues on the deployed stack, all of them the same class of

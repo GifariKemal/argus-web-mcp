@@ -14,6 +14,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./deploy/searxng/limiter.toml:/etc/searxng/limiter.toml:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
       # SEARXNG_SECRET overrides server.secret_key from settings.yml. The default
