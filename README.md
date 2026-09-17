@@ -6,7 +6,7 @@
 
 <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/MCP-Streamable_HTTP-2dd4bf?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP"/></a>
 <img src="https://img.shields.io/badge/tools-20-22c55e?style=for-the-badge" alt="20 tools"/>
-<img src="https://img.shields.io/badge/tests-799_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
+<img src="https://img.shields.io/badge/tests-804_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
 <img src="https://img.shields.io/badge/SSRF_coverage-100%25-16a34a?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="SSRF 100%"/>
 <img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
 <br/>
@@ -79,7 +79,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 
 | Tool | What it does |
 |---|---|
-| `search` | Web search via SearXNG - categories (general/news/science/it), domain filters, safesearch, **hybrid lexical+semantic rerank**, recency boost, auto-backoff on throttle |
+| `search` | Web search via SearXNG - categories (general/news/science/it), domain filters, safesearch, **hybrid lexical+semantic rerank**, recency boost, per-engine cooldown on throttle. The live fan-out is measured per host, not assumed: `bing`, `brave`, `google`, `google cse`, `duckduckgo web`, `yandex` |
 | `smart_search` | Auto-routes a query (deterministic, **no LLM**) -> github / scholar / news / it / general |
 | `scholar_search` | Structured academic search (Semantic Scholar -> CrossRef): citations, DOI, abstract, OA-PDF |
 | `github_search` | Structured GitHub `repositories`/`code`/`issues` + stars/language/sort |
@@ -138,7 +138,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 - **No silent truncation** - full documents always; the streaming body cap is a DoS guard, not a content cap.
 - **Tools never raise** - every tool returns a structured `err(code, msg, detail)` instead of crashing into the client.
 - **Resilience** - content-addressed cache (per-source TTL, stale-serve), per-host courtesy delay + circuit breaker, archive egress-fallback.
-- **Secure deploy** - bearer/JWT auth + nginx TLS + fail2ban; runs unprivileged via systemd; secrets via `EnvironmentFile`.
+- **Secure deploy** - bearer/JWT auth behind a Cloudflare-proxied domain; Traefik terminates TLS and accepts the public router only from Cloudflare ranges, rate limiting per real client via `CF-Connecting-IP`; `/metrics` stays host-only; secrets live in the Easypanel service env, never in the repo.
 
 ## Quickstart (all-in-Docker)
 
@@ -162,7 +162,7 @@ crawl4ai-setup && crawl4ai-doctor          # one-time Chromium
 # optional extras: ".[semantic]" (find_similar/rerank), ".[pdf-quality]" (Docling)
 
 # SearXNG (search backend) - loopback only
-cd deploy/searxng && docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d searxng
 
 python -m argus.server                      # stdio (local dev)
 # or HTTP:  uvicorn argus.server:app --host 127.0.0.1 --port 8090
@@ -199,14 +199,14 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 | `src/argus/` | the package - `server.py` (20 tools), `fetch/`, `extract/`, `security/ssrf.py`, `trading/`, `semantic.py`, `cache.py`, `watch.py` |
 | `docs/` | [DESIGN](docs/00-DESIGN.md) / [RESEARCH](docs/01-RESEARCH.md) / [ROADMAP](docs/02-ROADMAP.md) / [TOOL-SPECS](docs/03-TOOL-SPECS.md) / [REFERENCES](docs/04-REFERENCES.md) / [COMPETITIVE-GAP](docs/05-COMPETITIVE-GAP.md) |
 | `benchmark/` | [harness](benchmark/README.md) + [RESULTS](benchmark/reports/RESULTS.md) + head-to-head |
-| `deploy/` | systemd / nginx / provision.sh / fail2ban / [SECURITY-AUDIT](deploy/SECURITY-AUDIT.md) / [runbook](deploy/README.md) / searxng/ |
+| `deploy/` | Easypanel + Cloudflare runbook ([README](deploy/README.md)) / [SECURITY-AUDIT](deploy/SECURITY-AUDIT.md) / `searxng/` settings / systemd + nginx + provision.sh + fail2ban (retired, kept as the panel-less path) |
 | root docs | [SOUL](SOUL.md) (identity) / [AGENTS](AGENTS.md) (agent guide) / [CHANGELOG](CHANGELOG.md) (history) |
 
 ## Status
 
-**DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04), running as an **Easypanel Compose service** built from this repo's `docker-compose.yml`: the `argus` container serves uvicorn on `:8090` and the `searxng` one answers it over the compose network, with Easypanel's Traefik terminating Let's Encrypt TLS on `:80`/`:443`. `/health` + `/metrics` live. A GitHub push webhook redeploys `main`.
+**DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04), running as an **Easypanel Compose service** built from this repo's `docker-compose.yml`: the `argus` container serves uvicorn on `:8090` and the `searxng` one answers it over the compose network, with Easypanel's Traefik terminating Let's Encrypt TLS on `:80`/`:443`. The domain is **Cloudflare-proxied** and Traefik answers the public router only for Cloudflare ranges, so the origin cannot be reached around the edge. `/health` is public, `/metrics` host-only. A GitHub push webhook redeploys `main`.
 
-20 tools / **799 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). Only open owner input: set `ARGUS_S2_API_KEY` to enable `scholar_search`'s Semantic Scholar backend (CrossRef is the fallback). See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
+20 tools / **804 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). Only open owner input: `ARGUS_S2_API_KEY`, to lift `scholar_search` onto the Semantic Scholar backend instead of the CrossRef fallback - the free key was requested on 2026-09-18 and is queued behind their backlog. See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
 
 <div align="center">
 <sub>Built for <b>PT Surya Inovasi Prioritas (SURIOTA)</b> / self-hosted / unlimited / owned</sub>

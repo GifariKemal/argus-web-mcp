@@ -49,7 +49,8 @@ crawl4ai-setup && crawl4ai-doctor   # one-time Chromium for the browser tier
 | Lint | `./.venv/Scripts/ruff.exe check src tests benchmark` |
 | Run (stdio) | `python -m argus.server` |
 | Run (HTTP) | `uvicorn argus.server:app --host 127.0.0.1 --port 8090` |
-| SearXNG backend | `cd deploy/searxng && docker compose up -d` |
+| Full stack (Argus + SearXNG) | `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d` - MCP on `http://127.0.0.1:8090/mcp`, no auth |
+| SearXNG alone | `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d searxng` |
 
 > [!TIP]
 > Test markers: `browser` (needs Chromium), `slow` (Docling model), `network` (live internet). The default run excludes all three and is fully offline + deterministic.

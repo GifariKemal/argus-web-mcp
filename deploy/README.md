@@ -186,7 +186,7 @@ This directory contains the **configuration files** that provision Argus on the 
 
 The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-ROADMAP.md)). Re-run the steps below to re-provision or to stand up a second instance; tests must be green locally first.
 
-## Architecture
+## Architecture (panel-less path)
 
 <p align="center">
   <img src="../assets/architecture.svg" alt="Argus deploy topology: CLI over HTTPS bearer to nginx (TLS, fail2ban), proxied to uvicorn+FastMCP on 127.0.0.1:8090, with SearXNG docker on 127.0.0.1:8888" width="100%">
@@ -536,8 +536,9 @@ journalctl -u argus -f  # Verify new settings
 | 443 | nginx HTTPS (Argus) | 0.0.0.0:443 | Yes (TLS) |
 | 8090 | Argus uvicorn | 127.0.0.1:8090 | No (local) |
 | 8888 | SearXNG Docker | 127.0.0.1:8888 | No (local) |
-| 8080 | SUVA | 127.0.0.1:8080 | No (local, coexist) |
-| (80 also) | Hermes | 0.0.0.0:80 | Yes (coexist via nginx SNI/host routing) |
+
+(The SUVA and Hermes rows are gone: both died with the old `103.172.172.29` host and are
+not being rebuilt, so nothing coexists on these ports any more.)
 
 > [!WARNING]
 > **Port 80/443 conflict.** Hermes and Argus both want port 80/443. The provision script does NOT modify Hermes - you must ensure your nginx upstream config multiplexes both via SNI or Host header routing. See the Hermes deployment guide for how to add Argus as a second upstream block.

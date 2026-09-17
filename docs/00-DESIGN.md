@@ -33,7 +33,7 @@ Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape /
   <img src="../assets/architecture.svg" alt="Argus architecture: Claude Code / Codex CLI over HTTPS to nginx, uvicorn+FastMCP, 20 MCP tools with shared services and SSRF guard, backed by SearXNG / Crawl4AI / trafilatura / Docling" width="100%">
 </p>
 
-Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **nginx** (`argus.<domain>`, TLS, `proxy_buffering off`, fail2ban), which proxies to **uvicorn** on `127.0.0.1:8090` running the **FastMCP** app (Streamable HTTP `/mcp` + `/health` + `/metrics`). The app fans out to the **20 MCP tools**, **shared services** (browser pool, httpx, semantic embeddings, cache, throttle), and the **SSRF guard**, which reach the OSS backends: **SearXNG** (`:8888` docker), **Crawl4AI/Playwright**, **trafilatura/Docling**, and structured/fallback APIs (archive.org, GitHub, Semantic Scholar). Cache is content-addressed (SQLite + disk, per-source TTL).
+Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **Cloudflare**, which proxies to **Traefik** on the VPS; Traefik terminates TLS and forwards `/mcp` to **uvicorn** on the `argus` container's `:8090`, running the **FastMCP** app (Streamable HTTP `/mcp` + `/health` + `/metrics`). The app fans out to the **20 MCP tools**, **shared services** (browser pool, httpx, semantic embeddings, cache, throttle), and the **SSRF guard**, which reach the OSS backends: **SearXNG** (`http://searxng:8080` on the compose network), **Crawl4AI/Playwright**, **trafilatura/Docling**, and structured/fallback APIs (archive.org, GitHub, Semantic Scholar). Cache is content-addressed (SQLite + disk, per-source TTL). The diagram above still draws the retired nginx/systemd edge; section 9 is authoritative.
 
 **Fetch strategy (cheap -> expensive):** httpx static GET -> trafilatura extract. If JS needed / thin content -> Crawl4AI+Playwright. If anti-bot block -> Patchright -> Nodriver. This minimizes browser cost (the expensive path).
 
@@ -86,11 +86,26 @@ Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **n
 - `/health` (browser liveness) - Hermes watchdog cron curls it. `/metrics` Prometheus (requests/errors per tool, latency histogram, **active-context gauge** = OOM early-warning). Structured per-tool logs -> journald.
 
 ## 9. Deploy topology (VPS)
-- Bare systemd (matches Hermes/SUVA), not Docker (avoids Chromium-in-container pain) - except SearXNG runs as its official Docker image on `127.0.0.1:8888`.
-- `argus.service`: `uvicorn argus.server:app --host 127.0.0.1 --port 8090`, unprivileged `User=argus`, `EnvironmentFile` secret, `Restart=on-failure`, `--workers 1`.
-- nginx `argus.gifariksuryo.xyz` -> `127.0.0.1:8090`, **`proxy_buffering off`**, `proxy_read_timeout 300s`, TLS (certbot), fail2ban.
-- Playwright/Chromium installed **once as the `argus` user** (`crawl4ai-setup` + `crawl4ai-doctor`); browser cache under `argus`'s `~/.cache/ms-playwright` (mismatched-user cache = #1 systemd failure).
-- Ports: SearXNG 8888, Argus 8090 (avoid Hermes :80 / SUVA :8080).
+
+Current, since the 2026-09-15 move to `43.134.17.144`:
+
+- **Easypanel Compose service** built from the repo's own `docker-compose.yml`: an `argus`
+  container (uvicorn `:8090`, `--workers 1`) and a `searxng` one, talking over the compose
+  network at `http://searxng:8080`. No host port is published for either; Compose rather
+  than an Easypanel App service because Chromium needs `shm_size: 1gb`, which Swarm cannot set.
+- **Cloudflare** proxies `argus.gifariksuryo.xyz`, then **Traefik** (owned by Easypanel)
+  terminates Let's Encrypt TLS on `:80`/`:443`. The `/` router carries `argus-cloudflare-only`
+  (ipAllowList over the published Cloudflare ranges), so the origin cannot be reached around
+  the edge, plus `argus-ratelimit` (300/60 s) keyed on `CF-Connecting-IP`. `/metrics` is a
+  separate, longer-matching router gated to loopback and the docker ranges.
+- Middlewares live in Easypanel's database and `traefik/config/main.yaml` is generated from
+  it, so they are edited through the panel API, never in that file.
+- A GitHub push webhook redeploys `main`. Chromium lives in the image, so the old
+  mismatched-Playwright-cache failure mode is gone.
+
+Retired but kept on disk as the panel-less recipe (`deploy/provision.sh`): bare systemd
+`argus.service`, nginx vhost with `proxy_buffering off` + certbot + fail2ban, and SearXNG as
+a standalone container on `127.0.0.1:8888`.
 
 ## 10. License posture
 
