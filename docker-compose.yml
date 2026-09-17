@@ -39,6 +39,11 @@ services:
       - ARGUS_TOKEN=${ARGUS_TOKEN:-}
       # Which free engines answer depends on the host's IP; empty = built-in default.
       - ARGUS_SEARCH_ENGINES=${ARGUS_SEARCH_ENGINES:-}
+      # Semantic Scholar key: raises scholar_search off the anonymous pool (which 429s
+      # and drops it to the CrossRef fallback). Declared here even while empty, because
+      # compose only passes variables the service LISTS - setting it in the panel alone
+      # would land in .env and never reach the container.
+      - ARGUS_S2_API_KEY=${ARGUS_S2_API_KEY:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
     volumes:
       - argus-cache:/root/.argus
