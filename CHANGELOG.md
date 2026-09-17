@@ -14,6 +14,40 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.14] - 2026-09-18 - the Cloudflare edge, made to actually hold
+
+The DNS record for `argus.gifariksuryo.xyz` was switched to Cloudflare-proxied. Measuring
+what that changed found one thing it does not fix and two things it quietly broke.
+
+### Fixed
+
+- **The edge could be skipped entirely.** With the record proxied but the origin still
+  answering on its own IP, `--resolve argus.gifariksuryo.xyz:443:43.134.17.144` reached
+  Argus and returned 200, so Cloudflare was decoration. A new `argus-cloudflare-only`
+  ipAllowList (the 22 published Cloudflare ranges) on the `/` router answers 403 to
+  anything that did not come through the edge. It is scoped to that one router, so the
+  hostnames that resolve directly to the origin by design keep working, and port 80 stays
+  open for their ACME challenges.
+- **Rate limiting counted every client as one.** Behind the edge each request arrives from
+  a Cloudflare IP, so `argus-ratelimit` bucketed the owner and any attacker together, and
+  400 requests from one source could starve the endpoint. It now keys on
+  `CF-Connecting-IP`, which the gate above makes unspoofable. Re-measured: a 30-way
+  parallel burst of 400 gets 249 rejections, the same profile as before.
+
+### Verified, not changed
+
+- **Proxied DNS does nothing for the blocked engines.** It is an inbound proxy; the egress
+  IP is unchanged and `duckduckgo`, `qwant` and `mojeek` still return `proxy error`
+  because the `proxy` compose service is not running. `bing`, `brave`, `startpage` and
+  `marginalia` answer 2/2.
+- **Cloudflare's 100 s origin timeout never fires.** The MCP transport is
+  `text/event-stream` with a FastMCP `: ping` every ~15 s, so nothing is ever idle: a
+  180 s `crawl` returns `http=200 time=180.1s` through the edge.
+- **Certificate renewal is unaffected** - Traefik's internal `acme-http` router carries
+  none of these middlewares and Cloudflare passes the challenge path through.
+
+---
+
 ## [0.4.13] - 2026-09-16 - Traefik middlewares, proxy path, engine checker
 
 ### Fixed

@@ -75,14 +75,52 @@ its path never crosses the wire in clear text.
 
 | Middleware | Type | Attached to | Why |
 |---|---|---|---|
-| `argus-ratelimit` | rateLimit, 300/60s, burst 100 | `argus.gifariksuryo.xyz/` | Brute-force protection the fail2ban jail used to give. Measured: 150 sequential requests all pass, a 20-way parallel burst of 400 gets 248 rejections. |
+| `argus-cloudflare-only` | ipAllowList (the 22 published Cloudflare ranges) | `argus.gifariksuryo.xyz/` | The DNS record is proxied by Cloudflare, but the origin stayed reachable by IP, so the edge could simply be skipped. Traefik now answers 403 to anything that did not come through Cloudflare. Scoped to this router, so the hostnames that resolve straight to the origin (`*.easypanel.host`, `*.sslip.io`) are untouched. |
+| `argus-ratelimit` | rateLimit, 300/60s, burst 100, keyed on `CF-Connecting-IP` | `argus.gifariksuryo.xyz/` | Brute-force protection the fail2ban jail used to give. Behind Cloudflare every request arrives from an edge IP, so keying on the remote address put all clients in one bucket; `CF-Connecting-IP` restores per-client counting and is trustworthy because the gate above rejects anyone who bypassed the edge. Measured: a 30-way parallel burst of 400 gets 249 rejections. |
 | `argus-internal-only` | ipAllowList (loopback, host, docker ranges) | `argus.gifariksuryo.xyz/metrics` | `/metrics` was loopback-only under nginx; routing the whole host to Argus published it. Traefik matches the longer path first, so this rule wins for `/metrics` alone. |
+
+> [!IMPORTANT]
+> Middlewares live in Easypanel's database (`/etc/easypanel/data/data.mdb`) and
+> `traefik/config/main.yaml` is generated from it, so edit them through the panel API
+> (`createMiddleware`, `updateMiddleware`, `updateDomain`) and never by hand in that file.
+> `zz-panel-hardening.yaml` in the same directory is the exception: Easypanel only writes
+> `main.yaml`, so a separate file survives.
 
 > [!NOTE]
 > Easypanel's **metrics retention and log collection need a paid licence** (`A license
 > with advanced monitoring support is required`), and creating a notification channel
 > returns 200 on the free tier but stores nothing. Container logs and `docker stats` cover
 > the same ground - `/metrics` is still scraped from inside the host.
+
+### The Cloudflare layer (what it does and does not do)
+
+`argus.gifariksuryo.xyz` is **proxied** by Cloudflare (orange cloud), as is every other
+`gifariksuryo.xyz` hostname. Three things are worth knowing before reasoning about it.
+
+**It is an inbound proxy only.** It does nothing for the search engines that block this
+host: the egress IP is still the VPS's own, and `duckduckgo`, `qwant` and `mojeek` keep
+failing with `proxy error` because they point at the `proxy` compose service, which is
+not running. Measured after the record was proxied, not assumed.
+
+**Long tool calls survive the edge.** Cloudflare's free plan drops an origin connection
+after 100 s of silence, which would have cut `crawl` (180 s bound) and deep `research`.
+It does not, because the MCP transport is `text/event-stream` and FastMCP sends a
+`: ping` comment every ~15 s, so the stream is never idle. A 180 s crawl returns
+`http=200 time=180.1s` through Cloudflare.
+
+**Certificate renewal is unaffected.** Traefik answers the ACME HTTP-01 challenge from
+its internal `acme-http` router, which carries none of the middlewares above, and
+Cloudflare passes `/.well-known/acme-challenge/` through instead of redirecting it
+(a probe returns 404 from Traefik, not a 301). The edge serves its own Cloudflare
+certificate; the origin keeps its Let's Encrypt one, so `Full (strict)` is safe.
+
+The origin was **not** firewalled to the Cloudflare ranges, even though that is the usual
+advice. Port 80 has to stay open to the world for the ACME challenges of
+`47vspn.easypanel.host`, `traefik.47vspn.easypanel.host` and
+`zonelab.43.134.17.144.sslip.io`, which resolve straight to the IP by design. Blocking at
+the host would have broken their renewals silently, three months later. The
+`argus-cloudflare-only` middleware achieves the same thing for the one router that needs
+it, with no collateral.
 
 ### Search engines and the proxy path
 
