@@ -680,7 +680,7 @@ async def test_general_query_fans_out_to_default_engines():
 
     await search("q", base_url=BASE)  # category defaults to general
 
-    assert captured["engines"] == ["duckduckgo,bing,brave,mojeek,startpage,qwant"]
+    assert captured["engines"] == ["bing,brave,google cse"]
     # general fan-out uses engines, not a forced categories filter expectation
     assert captured["categories"] == ["general"]
 
@@ -1844,11 +1844,11 @@ async def test_unresponsive_engine_dropped_from_next_fanout():
     def responder(request):
         eng = _query_of(request).get("engines", [""])[0]
         seen_engines.append(eng)
-        # First call: brave/qwant unresponsive but we still return results.
+        # First call: brave unresponsive but we still return results.
         if len(seen_engines) == 1:
             return httpx.Response(200, json={
                 "results": [_result(1)],
-                "unresponsive_engines": [["brave", "timeout"], ["qwant", "too many requests"]],
+                "unresponsive_engines": [["brave", "timeout"]],
             })
         return httpx.Response(200, json=_page([_result(2)]))
 
@@ -1857,10 +1857,10 @@ async def test_unresponsive_engine_dropped_from_next_fanout():
     await search("first query", base_url=BASE, count=1)
     await search("second query", base_url=BASE, count=1)
 
-    # Second fan-out must have dropped the benched engines.
-    assert "brave" in seen_engines[0] and "qwant" in seen_engines[0]
-    assert "brave" not in seen_engines[1] and "qwant" not in seen_engines[1]
-    assert "duckduckgo" in seen_engines[1]  # healthy engines still present
+    # Second fan-out must have dropped the benched engine.
+    assert "brave" in seen_engines[0]
+    assert "brave" not in seen_engines[1]
+    assert "bing" in seen_engines[1]  # healthy engines still present
 
 
 def test_engine_fanout_env_override(monkeypatch):
@@ -1869,12 +1869,13 @@ def test_engine_fanout_env_override(monkeypatch):
 
     import argus.search as search_mod
 
-    monkeypatch.setenv("ARGUS_SEARCH_ENGINES", "bing, brave ,startpage")
-    assert importlib.reload(search_mod)._DEFAULT_ENGINES == ["bing", "brave", "startpage"]
+    # "google cse" also proves an engine name's INNER space survives the strip.
+    monkeypatch.setenv("ARGUS_SEARCH_ENGINES", "bing, brave ,google cse")
+    assert importlib.reload(search_mod)._DEFAULT_ENGINES == ["bing", "brave", "google cse"]
 
     # compose passes an unset variable through as "" - an empty fan-out finds nothing.
     monkeypatch.setenv("ARGUS_SEARCH_ENGINES", "")
     assert importlib.reload(search_mod)._DEFAULT_ENGINES
 
     monkeypatch.delenv("ARGUS_SEARCH_ENGINES")
-    assert "duckduckgo" in importlib.reload(search_mod)._DEFAULT_ENGINES
+    assert "bing" in importlib.reload(search_mod)._DEFAULT_ENGINES

@@ -14,6 +14,38 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.15] - 2026-09-18 - half the search fan-out did not exist
+
+Chasing "is anything still stuck in SearXNG" found that two of the four configured
+engines are not engines at all on this image, and that the checker could not see it.
+
+### Fixed
+
+- **`startpage` and `marginalia` do not exist in this SearXNG.** The image exposes 264
+  engines and neither is among them; upstream dropped both. SearXNG silently discards an
+  unknown name from `engines=` and, when nothing valid remains, answers from its default
+  set instead - so asking for `startpage` alone returned 29 results attributed to `bing`
+  and `brave`. The real general fan-out was `bing` + `brave` all along, plus whatever the
+  default set adds. `ARGUS_SEARCH_ENGINES`, the in-code fallback and `settings.yml` now
+  name only engines this instance actually has: `bing`, `brave`, `google cse`.
+- **`scripts/check_engines.py` reported false passes.** It scored an engine on
+  `len(results)` without checking who produced them, so a nonexistent engine passed on
+  other engines' results - which is how the phantom pair survived a host move and a
+  dedicated engine audit. It now counts only results attributed to the engine asked for,
+  and says so explicitly: `unknown to this SearXNG; answered by bing, brave`.
+- **`wikidata` disabled.** It timed out on nearly every query and was the only engine
+  producing errors in the production log. It is a fact lookup, not a web index.
+
+### Verified
+
+Re-measured with the corrected checker: `bing` 10 results/query (0.3 s), `brave` 20
+results/query (0.5 s), `google cse` the largest contributor when not in a rate-limit
+suspension it entered during this audit's own probing. `mojeek`, `duckduckgo` and `qwant`
+stay disabled behind the absent `proxy` service, as designed, and produced no errors in
+2 h of production logs.
+
+---
+
 ## [0.4.14] - 2026-09-18 - the Cloudflare edge, made to actually hold
 
 The DNS record for `argus.gifariksuryo.xyz` was switched to Cloudflare-proxied. Measuring
@@ -38,8 +70,8 @@ what that changed found one thing it does not fix and two things it quietly brok
 
 - **Proxied DNS does nothing for the blocked engines.** It is an inbound proxy; the egress
   IP is unchanged and `duckduckgo`, `qwant` and `mojeek` still return `proxy error`
-  because the `proxy` compose service is not running. `bing`, `brave`, `startpage` and
-  `marginalia` answer 2/2.
+  because the `proxy` compose service is not running. (The claim in this entry's first
+  draft that `startpage` and `marginalia` answer 2/2 was wrong - see 0.4.15.)
 - **Cloudflare's 100 s origin timeout never fires.** The MCP transport is
   `text/event-stream` with a FastMCP `: ping` every ~15 s, so nothing is ever idle: a
   180 s `crawl` returns `http=200 time=180.1s` through the edge.

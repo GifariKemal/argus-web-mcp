@@ -42,7 +42,7 @@ _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 _DEFAULT_ENGINES = [
     e.strip()
     for e in (
-        os.getenv("ARGUS_SEARCH_ENGINES") or "duckduckgo,bing,brave,mojeek,startpage,qwant"
+        os.getenv("ARGUS_SEARCH_ENGINES") or "bing,brave,google cse"
     ).split(",")
     if e.strip()
 ]

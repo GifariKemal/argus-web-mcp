@@ -75,6 +75,10 @@ outgoing:
 # at all), duckduckgo returns a CAPTCHA instantly, qwant returns access denied. Leaving
 # them on costs a 6 s timeout per search and an ERROR line per query, and returns
 # nothing. Re-enable them behind a residential proxy or on a different network.
+# `startpage` and `marginalia` used to be listed here. Upstream SearXNG no longer ships
+# either engine (this image exposes 264 engines and neither is among them), and SearXNG
+# silently DROPS an unknown name from `engines=` and answers from its default set instead,
+# so they looked healthy while contributing nothing. Verified against /config, not guessed.
 engines:
   - name: mojeek
     disabled: true
@@ -89,14 +93,13 @@ engines:
   - name: qwant
     disabled: true
     network: proxied
-  - name: startpage
-    disabled: false
   - name: wikipedia
     disabled: false
+  # Times out on nearly every query from this host (measured 2026-09-18: the only engine
+  # errors in the production log were wikidata timeouts). It is a fact lookup, not a web
+  # index, so nothing is lost by keeping it out of the fan-out.
   - name: wikidata
-    disabled: false
-  - name: marginalia
-    disabled: false
+    disabled: true
 
 ui:
   static_use_hash: true

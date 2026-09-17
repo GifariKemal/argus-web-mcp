@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-DEFAULT_ENGINES = "bing,brave,startpage,marginalia,duckduckgo,qwant,mojeek,wikipedia,wikidata"
+DEFAULT_ENGINES = "bing,brave,google cse,duckduckgo,qwant,mojeek,wikipedia"
 # Varied, unremarkable queries: one repeated term would measure caching, not the engine.
 QUERIES = ["climate model", "rust ownership", "postgres vacuum", "esp32 nvs", "traefik acme"]
 
@@ -43,7 +43,15 @@ def probe(base: str, engine: str, query: str, timeout: float) -> tuple[int, floa
         for r in (data.get("unresponsive_engines") or [])
         if (r[0] if isinstance(r, (list, tuple)) else r) == engine
     ]
-    return len(data.get("results", [])), time.monotonic() - started, reasons[0] if reasons else ""
+    # Count only what THIS engine returned. SearXNG drops an `engines=` name it does not
+    # know and answers from the default set instead, so a total-result count scores a
+    # nonexistent engine as healthy on other engines' results - which is exactly how
+    # `startpage` and `marginalia` passed for months after upstream removed them.
+    mine = sum(1 for r in data.get("results", []) if r.get("engine") == engine)
+    if not mine and data.get("results"):
+        others = sorted({r.get("engine") for r in data["results"] if r.get("engine")})
+        reasons.insert(0, f"unknown to this SearXNG; answered by {', '.join(others)}")
+    return mine, time.monotonic() - started, reasons[0] if reasons else ""
 
 
 def main() -> int:
