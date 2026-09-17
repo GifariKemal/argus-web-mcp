@@ -14,6 +14,36 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.16] - 2026-09-18 - the news, science and it categories, measured
+
+`general` was only a third of the picture: `smart_search` and `search(category=...)` route
+to `news`, `science` and `it`, and those send no `engines=` at all, so SearXNG's whole
+default set for the category runs. Measured every enabled engine in all three, twice, with
+on-topic queries (a zero on an off-topic query proves nothing about a narrow index).
+
+### Fixed
+
+- **Eight dead engines disabled.** Each returned nothing on every probe while still costing
+  a sub-request per search: `reuters` (HTTP error), `pubmed` (the engine itself crashes),
+  `openairepublications` and `openairedatasets` (5 s timeout each, the most expensive of
+  the set), `gentoo` (HTTP connection error), `pypi` (no results for "httpx" or
+  "pydantic"), `arch linux wiki` (none for "systemd" or "pacman"), and `google scholar`
+  (access denied from this datacenter IP, so it points at the same `proxied` network as
+  the other IP-blocked engines rather than being written off).
+- **`science` was the worst hit**: five of its eight engines were dead, two of them
+  burning a 5 s timeout on every query. What remains all answers: `arxiv`, `europepmc`,
+  `semantic scholar`, `pdbe`.
+
+### Verified
+
+`news` is healthy - `brave.news` (41 results/query), `duckduckgo news` (26), `google news`
+(10), `bing news` (9), `wikinews` (5). Worth knowing: `duckduckgo news` answers fine from
+this IP even though plain `duckduckgo` is CAPTCHA-blocked; upstream treats them as
+separate engines. `it` keeps `github` (30/query), `stackoverflow`, `docker hub`, `mdn`,
+`askubuntu`, `superuser`, `hoogle` and `mankier`.
+
+---
+
 ## [0.4.15] - 2026-09-18 - half the search fan-out did not exist
 
 Chasing "is anything still stuck in SearXNG" found that two of the four configured

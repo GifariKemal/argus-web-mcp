@@ -101,6 +101,34 @@ engines:
   - name: wikidata
     disabled: true
 
+  # Category engines, measured from this host on 2026-09-18 with two on-topic queries
+  # each (an off-topic zero proves nothing for a narrow index). Every engine below either
+  # reported an explicit error or returned nothing for a query it must know, so each one
+  # only costs a failed sub-request per search. Everything not listed here answered and
+  # stays on: bing news, brave.news, duckduckgo news, google news, wikinews, arxiv,
+  # europepmc, semantic scholar, pdbe, github, stackoverflow, docker hub, mdn, askubuntu,
+  # superuser, hoogle, mankier. Note `duckduckgo news` works from this IP even though
+  # plain `duckduckgo` is CAPTCHA-blocked - they are separate engines upstream.
+  - name: reuters          # HTTP error, then suspended
+    disabled: true
+  - name: pubmed           # "unexpected crash" inside the engine
+    disabled: true
+  - name: openairepublications  # 5 s timeout, every query
+    disabled: true
+  - name: openairedatasets      # 5 s timeout, every query
+    disabled: true
+  - name: gentoo           # HTTP connection error
+    disabled: true
+  - name: pypi             # zero results for "httpx" and "pydantic"
+    disabled: true
+  - name: arch linux wiki  # zero results for "systemd" and "pacman"
+    disabled: true
+  # Blocked by IP like the three above, so it points at the same proxy path: if a proxy
+  # ever runs, it comes back by moving this to `disabled: false`.
+  - name: google scholar   # access denied from this datacenter IP
+    disabled: true
+    network: proxied
+
 ui:
   static_use_hash: true
 
