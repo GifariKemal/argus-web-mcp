@@ -27,7 +27,7 @@ support.
 | Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
 | Containers | `argus` (uvicorn `:8090`) and `searxng` (reached at `http://searxng:8080` over the compose network); Docker names them `argus_argus-argus-1` and `argus_argus-searxng-1` |
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
-| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google cse` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently) |
+| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google,google cse,duckduckgo web,yandex` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
 
 Everything is drivable over the panel's REST API (`http://127.0.0.1:3000/api`,

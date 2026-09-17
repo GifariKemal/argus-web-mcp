@@ -14,6 +14,37 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.17] - 2026-09-18 - the general fan-out doubles, and Google was never blocked
+
+Trimming the dead engines left `general` on three, which is no slack at all when one of
+them throttles. So the other side of the question got measured too: of the 50
+general-category engines this image ships disabled, which actually answer from this host?
+
+### Added
+
+- **`google`, `duckduckgo web` and `yandex` enabled.** All three answered every probe:
+  `google` 10 results/query at 0.2 s - the real engine, not the CSE wrapper, and never
+  actually blocked here despite years of assuming it was; `duckduckgo web` 10 at 0.7 s,
+  the same name split that makes `duckduckgo news` work while plain `duckduckgo` is
+  CAPTCHA-blocked; `yandex` 15 at 1.0 s. The general fan-out goes from three engines to
+  six, four of them independent crawls.
+- Measured usable and deliberately left off: `zapmeta` (9/query), `resulthunter` (20),
+  `reloado` (16), `yahoo` (7) - aggregators or bing re-servers, so they add duplicates
+  rather than a new crawl. Recorded in `settings.yml` for when the fan-out needs padding.
+- Dead from this IP, so nobody re-probes them: `seznam`, `mwmbl`, `yacy` (timeout);
+  `yep`, `privacywall`, `fireball`, `searchmysite`, `fastbot`, `tusksearch` (access
+  denied); `crowdview`, `encyclosearch`, `wiby` (nothing).
+
+### Fixed
+
+- **`check_engines.py` defaulted to a list that could not pass.** Run bare it asked for
+  the disabled proxy-bound engines and always exited non-zero, which is useless for the
+  post-deploy gate it is meant to be. It now defaults to the live fan-out.
+- Stale comment in `search.py` arguing the fan-out from a DuckDuckGo measurement that
+  stopped being true when that engine got blocked.
+
+---
+
 ## [0.4.16] - 2026-09-18 - the news, science and it categories, measured
 
 `general` was only a third of the picture: `smart_search` and `search(category=...)` route

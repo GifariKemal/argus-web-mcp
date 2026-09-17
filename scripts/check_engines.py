@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-DEFAULT_ENGINES = "bing,brave,google cse,duckduckgo,qwant,mojeek,wikipedia"
+DEFAULT_ENGINES = "bing,brave,google,google cse,duckduckgo web,yandex"
 # Varied, unremarkable queries: one repeated term would measure caching, not the engine.
 QUERIES = ["climate model", "rust ownership", "postgres vacuum", "esp32 nvs", "traefik acme"]
 

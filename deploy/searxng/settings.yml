@@ -95,6 +95,23 @@ engines:
     network: proxied
   - name: wikipedia
     disabled: false
+  # Shipped disabled by SearXNG, but measured usable from THIS host on 2026-09-18 (two
+  # queries each, results checked by attribution): google 10 results/query at 0.2 s,
+  # duckduckgo web 10 at 0.7 s, yandex 15 at 1.0 s. Four independent crawls beside bing
+  # and brave, which matters because a three-engine fan-out has no slack when one
+  # throttles. Note `duckduckgo web` answers while plain `duckduckgo` is CAPTCHA-blocked,
+  # the same split as `duckduckgo news`.
+  - name: google
+    disabled: false
+  - name: duckduckgo web
+    disabled: false
+  - name: yandex
+    disabled: false
+  # Also measured usable and deliberately left off: zapmeta (9/query), resulthunter (20),
+  # reloado (16), yahoo (7). They are aggregators or bing re-servers, so they add
+  # duplicates rather than a new crawl. Enable them if the fan-out ever needs padding.
+  # Dead from this IP: seznam, mwmbl, yacy (timeout); yep, privacywall, fireball,
+  # searchmysite, fastbot, tusksearch (access denied); crowdview, encyclosearch, wiby.
   # Times out on nearly every query from this host (measured 2026-09-18: the only engine
   # errors in the production log were wikidata timeouts). It is a fact lookup, not a web
   # index, so nothing is lost by keeping it out of the fan-out.

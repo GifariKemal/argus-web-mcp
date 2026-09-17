@@ -680,7 +680,7 @@ async def test_general_query_fans_out_to_default_engines():
 
     await search("q", base_url=BASE)  # category defaults to general
 
-    assert captured["engines"] == ["bing,brave,google cse"]
+    assert captured["engines"] == ["bing,brave,google,google cse,duckduckgo web,yandex"]
     # general fan-out uses engines, not a forced categories filter expectation
     assert captured["categories"] == ["general"]
 

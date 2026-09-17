@@ -31,8 +31,8 @@ _SEARXNG_URL = os.getenv("ARGUS_SEARXNG_URL", "http://127.0.0.1:8888")
 _TIMEOUT = 15.0
 _CONNECT_TIMEOUT = 2.0  # fast-fail a dead/hung SearXNG instead of hanging _TIMEOUT seconds
 _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
-# Spread `general` load across many free engines so DuckDuckGo isn't the sole source
-# (the 200-scenario benchmark showed ddg answered 189/200 - a single-point risk).
+# Spread `general` load across several independent crawls so no single engine is the
+# sole source: when one throttles, the others still answer.
 # Which engines actually answer is a property of the HOST's network, not of this code:
 # free engines block or CAPTCHA whole datacenter IP ranges, and the block differs per
 # provider. `ARGUS_SEARCH_ENGINES` (comma-separated) lets a deployment narrow the
@@ -42,7 +42,7 @@ _BACKOFF_BASE = 0.5  # seconds; exponential: _BACKOFF_BASE * 2**attempt
 _DEFAULT_ENGINES = [
     e.strip()
     for e in (
-        os.getenv("ARGUS_SEARCH_ENGINES") or "bing,brave,google cse"
+        os.getenv("ARGUS_SEARCH_ENGINES") or "bing,brave,google,google cse,duckduckgo web,yandex"
     ).split(",")
     if e.strip()
 ]
