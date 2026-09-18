@@ -30,10 +30,10 @@ Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape /
 ## 2. Architecture (layers)
 
 <p align="center">
-  <img src="../assets/architecture.svg" alt="Argus architecture: Claude Code / Codex CLI over HTTPS to nginx, uvicorn+FastMCP, 20 MCP tools with shared services and SSRF guard, backed by SearXNG / Crawl4AI / trafilatura / Docling" width="100%">
+  <img src="../assets/architecture.svg" alt="Argus architecture: Claude Code / Codex CLI over HTTPS to Cloudflare and Traefik, uvicorn+FastMCP, 20 MCP tools with shared services and SSRF guard, backed by SearXNG / Crawl4AI / trafilatura / Docling" width="100%">
 </p>
 
-Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **Cloudflare**, which proxies to **Traefik** on the VPS; Traefik terminates TLS and forwards `/mcp` to **uvicorn** on the `argus` container's `:8090`, running the **FastMCP** app (Streamable HTTP `/mcp` + `/health` + `/metrics`). The app fans out to the **20 MCP tools**, **shared services** (browser pool, httpx, semantic embeddings, cache, throttle), and the **SSRF guard**, which reach the OSS backends: **SearXNG** (`http://searxng:8080` on the compose network), **Crawl4AI/Playwright**, **trafilatura/Docling**, and structured/fallback APIs (archive.org, GitHub, Semantic Scholar). Cache is content-addressed (SQLite + disk, per-source TTL). The diagram above still draws the retired nginx/systemd edge; section 9 is authoritative.
+Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **Cloudflare**, which proxies to **Traefik** on the VPS; Traefik terminates TLS and forwards `/mcp` to **uvicorn** on the `argus` container's `:8090`, running the **FastMCP** app (Streamable HTTP `/mcp` + `/health` + `/metrics`). The app fans out to the **20 MCP tools**, **shared services** (browser pool, httpx, semantic embeddings, cache, throttle), and the **SSRF guard**, which reach the OSS backends: **SearXNG** (`http://searxng:8080` on the compose network), **Crawl4AI/Playwright**, **trafilatura/Docling**, and structured/fallback APIs (archive.org, GitHub, Semantic Scholar). Cache is content-addressed (SQLite + disk, per-source TTL).
 
 **Fetch strategy (cheap -> expensive):** httpx static GET -> trafilatura extract. If JS needed / thin content -> Crawl4AI+Playwright. If anti-bot block -> Patchright -> Nodriver. This minimizes browser cost (the expensive path).
 

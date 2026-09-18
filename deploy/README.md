@@ -189,7 +189,7 @@ The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-RO
 ## Architecture (panel-less path)
 
 <p align="center">
-  <img src="../assets/architecture.svg" alt="Argus deploy topology: CLI over HTTPS bearer to nginx (TLS, fail2ban), proxied to uvicorn+FastMCP on 127.0.0.1:8090, with SearXNG docker on 127.0.0.1:8888" width="100%">
+  <img src="../assets/architecture.svg" alt="Argus topology: CLI over HTTPS bearer to Cloudflare and Traefik, forwarded to uvicorn+FastMCP on the argus container port 8090, with SearXNG on the compose network" width="100%">
 </p>
 
 Request flow: **Claude Code CLI** hits nginx over HTTPS with a bearer token. nginx (`argus.<domain>`, TLS, fail2ban) proxies `/mcp` to uvicorn on `127.0.0.1:8090`; `/health` is unauthenticated for monitoring and `/metrics` is Prometheus (optional IP allowlist). SearXNG runs as its own Docker container on `127.0.0.1:8888` (loopback-only JSON API), reached by Argus via an httpx client.
