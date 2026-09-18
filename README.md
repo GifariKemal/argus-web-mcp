@@ -35,7 +35,7 @@
 
 ---
 
-> **Argus Panoptes** - the all-seeing hundred-eyed giant. A self-hosted, **unlimited**, **owned** web **fetch / scrape / search** MCP server for **SURIOTA**. Mythological sibling to the **Hermes AI Server**. Every Claude Code / Codex CLI connects over **remote HTTP** -> **zero local process** on the client.
+> **Argus Panoptes** - the all-seeing hundred-eyed giant. A self-hosted, **unlimited**, **owned** web **fetch / scrape / search** MCP server for **SURIOTA**. Mythological sibling to the **Hermes AI Server** (retired with the old VPS in September 2026). Every Claude Code / Codex CLI connects over **remote HTTP** -> **zero local process** on the client.
 
 ## Contents
 
@@ -55,7 +55,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 
 | You were paying for... | Argus replaces it with... | Edge |
 |---|---|---|
-| Brave / Tavily / Exa **search** | `search` / `smart_search` (SearXNG, 70+ engines) | unlimited, multi-engine + **semantic rerank** |
+| Brave / Tavily / Exa **search** | `search` / `smart_search` (self-hosted SearXNG) | unlimited, six-engine fan-out measured per host + **semantic rerank** |
 | Jina Reader / Firecrawl **scrape** | `read` / `scrape` / `batch_read` / `crawl` | full content, JS render + stealth, **no truncation** |
 | Jina / Firecrawl **PDF** | `read_pdf` (pymupdf4llm + Docling) | tables preserved (COT/FOMC) |
 | Firecrawl **extract** / **map** | `extract_structured` / `map_urls` | CSS/XPath, sitemap discovery |

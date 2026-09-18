@@ -42,7 +42,7 @@ Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **C
 | Tool | Phase | Backing | Notes |
 |---|---|---|---|
 | `read(url, format, clean)` | P1 | trafilatura -> readability fallback -> Crawl4AI | clean markdown + metadata, **no truncation** |
-| `search(query, category, count, time_range)` | P1 | SearXNG JSON API | unlimited, 70+ engines |
+| `search(query, category, count, time_range)` | P1 | SearXNG JSON API | unlimited; the fan-out that actually answers is measured per host, not assumed (see `deploy/searxng/README.md`) |
 | `read_pdf(url/path, pages, mode)` | P1 | pymupdf4llm fast / Docling quality | tables preserved (COT/FOMC) |
 | `scrape(url, wait_for, actions, screenshot)` | P1 | Crawl4AI + Playwright | JS render |
 | `batch_read(urls[], concurrency)` | P1 | asyncio + httpx pool | partial-failure tolerant |
@@ -83,7 +83,7 @@ Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **C
 - Cache fallback: store-good-only + stale-serve on transient failure (pattern from Aurix DEXT D1 cache fix).
 
 ## 8. Observability
-- `/health` (browser liveness) - Hermes watchdog cron curls it. `/metrics` Prometheus (requests/errors per tool, latency histogram, **active-context gauge** = OOM early-warning). Structured per-tool logs -> journald.
+- `/health` (browser liveness) - any external cron or uptime checker can curl it; the Hermes watchdog that originally did died with the old host. `/metrics` Prometheus (requests/errors per tool, latency histogram, **active-context gauge** = OOM early-warning). Structured per-tool logs -> journald.
 
 ## 9. Deploy topology (VPS)
 

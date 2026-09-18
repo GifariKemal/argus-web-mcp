@@ -11,7 +11,7 @@ Top by fit (remote-HTTP MCP + free tier + read/search): **Bright Data** (5k req/
 ## B. OSS stack (Agent A - verified GitHub licenses)
 - **Reader core: Crawl4AI** - `unclecode/crawl4ai`, **69.4k*, Apache-2.0** (NOT AGPL - aggregators were wrong; verified on repo), v0.9.0 (2026-06-18), Python, bundles Playwright + ships FastAPI/Docker. **Clone & improve - the only fork.**
 - **Article extraction: trafilatura** - best-in-class boilerplate removal (F1 ~0.937), Apache/GPL, static HTML. Use as extraction stage behind renderer.
-- **Search: SearXNG** - 32.6k*, AGPL, self-host, 70+ engines, **no API key, JSON API** (`/search?format=json`). **The unlimited-search key.** Caveat: ~20 results/page (paginate); heavy volume can get upstream engines to rate-limit the VPS IP (mitigate w/ delay + engine rotation).
+- **Search: SearXNG** - 32.6k*, AGPL, self-host, hundreds of engines shipped (this image exposes 264, of which a handful answer from any given IP - measure, never assume), **no API key, JSON API** (`/search?format=json`). **The unlimited-search key.** Caveat: ~20 results/page (paginate); heavy volume can get upstream engines to rate-limit the VPS IP (mitigate w/ delay + engine rotation).
 - **Render: Playwright** (Apache-2.0) - bundled in Crawl4AI; the 2026 default.
 - **Anti-bot (lazy tier): Patchright** (stealth Playwright drop-in, Apache-2.0) -> **Nodriver** (2026 stealth benchmark winner, Apache-2.0) for hard targets.
 - **PDF: Docling** (IBM, **MIT**, best tables) primary + **pymupdf4llm** (AGPL, fastest digital PDFs) fast path.

@@ -170,7 +170,7 @@ deploy and remain the re-provision recipe. The examples use
 - [Step 4: Retrieve Bearer Token](#step-4-retrieve-bearer-token)
 - [Step 5: Verify the Deployment](#step-5-verify-the-deployment)
 - [Step 6: Register in Claude Code (Client Side)](#step-6-register-in-claude-code-client-side)
-- [Step 7: Set Up Hermes Monitoring (Optional)](#step-7-set-up-hermes-monitoring-optional)
+- [Step 7: External Health Monitoring (Optional)](#step-7-external-health-monitoring-optional)
 - [Rollback / Recovery](#rollback--recovery)
 - [Security Checklist](#security-checklist)
 - [Environment Variables (Optional Tuning)](#environment-variables-optional-tuning)
@@ -399,12 +399,15 @@ ps aux | grep argus
 # Should return nothing (no local server, pure HTTP remote)
 ```
 
-## Step 7: Set Up Hermes Monitoring (Optional)
+## Step 7: External Health Monitoring (Optional)
 
-The Hermes watchdog can monitor Argus health every 30 minutes:
+> [!NOTE]
+> This used to read "Hermes monitoring". The Hermes AI Server died with the old
+> `103.172.172.29` host in September 2026 and is not being rebuilt, so the watchdog it
+> provided is gone. Any cron or uptime checker can do the same job:
 
 ```bash
-# On VPS, add to Hermes crontab or watchdog config
+# any host with network access, or the VPS itself
 */30 * * * * curl -s https://argus.gifariksuryo.xyz/health \
   -H "Authorization: Bearer $ARGUS_TOKEN" \
   | jq -e '.status == "ok"' > /dev/null || alert
@@ -498,7 +501,7 @@ fail2ban-client set argus unbanip <YOUR_IP>
 - [x] nginx `proxy_buffering off` (safe streaming MCP)
 - [x] fail2ban limits brute-force on `/mcp` (401 rate limit)
 - [x] SSRF hardened in Argus server code (100% test coverage, DNS resolution + private-IP deny + re-pin)
-- [x] Coexists with Hermes/SUVA (separate ports, no collision)
+- [x] Coexists with the other services on the host (separate ports, no collision). Hermes and SUVA, which this line originally meant, died with the old host and are not being rebuilt.
 - [x] Browser pool runs as `argus` user (correct cache ownership)
 
 ## Environment Variables (Optional Tuning)
@@ -613,9 +616,14 @@ fail2ban-client status argus
 - **Tool specs**: [docs/03-TOOL-SPECS.md](../docs/03-TOOL-SPECS.md)
 - **Security audit**: [SECURITY-AUDIT.md](SECURITY-AUDIT.md)
 - **SearXNG backend**: [searxng/README.md](searxng/README.md)
-- **Hermes coexistence**: `../../08. Hermes AI Server/docs/ARSITEKTUR-HERMES-SUVA.md`
+- **Hermes coexistence**: was `../../08. Hermes AI Server/docs/ARSITEKTUR-HERMES-SUVA.md`. That server is gone and the folder is a code archive, so nothing coexists with Argus on this host any more.
 
 ## Safe auto-update (poll main -> health-check -> auto-rollback)
+
+> [!IMPORTANT]
+> **Not what production uses.** Since the Easypanel migration a GitHub push webhook
+> redeploys `main`, and `argus-update.timer` is disabled on the host. This section
+> documents the pull-only timer that belongs to the panel-less path below it.
 
 When an approved change lands on `main` (PR-reviewed), the live server self-updates
 within ~5 min. The model is **pull-only** (no inbound webhook port): a systemd timer

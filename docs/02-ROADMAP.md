@@ -95,7 +95,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 
 </details>
 
-- [x] Hermes watchdog curls `/health`; Prometheus `/metrics` for error-rate / active-context.
+- [x] External cron curls `/health`; Prometheus `/metrics` for error-rate / active-context. (The Hermes watchdog that filled this role died with the old host in September 2026.)
 - [x] The VPS stays in sync with `main` automatically (Easypanel push webhook; previously the ff-only, health-gated, auto-rollback timer).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
 - **Open owner item (F1):** set `ARGUS_S2_API_KEY` (Semantic Scholar) to lift `scholar_search` rate limits.

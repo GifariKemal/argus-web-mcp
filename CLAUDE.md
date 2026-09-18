@@ -1,6 +1,6 @@
 # CLAUDE.md - Argus Web MCP
 
-> Auto-loaded by Claude CLI in this directory. Argus = SURIOTA's **self-hosted, unlimited, owned** web **fetch / scrape / search** MCP server. Sibling to the Hermes AI Server. _Created 2026-06-24._
+> Auto-loaded by Claude CLI in this directory. Argus = SURIOTA's **self-hosted, unlimited, owned** web **fetch / scrape / search** MCP server. Sibling to the Hermes AI Server, which was retired in September 2026. _Created 2026-06-24._
 
 ## What this is & scope
 A FastMCP (Python) server, deployed remote-HTTP on the SURIOTA VPS, that every Claude Code CLI connects to over HTTP (**zero local client process**). Replaces paid tools (Jina/Firecrawl/Exa/Tavily/Bright Data) with self-hosted OSS -> unlimited, free, full-content, owned.
