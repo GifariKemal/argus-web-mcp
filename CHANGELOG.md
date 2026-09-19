@@ -14,6 +14,39 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.18] - 2026-09-19 - the S2 key arrives, and one attempt is still not enough
+
+The Semantic Scholar key requested on 2026-09-18 was approved and is now set on the
+Easypanel service (`ARGUS_S2_API_KEY`, never committed). Measuring it from the container
+turned the obvious win into a smaller one.
+
+### Added
+
+- **`ARGUS_S2_API_KEY` live on the VPS.** Set through `updateComposeEnv`
+  (`createDotEnv: true`) plus `deployComposeService`; `docker-compose.yml` already
+  declared the variable, so it reaches the container rather than stopping at `.env`.
+  Verified inside the container: a bogus key answers 403, ours answers 200, so the
+  header is being honoured.
+
+### Changed
+
+- **S2 429 retry budget 2 -> 3, backoff base 0.5 s -> 1.0 s** (`_S2_BACKOFF_BASE`, new
+  constant, now the single source of truth the tests read). The key's documented ceiling
+  is 1 request per second, so a 0.5 s first retry was always going to be refused.
+  Measured from the container: 1 of 10 keyed requests succeeded at 1.2 s spacing, and
+  roughly half succeeded even at 6 s spacing, which is far below the advertised limit.
+  With four attempts at 1 s / 2 s / 4 s the probability of falling through to CrossRef
+  drops to about 6%, at a worst case of 7 s added before the fallback (the tool's own
+  timeout is 120 s).
+
+### Notes
+
+- The key raises S2's hit rate, it does not make S2 reliable. CrossRef stays the
+  fallback and `source` in the response still tells which backend answered.
+- F1 in `CLAUDE.md` is closed. No repo file carries the key.
+
+---
+
 ## [0.4.17] - 2026-09-18 - the general fan-out doubles, and Google was never blocked
 
 Trimming the dead engines left `general` on three, which is no slack at all when one of

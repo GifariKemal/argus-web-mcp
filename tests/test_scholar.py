@@ -10,6 +10,8 @@ import pytest
 import respx
 
 from argus.scholar import (
+    _S2_BACKOFF_BASE,
+    _S2_MAX_RETRIES,
     CROSSREF_BASE,
     S2_BASE,
     ScholarError,
@@ -418,7 +420,7 @@ async def test_live_scholar_search():
 
 
 # --------------------------------------------------------------------------- #
-# FIX A -- S2 retry on 429 (up to 2 retries, backoff, sleep injected)
+# FIX A -- S2 retry on 429 (up to _S2_MAX_RETRIES retries, backoff, sleep injected)
 # --------------------------------------------------------------------------- #
 @respx.mock
 async def test_s2_429_retries_twice_then_uses_s2_on_third_success(monkeypatch):
@@ -446,8 +448,8 @@ async def test_s2_429_retries_twice_then_uses_s2_on_third_success(monkeypatch):
     assert out["source"] == "semantic_scholar"
     assert not cr.called
     assert len(slept) == 2
-    assert slept[0] == pytest.approx(0.5 * 2**0)
-    assert slept[1] == pytest.approx(0.5 * 2**1)
+    assert slept[0] == pytest.approx(_S2_BACKOFF_BASE * 2**0)
+    assert slept[1] == pytest.approx(_S2_BACKOFF_BASE * 2**1)
 
 
 @respx.mock
@@ -465,7 +467,7 @@ async def test_s2_429_exhausted_falls_back_to_crossref(monkeypatch):
         out = await scholar_search("attention", client=client)
     assert out["source"] == "crossref"
     assert cr.called
-    assert len(slept) == 2
+    assert len(slept) == _S2_MAX_RETRIES
 
 
 @respx.mock

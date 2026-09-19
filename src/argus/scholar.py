@@ -29,7 +29,10 @@ _CROSSREF_UA = "ArgusBot/0.1 (+https://suriota.com; mailto:research@suriota.com)
 _S2_FIELDS = "title,authors,year,venue,citationCount,externalIds,abstract,url,openAccessPdf"
 _TIMEOUT = 20.0
 _MAX_LIMIT = 100
-_S2_MAX_RETRIES = 2  # retry budget for HTTP 429 from S2
+_S2_MAX_RETRIES = 3  # retry budget for HTTP 429 from S2
+# Even a keyed S2 caps at 1 req/s and 429s well below that in practice (measured ~50%
+# rejects at 6 s spacing), so never retry sooner than the documented floor.
+_S2_BACKOFF_BASE = 1.0
 _LOG_CIT_W = 0.1     # weight for containment*log_cit boost in _rerank_results
 
 # Strip JATS / XML tags from CrossRef abstracts (e.g. <jats:p>, <jats:italic>).
@@ -169,7 +172,7 @@ async def _try_s2(client, base, query, limit, year_from, open_access):
     """Return mapped+filtered S2 results, or None on any failure (caller falls back).
 
     On HTTP 429 specifically, retries up to _S2_MAX_RETRIES times with exponential
-    backoff (asyncio.sleep(0.5 * 2**attempt)).  All other non-2xx or transport errors
+    backoff (asyncio.sleep(_S2_BACKOFF_BASE * 2**attempt)).  All other non-2xx or transport errors
     return None immediately without retrying.
     """
     params = {"query": query, "limit": limit, "fields": _S2_FIELDS}
@@ -181,7 +184,7 @@ async def _try_s2(client, base, query, limit, year_from, open_access):
             )
             if resp.status_code == 429:
                 if attempt < _S2_MAX_RETRIES:
-                    await asyncio.sleep(0.5 * 2**attempt)
+                    await asyncio.sleep(_S2_BACKOFF_BASE * 2**attempt)
                     attempt += 1
                     continue
                 return None

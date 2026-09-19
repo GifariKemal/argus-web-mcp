@@ -1,7 +1,7 @@
 # Argus - Step-by-Step Roadmap (no gaps)
 
 > [!NOTE]
-> Status (updated 2026-07-02; deployed 2026-06-25): P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. Remaining owner item: `ARGUS_S2_API_KEY` (F1).
+> Status (updated 2026-09-19; deployed 2026-06-25, re-provisioned 2026-09-15): P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. F1 (`ARGUS_S2_API_KEY`) closed on 2026-09-19. No owner item is open.
 
 Build **locally first**, prove it via QA/QC + benchmark, then wrap as our MCP and deploy to the VPS. Each phase has an explicit **exit gate** - do not advance until it passes.
 
@@ -98,7 +98,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 - [x] External cron curls `/health`; Prometheus `/metrics` for error-rate / active-context. (The Hermes watchdog that filled this role died with the old host in September 2026.)
 - [x] The VPS stays in sync with `main` automatically (Easypanel push webhook; previously the ff-only, health-gated, auto-rollback timer).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
-- **Open owner item (F1):** set `ARGUS_S2_API_KEY` (Semantic Scholar) to lift `scholar_search` rate limits.
+- [x] **F1 closed (2026-09-19):** `ARGUS_S2_API_KEY` is set in the Easypanel service env. It lifts `scholar_search`'s S2 hit rate but does not remove 429s (roughly half even at 6 s spacing), so the retry budget went to 3 attempts at a 1 s backoff base and CrossRef stays the fallback.
 - Phase-future (YAGNI): proxy pool, owned search index, 24h soak on the live box.
 
 ---
