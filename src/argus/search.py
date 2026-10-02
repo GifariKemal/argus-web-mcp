@@ -51,10 +51,17 @@ _DEFAULT_ENGINES = [
 # general fan-out stops requesting it - cutting wasted sub-requests and the log spam,
 # and concentrating the fan-out on engines that are actually answering. Complements
 # SearXNG's own server-side suspended_times. Env-tunable; monotonic-clocked.
+# The window doubles on each consecutive bench of the same engine (an engine blocked for
+# this IP stays blocked for hours, and 13 days of logs showed 1235 re-benches at a flat
+# 120 s), capped at _ENGINE_COOLDOWN_MAX, and resets once the engine answers again.
 _ENGINE_COOLDOWN = float(os.getenv("ARGUS_ENGINE_COOLDOWN", "120"))
+_ENGINE_COOLDOWN_MAX = 3600.0
 _MIN_FANOUT_ENGINES = 2  # never bench so many that fewer than this remain in the fan-out
 _engine_cooldowns: dict[str, float] = {}  # engine name -> monotonic deadline it may be used again
+_engine_strikes: dict[str, int] = {}  # engine name -> consecutive benches since it last answered
 _DEFAULT_LANG_ENV = "ARGUS_DEFAULT_SEARCH_LANG"
+_MAX_SUBQUERIES = 4  # a list query runs at most this many searches concurrently
+_RRF_K = 60  # reciprocal rank fusion constant (Cormack et al. 2009)
 _MAX_SITE_TERMS = 5  # include_domains pushed into the query as site: terms (rest: post-filter)
 _MIN_KEEP = 3  # safety floor: never drop below this many of the backend's results
 _TITLE_WEIGHT = 2.0  # title-token coverage counts double vs snippet coverage
@@ -469,6 +476,7 @@ async def _search_once(
                 f"SearXNG request failed: {type(exc).__name__}: {exc}",
             ) from exc
 
+        _engines_answered(raw.get("engines") or [raw.get("engine")] for raw in page)
         added = 0
         for raw in page:
             url = raw.get("url")
@@ -483,6 +491,19 @@ async def _search_once(
 
     _bench_engines(unresponsive)
     return results, unresponsive
+
+
+def _rrf_merge(result_lists: list[list[dict]]) -> list[dict]:
+    """Reciprocal rank fusion: score(url) = sum of 1 / (_RRF_K + rank) over the lists,
+    deduped by normalized URL (the first-seen row is kept); ties keep first-seen order."""
+    scores: dict[str, float] = {}
+    rows: dict[str, dict] = {}
+    for results in result_lists:
+        for rank, r in enumerate(results, start=1):
+            key = _norm_url(r.get("url", ""))
+            rows.setdefault(key, r)
+            scores[key] = scores.get(key, 0.0) + 1 / (_RRF_K + rank)
+    return [rows[k] for k in sorted(rows, key=lambda k: -scores[k])]
 
 
 def _fallback_base_urls(explicit: list[str] | None) -> list[str]:
@@ -502,18 +523,34 @@ def _engine_name(item) -> str:
     return str(item)
 
 
+def _engines_answered(name_lists) -> None:
+    """An engine that returned results is healthy again: clear its strikes and bench."""
+    for names in name_lists:
+        for name in names:
+            _engine_strikes.pop(name, None)
+            _engine_cooldowns.pop(name, None)
+
+
 def _bench_engines(engines) -> None:
-    """Put each reported-unresponsive engine on cooldown until now + _ENGINE_COOLDOWN."""
+    """Bench each reported-unresponsive engine for _ENGINE_COOLDOWN * 2**strikes seconds
+    (capped at _ENGINE_COOLDOWN_MAX)."""
     if not engines or _ENGINE_COOLDOWN <= 0:
         return
-    deadline = time.monotonic() + _ENGINE_COOLDOWN
+    now = time.monotonic()
+    benched = {}
     for e in engines:
         name = _engine_name(e)
-        if name:
-            _engine_cooldowns[name] = deadline
-            record_stage("search.engine_benched")
-    logger.info("search: benched unresponsive engines for %.0fs: %s",
-                _ENGINE_COOLDOWN, [_engine_name(e) for e in engines])
+        # Still benched: a concurrent query (or the safety floor) reporting the same miss
+        # is not a fresh retry, so it must not escalate the window again.
+        if not name or _engine_cooldowns.get(name, 0.0) > now:
+            continue
+        strikes = _engine_strikes.get(name, 0)
+        _engine_strikes[name] = strikes + 1
+        benched[name] = min(_ENGINE_COOLDOWN * 2**strikes, _ENGINE_COOLDOWN_MAX)
+        _engine_cooldowns[name] = now + benched[name]
+        record_stage("search.engine_benched")
+    if benched:
+        logger.info("search: benched unresponsive engines (seconds): %s", benched)
 
 
 def _healthy_engines(candidates: list[str]) -> list[str]:
@@ -528,6 +565,7 @@ def _healthy_engines(candidates: list[str]) -> list[str]:
 def _reset_engine_cooldowns() -> None:
     """Test helper: clear the per-engine cooldown registry."""
     _engine_cooldowns.clear()
+    _engine_strikes.clear()
 
 
 def _default_lang() -> str | None:
@@ -571,7 +609,17 @@ def _is_low_relevance(query: str, results: list[dict]) -> bool:
     return overlap * 2 < len(results)
 
 
-async def _search_backend(
+# A list query fans out up to 4 backend searches per call; this caps the whole process
+# so N concurrent multi-query calls cannot become 4N simultaneous SearXNG requests.
+_BACKEND_SEM = asyncio.Semaphore(8)
+
+
+async def _search_backend(*args, **kwargs):
+    async with _BACKEND_SEM:
+        return await _search_backend_unbounded(*args, **kwargs)
+
+
+async def _search_backend_unbounded(
     q: str,
     count: int,
     params: dict,
@@ -653,7 +701,10 @@ async def search(
     bounded additive boost. General queries keep ``recency=False`` (boost off; published
     remains only a tiebreak).
     """
-    q = " ".join(query) if isinstance(query, list) else query
+    queries = [x for x in query if x.strip()][:_MAX_SUBQUERIES] if isinstance(query, list) else []
+    # The joined string stays the rerank/relevance anchor: every sub-query's tokens count
+    # as overlap, so a hit found only by the second query is not dropped as off-topic.
+    q = " ".join(queries) if isinstance(query, list) else query
     categories = category if category in _VALID_CATEGORIES else "general"
 
     params = {"q": _site_query(q, include_domains), "format": "json", "categories": categories}
@@ -674,17 +725,15 @@ async def search(
         # backend in ~_CONNECT_TIMEOUT s instead of hanging the full read timeout.
         client = httpx.AsyncClient(timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT))
 
-    backend = base_url
-    degraded = False
-    degraded_reason: str | None = None
     rescued_category: str | None = None
-    fb_client = fallback_client
-    fb_owns = False
-    try:
+
+    async def _one(sub_params: dict) -> tuple[list[dict], str]:
+        """Search one query on the primary backend, failing over to the fallbacks."""
         try:
-            results = await _search_backend(
-                q, count, params, base_url, client, retries, auto_engines=auto_engines
-            )
+            return await _search_backend(
+                sub_params["q"], count, sub_params, base_url, client, retries,
+                auto_engines=auto_engines,
+            ), base_url
         except SearchError as primary_exc:
             # A genuine empty result means the backend WORKED - never fail over for that.
             if primary_exc.code == "no_results":
@@ -697,32 +746,46 @@ async def search(
             # SSRF-guarded client + validate_url (a fallback misconfigured to a private/
             # metadata IP is blocked). The loopback primary keeps its plain,
             # destination-fixed internal client - the trust boundary is unchanged.
-            if fb_client is None:
-                fb_client = build_safe_async_client(
-                    timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
-                )
-                fb_owns = True
-            results = None
-            for fb in fallbacks:
-                try:
-                    validate_url(fb)
-                    results = await _search_backend(
-                        q, count, params, fb, fb_client, retries, auto_engines=auto_engines
-                    )
-                except (SearchError, SSRFError):
-                    results = None
-                    continue
-                backend, degraded, degraded_reason = fb, True, "backend_failover"
-                record_stage("search.backend_failover")
-                logger.warning("search: primary backend down; failed over to %s", fb)
-                break
-            if results is None:
-                raise primary_exc
+            # Per call, not shared: concurrent sub-queries would race a shared lazy client.
+            fb_client = fallback_client or build_safe_async_client(
+                timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
+            )
+            try:
+                for fb in fallbacks:
+                    try:
+                        validate_url(fb)
+                        results = await _search_backend(
+                            sub_params["q"], count, sub_params, fb, fb_client, retries,
+                            auto_engines=auto_engines,
+                        )
+                    except (SearchError, SSRFError):
+                        continue
+                    record_stage("search.backend_failover")
+                    logger.warning("search: primary backend down; failed over to %s", fb)
+                    return results, fb
+            finally:
+                if fallback_client is None:
+                    await fb_client.aclose()
+            raise
+
+    try:
+        if len(queries) > 1:
+            runs = await asyncio.gather(
+                *(_one({**params, "q": _site_query(x, include_domains)}) for x in queries),
+                return_exceptions=True,
+            )
+            ok = [r for r in runs if not isinstance(r, BaseException)]
+            if not ok:
+                raise runs[0]
+            results = _rrf_merge([r[0] for r in ok])
+            backend = next((b for _, b in ok if b != base_url), base_url)
+        else:
+            results, backend = await _one(params)
     finally:
         if owns_client:
             await client.aclose()
-        if fb_owns and fb_client is not None:
-            await fb_client.aclose()
+    degraded = backend != base_url
+    degraded_reason: str | None = "backend_failover" if degraded else None
 
     # Post-filter by domain BEFORE rerank/truncation. An include filter that removes
     # everything is a legitimate no_results (the backend had hits; none on the allowlist).

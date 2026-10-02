@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from bisect import bisect_right
 from typing import Any
 
@@ -23,11 +24,12 @@ import trafilatura
 from markdownify import markdownify as _md
 from readability import Document
 
+from .links import pdf_links
+
 # readability log.exception()s a full traceback on every empty page (a blocked fetch)
 # before raising; we already catch that and fall through, so the traceback is noise.
 logging.getLogger("readability").setLevel(logging.CRITICAL)
 
-_THIN_WORDS = 150  # below this a precision-pass result is retried balanced
 
 
 def _dedup_blocks(text: str) -> str:
@@ -81,19 +83,95 @@ def _readability_markdown(html: str) -> str:
     return _md(summary_html, heading_style="ATX").strip()
 
 
+_RECALL_GAIN = 1.3  # balanced replaces precision only when it has this much more text
+_LANG = re.compile(r"(?:^|\s)(?:language|lang|highlight(?:-source)?)-([\w+#.-]+)")
+# Wrappers only count through Sphinx's highlight-<lang>: a page-level class such as
+# <body class="lang-en"> or "language-selector" is not a code language.
+_WRAPPER_LANG = re.compile(r"(?:^|\s)highlight(?:-source)?-([\w+#.-]+)")
+_NOT_A_LANG = {"default", "none", "text", "plain", "plaintext"}
+# Lines longer than this skip the per-line regexes: page text is attacker-controlled and
+# the lazy patterns go quadratic-to-cubic on long runs of backticks or brackets (5000
+# backticks took 7.7 s, 100k brackets 55 s, holding the GIL). No real code line is this long.
+_MAX_REGEX_LINE = 2000
+_LINK = re.compile(r"!?\[([^\]\n]{0,500})\]\([^)\s]{0,2000}\)")
+_IMG_IN_LINK = re.compile(r"\[!\[([^\]\n]{0,500})\]\([^)\s]{0,2000}\)\]\([^)\s]{0,2000}\)")
+_FENCE = re.compile(r"^(`{3,})\n(.*?)\n\1$", re.M | re.S)
+_ONE_LINE = re.compile(r"(`*) ?(.+?) ?\1")  # a line that is all one code span, or bare
+_INLINE = re.compile(r"(`+)(.+?)\1")
+_TABLE_SEP = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+\s*$")
+_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def _code_langs(html: str) -> dict[str, str]:
+    """Every ``<pre>`` text -> the language named by a class on its <code>, itself or two
+    wrappers up (Sphinx puts ``highlight-python`` on the grandparent), else ''."""
+    try:
+        tree = lxml.html.fromstring(html)
+    except Exception:
+        return {}
+    langs: dict[str, str] = {}
+    for pre in tree.iter("pre"):
+        own = (_LANG.search(el.get("class") or "") for el in (*pre.iterchildren("code"), pre))
+        up = (_WRAPPER_LANG.search(el.get("class") or "")
+              for el in list(pre.iterancestors())[:2])
+        m = next(filter(None, (*own, *up)), None)
+        lang = m[1] if m and m[1].lower() not in _NOT_A_LANG else ""
+        langs.setdefault(pre.text_content().strip(), lang)
+    return langs
+
+
+def _fix_markdown(md: str, html: str) -> str:
+    """Restore what trafilatura's markdown drops: the code-fence language (it keeps the
+    code but not its class), the fence of a one-line <pre> (it becomes an inline code
+    span or a plain paragraph), and the separator row of a table without <th> (invalid
+    markdown without it)."""
+    langs = _code_langs(html) if "<pre" in html else {}
+    if "```" in md and langs:
+        md = _FENCE.sub(lambda m: f"{m[1]}{langs.get(m[2].strip(), '')}\n{m[2]}\n{m[1]}", md)
+    lines = md.split("\n")
+    out: list[str] = []
+    fence = False
+    for i, line in enumerate(lines):
+        if (not fence and langs and len(line) <= _MAX_REGEX_LINE
+                and (m := _ONE_LINE.fullmatch(line)) and m[2] in langs):
+            out += [f"```{langs[m[2]]}", m[2], "```"]
+            continue
+        out.append(line)
+        if line.startswith("```"):
+            fence = not fence
+        elif (not fence and line.startswith("|") and not (i and lines[i - 1].startswith("|"))
+              and not _TABLE_SEP.match(lines[i + 1] if i + 1 < len(lines) else "")):
+            out.append("|" + "---|" * (len(_PIPE.findall(line)) - 1))
+    return "\n".join(out)
+
+
+def _demark(md: str) -> str:
+    """Markdown -> plain text: drop fences, table separators, heading marks, link/image
+    syntax, bold/strike and code-span backticks, leaving code verbatim."""
+    out: list[str] = []
+    fence = False
+    for line in md.split("\n"):
+        if line.startswith("```"):
+            fence = not fence
+            continue
+        if not fence and len(line) <= _MAX_REGEX_LINE:
+            if _TABLE_SEP.match(line):
+                continue
+            parts = _INLINE.split(re.sub(r"^#{1,6} +", "", line))
+            # split() yields [prose, ticks, code, prose, ...]: de-mark only the prose
+            for i in range(0, len(parts), 3):
+                # a linked badge [![alt](img)](href) first, or the outer link is left half-done
+                p = _LINK.sub(r"\1", _IMG_IN_LINK.sub(r"\1", parts[i]))
+                parts[i] = re.sub(r"(\*\*|~~)(.+?)\1", r"\2", p)
+            line = "".join(p for i, p in enumerate(parts) if i % 3 != 1)
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def _to_format(content_md: str, fmt: str, html_source: str) -> str:
     """content_md is markdown; convert to the requested output format."""
-    if fmt == "markdown":
-        return content_md
     if fmt == "text":
-        # strip the few markdown marks we emit (headings, links, emphasis).
-        text = trafilatura.extract(
-            html_source, output_format="txt", with_metadata=False, include_comments=False
-        )
-        if text:
-            return _dedup_blocks(text.replace("\n", "\n\n")).replace("\n\n", "\n").strip()
-        # fall back: crude de-mark of the markdown.
-        return content_md.replace("#", "").strip()
+        return _demark(content_md)  # same extraction as markdown, so the formats agree
     if fmt == "html":
         try:
             return Document(html_source).summary()
@@ -201,13 +279,17 @@ def extract_article(
 ) -> dict[str, Any]:
     """Extract the main article from ``html`` into ``fmt`` (markdown|text|html).
 
-    ``clean`` favours precision (less boilerplate). ``include_links`` keeps inline
+    ``clean`` (default) is trafilatura's balanced mode; ``clean=False`` favours recall.
+    ``include_links`` keeps inline
     links. Returns ``{"content", "format", "title", "metadata"}`` where metadata is
     ``{"author", "published", "lang", "site", "word_count"}``. Whatever real text
     the tiers recover is returned verbatim - even a one-word page. ``content`` is
     ``""`` (``word_count`` 0) only when no tier extracted any text at all.
     """
     meta = _metadata(html, url)
+    low = html.lower()
+    if (".pdf" in low or "/download/" in low) and (pdfs := pdf_links(html, url)):
+        meta["pdf_links"] = pdfs
 
     # Tier 1: trafilatura (content only; metadata fetched separately to avoid the
     # YAML front-matter that with_metadata=True injects into the body).
@@ -222,19 +304,20 @@ def extract_article(
                     with_metadata=False,
                     include_comments=False,  # comment threads (Reddit/HN/Disqus) are noise
                     favor_precision=precision,
+                    favor_recall=not clean,
                 )
                 or ""
             ).strip()
         )
 
+    # Precision keeps the page's markdown structure (links, paragraphs) but drops content
+    # on non-article pages; balanced finds that content but can flatten a small page into
+    # one paragraph. Keep precision unless balanced recovers clearly more text. WCXB
+    # (2026-10-02, 50 pages/type): precision alone 0.684 F1, balanced alone 0.715.
     content = _tier1(clean)
-    # Precision keeps only the "article" and drops the rest of a non-article page (a
-    # forum thread came back as its heading alone). When that result is thin, take a
-    # balanced pass instead - but only if it recovers clearly more text.
-    words = len(content.split())
-    if clean and words < _THIN_WORDS:
+    if clean:
         balanced = _tier1(False)
-        if len(balanced.split()) > 2 * words:
+        if len(balanced.split()) > _RECALL_GAIN * len(content.split()):
             content = balanced
 
     # Tier 2: readability.
@@ -246,6 +329,8 @@ def extract_article(
         content = _md(html, heading_style="ATX").strip()
 
     content = _dedup_blocks((content or "").strip())
+    if content:
+        content = _fix_markdown(content, html)
 
     # Convert to the requested format only when a tier actually recovered text;
     # otherwise the format converters can fabricate empty wrappers (e.g.

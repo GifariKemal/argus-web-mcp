@@ -46,8 +46,9 @@ def _check_size(resp: httpx.Response) -> None:
 class FetchError(Exception):
     """Non-SSRF fetch failure surfaced to the fetch orchestrator."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, status: int | None = None) -> None:
         self.code = code
+        self.status = status  # HTTP status when the failure was a status answer
         super().__init__(message)
 
 
@@ -113,7 +114,16 @@ async def fetch_static(
     # ladder (that ladder is gated on `except FetchError` and previously NEVER fired on a
     # status block - a challenge page was returned as if it were real content).
     if resp.status_code in (403, 429, 503):
-        raise FetchError("blocked_by_antibot", f"status {resp.status_code} (anti-bot block)")
+        raise FetchError(
+            "blocked_by_antibot", f"status {resp.status_code} (anti-bot block)",
+            status=resp.status_code,
+        )
+    # Any other 5xx (500/502/504, Cloudflare 520-526) is an error page, not content: send
+    # it down the same ladder instead of extracting "Web server is returning an unknown error".
+    if resp.status_code >= 500:
+        raise FetchError(
+            "fetch_failed", f"status {resp.status_code} (server error)", status=resp.status_code
+        )
     # Decode with the HEADER-declared charset when present; otherwise sniff a meta-declared
     # one before falling back to utf-8 (httpx's resp.encoding defaults to utf-8 with no header,
     # which would corrupt meta-only legacy encodings past any downstream re-decode).

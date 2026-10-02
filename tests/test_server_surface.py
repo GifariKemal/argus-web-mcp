@@ -100,3 +100,39 @@ def test_webhook_mask_drops_credentials():
     assert server._mask_url("https://user:pw@hooks.example.com:8443/x?t=1") == (
         "https://hooks.example.com:8443"
     )
+
+
+async def test_static_bearer_is_compared_in_constant_time(monkeypatch):
+    monkeypatch.setenv("ARGUS_TOKEN", "s3cret-token")
+    monkeypatch.delenv("ARGUS_JWT_JWKS_URI", raising=False)
+    verifier = server._build_auth()
+    assert (await verifier.verify_token("s3cret-token")).client_id == "argus"
+    assert await verifier.verify_token("s3cret-tokeX") is None
+    assert await verifier.verify_token("") is None
+
+
+async def test_screenshot_reaches_the_client_as_an_image(app_state):
+    out = await server.mcp.call_tool("screenshot", {"url": "http://fixtures.test/article"})
+    kinds = [c.type for c in out.content]
+    assert kinds == ["text", "image"]
+    assert out.content[1].mime_type == "image/png" and out.content[1].data == "BASE64PNG"
+    assert "screenshot" not in out.structured_content
+    assert out.structured_content["format"] == "png"
+
+
+async def test_dns_failure_is_reported_as_dns_failed(app_state, monkeypatch):
+    from argus.security.ssrf import DNSError
+
+    async def no_dns(*a, **k):
+        raise DNSError("resolution timed out for 'pasal.id'")
+
+    monkeypatch.setattr(server, "fetch", no_dns)
+    out = await server.mcp.call_tool("read", {"url": "https://pasal.id/x"})
+    assert out.is_error and out.structured_content["code"] == "dns_failed"
+
+
+async def test_research_ctx_is_not_part_of_the_schema():
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    assert "ctx" not in tools["research"].parameters["properties"]
+    assert tools["search"].parameters["properties"]["category"]["enum"] == [
+        "general", "news", "science", "it"]

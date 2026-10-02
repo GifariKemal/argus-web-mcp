@@ -14,6 +14,65 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.22] - 2026-10-02 - the P2 backlog
+
+The remaining gap-audit items, each measured or reviewed before it went in. An
+independent review of the first draft found two high-severity issues (below), both fixed
+before release.
+
+### Fixed
+
+- **DNS failures are `dns_failed`, not `ssrf_blocked`.** Only a transient resolver answer
+  (EAI_AGAIN) is retried, once; NXDOMAIN and timeouts are not, so no second uncancellable
+  resolver thread is stranded. Per-attempt timeout 5 -> 8 s. A blocked address still
+  refuses at once and never enters a fallback.
+- **Regex denial of service in the markdown passes** (review finding): 5000 backticks
+  took 7.7 s and 100k brackets 55 s, holding the GIL. Lines past 2000 chars now skip the
+  per-line patterns and link patterns are bounded; both cases run in under 1 s.
+- **Block detection** uses crawl4ai's antibot detector (DataDome, PerimeterX, Incapsula,
+  Kasada, Akamai fingerprints), but on a 2xx a hit only counts when the page is thin, so an
+  article quoting "Pardon Our Interruption" or an AWS "Access Denied" doc is content.
+- **Static 5xx** (500/502/504, Cloudflare 520-526) goes down the fallback ladder instead
+  of being extracted as content.
+- PDF page cap (`ARGUS_PDF_MAX_PAGES`, default 300) also applies to explicit `pages`
+  ranges and to the Docling slice, so `pages="1-5000"` cannot pin the PDF worker.
+
+### Added
+
+- **Negative cache:** a plain read that hit an anti-bot wall on every rung fails fast for
+  10 minutes. Only `blocked_by_antibot` is remembered (not timeouts), and browser requests
+  (`scrape`, `screenshot`, actions, wait_for) always get a fresh attempt (review finding:
+  a failed read used to refuse the `scrape` an agent tries next).
+- **Wayback cool-down:** a 429/403/503 from the archive switches the step off for 30
+  minutes (it answers 429 on every endpoint from the VPS IP), each request capped at 10 s,
+  raw `id_` snapshots, and the failure reason recorded as a stage.
+- **Search:** list queries fan out (up to 4, merged with reciprocal rank fusion) under a
+  process-wide limit of 8 backend searches; SearXNG `request_timeout` 6 -> 3 s (measured:
+  responsive engines answer in 0.01-1.1 s, suspended ones instantly); escalating engine
+  cooldown (120 s doubling to 1 h, reset on an answer).
+- **Research:** at most 2 sources per host in the first pass, a per-call random fence tag
+  in answer mode, and MCP progress notifications per source (fire-and-forget, so a slow
+  client cannot delay or cancel a source).
+- **Extraction:** precision and balanced passes both run; balanced replaces precision only
+  when it recovers over 1.3x the text. On WCXB (50 pages per type) that moved overall F1
+  0.684 -> 0.711 (forum 0.638 -> 0.713, article 0.930 -> 0.944) while keeping precision's
+  markdown structure on small pages (balanced alone scored 0.715 but flattened them).
+  Code fences keep their language, one-line `<pre>` stays a block, tables without `<th>`
+  get a separator row, `text` derives from the same extraction as markdown, and
+  regulation pages expose `metadata.pdf_links`.
+- **MCP surface:** JSON-schema enums for `format`, `category`, `time_range`, `safesearch`,
+  `mode` and `report_type`; screenshots arrive as an `image/png` content block; the bearer
+  token is compared in constant time; INSTRUCTIONS cut from 1659 to 799 chars.
+- **`benchmark/run_wcxb.py`**: offline extraction benchmark on the 2008-page WCXB set
+  (full dev split: 0.799 word-F1 before this release; plain trafilatura 0.813).
+- **CI `browser` job** runs the real-Chromium and real-model tests, which were deselected
+  everywhere until now.
+
+### Changed (breaking)
+
+- `screenshot` results no longer carry the base64 PNG in `structuredContent`; over MCP the
+  image is a separate content block. Callers of the Python function still get the dict.
+
 ## [0.4.21] - 2026-10-02 - the backlog, decided by measurement
 
 The P1 items from the 0.4.20 gap audit. Each one was measured from the VPS IP or on an

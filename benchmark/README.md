@@ -19,6 +19,7 @@ For the durable, tracked results (numbers + findings), read
 - [Metrics](#metrics-stdlib-token-level-lowercased-whitespace-tokens)
 - [Gold curation - read this](#gold-curation---read-this)
 - [Adapters](#adapters)
+- [WCXB extraction benchmark](#wcxb-extraction-benchmark-offline-7-page-types)
 
 ## Two benchmark families
 
@@ -215,3 +216,27 @@ Threshold rule: `_SEM_FLOOR` = 5th percentile of relevant cosine (worst language
 to 0.05), because it only decides whether a zero-lexical-overlap row survives and losing a
 relevant row is the costly error. `_SEM_GUARD_FLOOR` = 95th percentile of irrelevant cosine
 (worst language, rounded up to 0.05), because a false "on-topic" vote is the costly error there.
+
+## WCXB extraction benchmark (offline, 7 page types)
+
+`run_wcxb.py` scores `extract_article` against [WCXB](https://github.com/Murrough-Foley/web-content-extraction-benchmark)
+(2008 human-reviewed pages, 7 page types, CC-BY-4.0). The dataset (~194 MB) is never
+committed: clone it once into a cache outside the repo, or point `ARGUS_WCXB_DIR` / `--data` at a clone.
+
+```bash
+git clone --depth 1 https://github.com/Murrough-Foley/web-content-extraction-benchmark \
+    "$LOCALAPPDATA/argus-bench/wcxb"
+./.venv/Scripts/python.exe benchmark/run_wcxb.py                    # whole dev split (1497 pages)
+./.venv/Scripts/python.exe benchmark/run_wcxb.py --limit 50         # 50 per type, seeded sample
+./.venv/Scripts/python.exe benchmark/run_wcxb.py --trafilatura --json out.json  # + same-page baseline
+```
+
+Metrics come from the dataset's own `evaluate.py` (word-level F1 over `\w+` tokens, `with`
+snippet hit rate, `without` boilerplate leak rate) plus `scorer.quality_f1` with `with` as
+`must_contain` and `without` as `must_not_contain`. The report is a per-type table (n, mean and
+median F1, precision, recall, ms/page, published trafilatura and rs-trafilatura F1), the 10 slowest
+and 10 worst-F1 pages, and every page where `extract_article` raised.
+
+> [!NOTE]
+> `with`/`without` are exact substring checks on plain text, so Markdown marks (`**bold**`,
+> escapes) can hide a captured snippet. Read `quality_f1` for the format-invariant view.

@@ -19,6 +19,7 @@ ERROR_CODES = frozenset(
         "extraction_failed",
         "render_failed",
         "blocked_by_antibot",
+        "dns_failed",
         # Trading-tool structured codes, surfaced verbatim (masking them as generic
         # fetch_failed hid actionable causes like a bad report_type or date range).
         "cot_bad_report_type",

@@ -39,6 +39,16 @@ class SSRFError(Exception):
     code = "ssrf_blocked"
 
 
+class DNSError(SSRFError):
+    """The host did not resolve (NXDOMAIN, resolver error, timeout, no addresses).
+
+    Not an SSRF decision, so it reports ``dns_failed``; it subclasses SSRFError so every
+    existing ``except SSRFError`` still refuses the fetch and keeps it out of the fallbacks.
+    """
+
+    code = "dns_failed"
+
+
 def validate_url(url: str) -> None:
     """Scheme allowlist + host present. Cheap pre-check; does NOT resolve DNS."""
     parts = urlsplit(url)
@@ -68,12 +78,12 @@ def is_blocked_ip(ip: str) -> bool:
 def resolve_and_validate(host: str, port: int) -> list[str]:
     """Resolve ``host`` and validate every IP. Block-on-any (no partial).
 
-    Raises SSRFError if resolution fails, yields nothing, or any IP is blocked.
+    Raises DNSError if resolution fails or yields nothing, SSRFError if any IP is blocked.
     """
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
-        raise SSRFError(f"resolution failed for {host!r}") from exc
+        raise DNSError(f"resolution failed for {host!r}") from exc
 
     ips: list[str] = []
     for info in infos:
@@ -82,7 +92,7 @@ def resolve_and_validate(host: str, port: int) -> list[str]:
             ips.append(ip)
 
     if not ips:
-        raise SSRFError(f"no addresses for {host!r}")
+        raise DNSError(f"no addresses for {host!r}")
 
     for ip in ips:
         if is_blocked_ip(ip):
@@ -95,20 +105,29 @@ async def aresolve_and_validate(
     host: str, port: int, timeout: float | None = None
 ) -> list[str]:
     """Async form of :func:`resolve_and_validate`: run the blocking resolver off the
-    event loop, bounded by ``timeout`` seconds (default ``DNS_TIMEOUT``).
+    event loop, each attempt bounded by ``timeout`` seconds (default ``DNS_TIMEOUT``).
 
     Security logic is IDENTICAL - it calls the same sync validator; this only stops a
     slow/hung ``socket.getaddrinfo`` from freezing the single-worker event loop for ALL
-    concurrent tool calls (and it re-runs per redirect hop). A timeout surfaces as
-    ``SSRFError`` so the existing ``ssrf_blocked`` contract and fetch-layer ladder hold.
+    concurrent tool calls (and it re-runs per redirect hop). Only a transient resolver
+    answer (EAI_AGAIN) is retried, once: retrying NXDOMAIN is pointless, and retrying a
+    timeout would strand a second uncancellable getaddrinfo thread in the shared pool.
+    A blocked IP raises SSRFError at once, never retried.
     """
     if timeout is None:
         timeout = DNS_TIMEOUT
-    try:
-        async with asyncio.timeout(timeout):
-            return await asyncio.to_thread(resolve_and_validate, host, port)
-    except TimeoutError as exc:
-        raise SSRFError(f"resolution timed out for {host!r} after {timeout:g}s") from exc
+    for attempt in range(2):
+        try:
+            async with asyncio.timeout(timeout):
+                return await asyncio.to_thread(resolve_and_validate, host, port)
+        except TimeoutError as exc:
+            raise DNSError(f"resolution timed out for {host!r} after {timeout:g}s") from exc
+        except DNSError as exc:
+            cause = exc.__cause__
+            transient = isinstance(cause, socket.gaierror) and cause.errno == socket.EAI_AGAIN
+            if attempt or not transient:
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 class _PinnedBackend(httpcore.AsyncNetworkBackend):

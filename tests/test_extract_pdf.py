@@ -232,3 +232,27 @@ def test_slice_pdf_full_range_returns_original(two_page_pdf):
     assert data == two_page_pdf  # no re-encode when nothing is sliced
     assert total == 2
     assert page_indices == [0, 1]
+
+
+@pytest.mark.parametrize("mode", ["text", "tables"])
+def test_unranged_pdf_is_capped_and_reports_it(monkeypatch, mode):
+    monkeypatch.setattr("argus.extract.pdf.config.PDF_MAX_PAGES", 3)
+    res = extract_pdf(_make_pdf([f"PAGE {i}" for i in range(1, 6)]), mode=mode)
+    assert res["pages_total"] == 5
+    assert res["pages_returned"] == 3
+    assert res["metadata"]["pages_capped"] is True
+    assert "PAGE 3" in res["content"] and "PAGE 4" not in res["content"]
+
+
+def test_explicit_range_is_capped_too(monkeypatch):
+    # An explicit pages="1-5000" must not pin the single PDF worker either.
+    monkeypatch.setattr("argus.extract.pdf.config.PDF_MAX_PAGES", 3)
+    res = extract_pdf(_make_pdf([f"PAGE {i}" for i in range(1, 6)]), pages="1-5")
+    assert res["pages_returned"] == 3 and res["pages_total"] == 5
+    assert res["metadata"]["pages_capped"] is True
+    small = extract_pdf(_make_pdf([f"PAGE {i}" for i in range(1, 6)]), pages="2-3")
+    assert small["metadata"]["pages_capped"] is False
+
+
+def test_small_pdf_is_not_capped(two_page_pdf):
+    assert extract_pdf(two_page_pdf)["metadata"]["pages_capped"] is False

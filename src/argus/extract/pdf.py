@@ -7,6 +7,8 @@ from typing import Any
 import pymupdf
 import pymupdf4llm
 
+from .. import config
+
 # pymupdf4llm's layout mode prints "=== Document parser messages ===" via pymupdf.message,
 # which defaults to stdout - on the stdio transport that is the MCP JSON-RPC stream.
 pymupdf.set_messages(pylogging=True, pylogging_name="argus.pdf")
@@ -94,7 +96,9 @@ def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int]) -> tuple
 def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> dict[str, Any]:
     """Extract a PDF to markdown using pymupdf4llm.
 
-    pages: '1-5' or '3' (1-indexed inclusive) or None for all.
+    pages: '1-5' or '3' (1-indexed inclusive) or None for all, up to
+    ``config.PDF_MAX_PAGES`` (then ``metadata['pages_capped']`` is True and
+    ``pages_total`` still counts the whole document).
     mode='tables' still returns ``content`` but also populates ``tables``.
     Raises ``ValueError('not_pdf')`` on invalid input.
     """
@@ -103,6 +107,9 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
         total = doc.page_count
         page_indices = _parse_pages(pages, total)
         metadata = dict(doc.metadata or {})
+        # Applies to explicit ranges too: pages="1-5000" must not pin the single PDF worker.
+        metadata["pages_capped"] = len(page_indices) > config.PDF_MAX_PAGES
+        page_indices = page_indices[: config.PDF_MAX_PAGES]
 
         # pages_without_text lets a caller tell a scanned (image-only) PDF from an empty one.
         if mode == "text" and len(page_indices) >= _FAST_TEXT_MIN_PAGES:
@@ -152,7 +159,7 @@ def _slice_pdf(data: bytes, pages: str | None) -> tuple[bytes, int, list[int]]:
     doc = _open(data)
     try:
         total = doc.page_count
-        page_indices = _parse_pages(pages, total)
+        page_indices = _parse_pages(pages, total)[: config.PDF_MAX_PAGES]
         if len(page_indices) != total:
             doc.select(page_indices)
             data = doc.tobytes()

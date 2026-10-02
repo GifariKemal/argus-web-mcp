@@ -352,19 +352,69 @@ async def test_default_language_env_override(monkeypatch):
 
 
 @respx.mock
-async def test_list_query_joined():
-    captured = {}
+async def test_list_query_runs_each_query_and_fuses_by_rrf():
+    seen = []
+    pages = {
+        "foo": [_result(1, url="https://a.example/x"), _result(2, url="https://b.example/y")],
+        "bar": [_result(3, url="https://b.example/y/?utm_source=z"),
+                _result(4, url="https://c.example/z")],
+    }
 
     def responder(request):
-        captured.update(_query_of(request))
-        return httpx.Response(200, json=_page([_result(1)]))
+        q = _query_of(request)["q"][0]
+        seen.append(q)
+        return httpx.Response(200, json=_page(pages[q]))
 
     respx.get(f"{BASE}/search").side_effect = responder
 
     out = await search(["foo", "bar"], base_url=BASE)
-    assert captured["q"] == ["foo bar"]
-    # original list preserved in the echoed query
-    assert out["query"] == ["foo", "bar"]
+    assert sorted(set(seen)) == ["bar", "foo"]
+    urls = [r["url"] for r in out["results"]]
+    # b.example/y is in both lists (normalized dedup) so RRF puts it first
+    assert urls[0] == "https://b.example/y" and len(urls) == 3
+    assert out["query"] == ["foo", "bar"]  # original list preserved in the echoed query
+
+
+@respx.mock
+async def test_list_query_caps_at_four_and_single_item_is_plain():
+    seen = []
+
+    def responder(request):
+        seen.append(_query_of(request)["q"][0])
+        return httpx.Response(200, json=_page([_result(len(seen))]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    await search(["a1", "b2", "c3", "d4", "e5"], base_url=BASE)
+    assert sorted(set(seen)) == ["a1", "b2", "c3", "d4"]
+    seen.clear()
+    await search(["only one"], base_url=BASE)
+    assert set(seen) == {"only one"}
+
+
+@respx.mock
+async def test_list_query_tolerates_one_failed_subquery():
+    def responder(request):
+        if _query_of(request)["q"][0] == "bad":
+            return httpx.Response(500)
+        return httpx.Response(200, json=_page([_result(1)]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+    out = await search(["good", "bad"], base_url=BASE)
+    assert out["count"] == 1 and out["backend"] == BASE
+
+    respx.get(f"{BASE}/search").mock(return_value=httpx.Response(500))
+    with pytest.raises(SearchError) as exc:
+        await search(["x1", "x2"], base_url=BASE)
+    assert exc.value.code == "search_backend_down"
+
+
+def test_rrf_merge_scores_and_dedups():
+    a = [{"url": "https://h/1"}, {"url": "https://h/2"}]
+    b = [{"url": "https://h/2/"}, {"url": "https://h/3"}]
+    assert [r["url"] for r in argus.search._rrf_merge([a, b])] == [
+        "https://h/2", "https://h/1", "https://h/3"
+    ]
 
 
 @respx.mock
@@ -1876,6 +1926,30 @@ def test_cooldown_expires(monkeypatch):
     monkeypatch.setattr(argus.search, "_ENGINE_COOLDOWN", 0.0)  # zero window -> never bench
     argus.search._bench_engines(["brave"])
     assert "brave" in argus.search._healthy_engines(["duckduckgo", "bing", "brave"])
+
+
+def test_cooldown_doubles_per_consecutive_bench_and_caps(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(argus.search.time, "monotonic", lambda: clock[0])
+    windows = []
+    for _ in range(7):
+        argus.search._bench_engines(["brave"])
+        argus.search._bench_engines(["brave"])  # still benched: no extra strike
+        windows.append(argus.search._engine_cooldowns["brave"] - clock[0])
+        clock[0] += windows[-1]  # let the bench expire before the next miss
+    assert windows == [120, 240, 480, 960, 1920, 3600, 3600]
+
+
+def test_cooldown_resets_when_engine_answers(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(argus.search.time, "monotonic", lambda: clock[0])
+    argus.search._bench_engines(["brave"])
+    clock[0] += 120
+    argus.search._bench_engines(["brave"])  # second strike: 240 s
+    argus.search._engines_answered([["brave"]])
+    assert "brave" not in argus.search._engine_cooldowns
+    argus.search._bench_engines(["brave"])
+    assert argus.search._engine_cooldowns["brave"] - clock[0] == 120
 
 
 @respx.mock

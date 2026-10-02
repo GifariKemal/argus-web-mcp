@@ -142,3 +142,12 @@ def test_images_lazy_loading_fallbacks():
         "https://site.com/real.jpg",  # real src still wins over data-src
     ]
     assert not any(s.startswith("data:") for s in srcs)
+
+
+def test_pdf_links_matches_path_not_query_and_caps():
+    from argus.extract.links import pdf_links
+
+    html = ("<a href='/a.PDF?v=2'>a</a><a href='/view?f=x.pdf'>q</a><a href='/b.pdf#p3'>b</a>"
+            "<a href='/b.pdf'>dup</a><a href='mailto:x@y.pdf'>m</a>")
+    assert pdf_links(html, BASE) == ["https://example.com/a.PDF?v=2", "https://example.com/b.pdf"]
+    assert pdf_links(html, BASE, limit=1) == ["https://example.com/a.PDF?v=2"]

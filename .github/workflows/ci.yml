@@ -3,6 +3,7 @@
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -18,3 +19,23 @@ jobs:
       - run: uv pip install --no-deps -e . && uv pip install pytest pytest-asyncio pytest-cov respx ruff
       - run: uv run --no-sync ruff check src tests
       - run: uv run --no-sync pytest -q -m "not browser and not slow and not network"
+
+  # Real Chromium and the real embedding model. These tests were deselected everywhere
+  # until 0.4.21, so the egress proxy and browser relaunch had only manual coverage.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FASTEMBED_CACHE_PATH: /home/runner/.cache/fastembed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/fastembed
+          key: fastembed-${{ hashFiles('src/argus/semantic.py') }}
+      - run: uv venv --python 3.12
+      - run: uv pip install --require-hashes -r requirements.lock
+      - run: uv pip install --no-deps -e . && uv pip install pytest pytest-asyncio respx
+      - run: uv run --no-sync playwright install --with-deps chromium
+      - run: uv run --no-sync pytest -q -m "(browser or slow) and not network" -rs

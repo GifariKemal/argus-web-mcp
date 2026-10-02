@@ -14,6 +14,7 @@ import pytest
 
 from argus.security.ssrf import (
     ALLOWED_SCHEMES,
+    DNSError,
     SSRFError,
     _PinnedBackend,
     aresolve_and_validate,
@@ -147,8 +148,10 @@ def test_resolve_and_validate_gaierror(monkeypatch):
         raise socket.gaierror("nxdomain")
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    with pytest.raises(SSRFError):
+    with pytest.raises(DNSError) as ei:
         resolve_and_validate("nope.example", 443)
+    assert ei.value.code == "dns_failed"
+    assert isinstance(ei.value, SSRFError)  # fail-closed: every SSRFError handler refuses it
 
 
 def test_resolve_and_validate_empty(monkeypatch):
@@ -156,7 +159,7 @@ def test_resolve_and_validate_empty(monkeypatch):
         return []
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    with pytest.raises(SSRFError):
+    with pytest.raises(DNSError):
         resolve_and_validate("empty.example", 443)
 
 
@@ -324,8 +327,10 @@ async def test_aresolve_timeout_raises_ssrf(monkeypatch):
     import time
 
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: (time.sleep(2), [])[1])
-    with pytest.raises(SSRFError):
+    with pytest.raises(DNSError) as ei:
         await aresolve_and_validate("hung.example.com", 443, timeout=0.2)
+    assert ei.value.code == "dns_failed"
+    assert isinstance(ei.value.__cause__, TimeoutError)
 
 
 async def test_aresolve_propagates_blocked_ip(monkeypatch):
@@ -335,5 +340,60 @@ async def test_aresolve_propagates_blocked_ip(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    with pytest.raises(SSRFError) as ei:
+        await aresolve_and_validate("internal.example.com", 443)
+    assert not isinstance(ei.value, DNSError)
+    assert ei.value.code == "ssrf_blocked"
+
+
+async def test_aresolve_retries_a_failed_lookup_once(monkeypatch):
+    calls = []
+
+    def flaky_gai(host, port, *a, **k):
+        calls.append(host)
+        if len(calls) == 1:
+            raise socket.gaierror(socket.EAI_AGAIN, "temporary failure in name resolution")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", flaky_gai)
+    assert await aresolve_and_validate("flaky.example.com", 443) == ["93.184.216.34"]
+    assert len(calls) == 2
+
+
+async def test_aresolve_gives_up_after_one_transient_retry(monkeypatch):
+    calls = []
+
+    def flapping_gai(host, port, *a, **k):
+        calls.append(host)
+        raise socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+
+    monkeypatch.setattr(socket, "getaddrinfo", flapping_gai)
+    with pytest.raises(DNSError):
+        await aresolve_and_validate("flap.example.com", 443)
+    assert len(calls) == 2
+
+
+async def test_aresolve_does_not_retry_nxdomain(monkeypatch):
+    calls = []
+
+    def dead_gai(host, port, *a, **k):
+        calls.append(host)
+        raise socket.gaierror(socket.EAI_NONAME, "nxdomain")
+
+    monkeypatch.setattr(socket, "getaddrinfo", dead_gai)
+    with pytest.raises(DNSError):
+        await aresolve_and_validate("dead.example.com", 443)
+    assert len(calls) == 1
+
+
+async def test_aresolve_never_retries_a_blocked_ip(monkeypatch):
+    calls = []
+
+    def private_gai(host, port, *a, **k):
+        calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", private_gai)
     with pytest.raises(SSRFError):
         await aresolve_and_validate("internal.example.com", 443)
+    assert len(calls) == 1

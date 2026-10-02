@@ -57,7 +57,9 @@ def clamp_timeout(name: str, requested):
 
 # DNS resolution guard (seconds). The SSRF resolver runs off the event loop; this
 # bounds it so a slow/hung resolver can't stall concurrent tool calls on the single worker.
-DNS_TIMEOUT = _int("ARGUS_DNS_TIMEOUT", 5)
+# 8 s per attempt (one retry): 5 s equalled glibc's first-try timeout, so slow-but-
+# healthy resolvers (pasal.id from the VPS) failed before their own retry landed.
+DNS_TIMEOUT = _int("ARGUS_DNS_TIMEOUT", 8)
 
 # Metrics / health
 HEALTH_LATENCY_BUCKETS = _int("ARGUS_HEALTH_LATENCY_BUCKETS", 500)  # max latencies per tool
@@ -65,3 +67,6 @@ HEALTH_LATENCY_BUCKETS = _int("ARGUS_HEALTH_LATENCY_BUCKETS", 500)  # max latenc
 # PyMuPDF is not thread-safe, so every PDF extraction (read_pdf, research) shares this
 # one worker; it still keeps the event loop free while a large PDF is parsed.
 PDF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pdf")
+# Pages extracted when no `pages` range is given, so one huge PDF cannot hold that single
+# worker for minutes; the result reports `pages_capped` and the caller pages through the rest.
+PDF_MAX_PAGES = _int("ARGUS_PDF_MAX_PAGES", 300)

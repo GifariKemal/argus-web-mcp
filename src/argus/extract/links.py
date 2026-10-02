@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from parsel import Selector
@@ -73,3 +74,16 @@ def extract_links_images(
         "links_truncated": len(links) > max_items,
         "images_truncated": len(images) > max_items,
     }
+
+
+def pdf_links(html: str, base_url: str, limit: int = 10) -> list[str]:
+    """First ``limit`` distinct absolute URLs of linked PDFs: a path ending ``.pdf`` or
+    containing ``/download/`` (peraturan.bpk.go.id serves its PDFs from ``/Download/<id>/``)."""
+    out: list[str] = []
+    for link in extract_links_images(html, base_url, max_items=sys.maxsize)["links"]:
+        path = urlsplit(link["url"]).path.lower()
+        if path.endswith(".pdf") or "/download/" in path:
+            out.append(link["url"])
+            if len(out) == limit:
+                break
+    return out

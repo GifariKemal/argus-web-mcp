@@ -60,7 +60,7 @@ Verified P2: 212 offline tests + 3 browser + 2 slow (Docling) green; SSRF 100%; 
 
 ### P2+ enhancements (post-exit-gate, benchmark/competitor-driven)
 After the P2 gate, a 200-scenario benchmark + 3-way comparison (vs Claude Code & Codex native, n=50) + a competitor feature-gap analysis (`docs/05-COMPETITIVE-GAP.md`) drove these additions - all TDD, all green:
-- **Search:** multi-engine redundancy + auto-backoff (throttle resilience), rerank v2, domain filters + safesearch, **local semantic hybrid rerank** (fastembed bge-small; quantified **+27% nDCG on conceptual queries**, A/B `benchmark/semantic_ab.py`).
+- **Search:** multi-engine redundancy + auto-backoff (throttle resilience), rerank v2, domain filters + safesearch, **local semantic hybrid rerank** (fastembed bge-small; quantified **+27% nDCG on conceptual queries**, A/B `benchmark/semantic_ab.py`; replaced in 0.4.21 by multilingual MiniLM, see `benchmark/semantic_id.py`).
 - **New tools:** `research(deep/quick/answer)`, `map_urls`, `find_similar` (Exa-style semantic), `github_search` (repos/code/issues) -> **15 MCP tools** total.
 - **Egress fallback:** stealth-browser -> Wayback archive on connect-fail/block.
 - **Multi-agent QA/QC end-to-end:** 387 offline + browser + slow green; SSRF 100%; ruff clean; security Round-2 (`deploy/SECURITY-AUDIT.md`) no Critical/High; live smoke of all 15 tools (zero crashes). Repo tidied (`chore: tidy repo`).

@@ -1,6 +1,6 @@
 # Argus - MCP Tool Specifications (I/O contracts)
 
-Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-validate before any fetch), cache-aware (content-addressed, per-source TTL), partial-failure tolerant where batched. Errors return a structured `{error, code, detail}` with MCP `isError: true` - never raise to the client. Every tool carries annotations (`readOnlyHint`/`openWorldHint`; `watch`/`unwatch` are the only non-read-only ones), and all fetched fields are untrusted third-party data. Since 0.4.20 every browser connection (redirect hops, subresources, page JS, WebSockets) goes through a loopback egress proxy that applies the same SSRF gate, not just the seed URL. Return shapes are JSON; the content tools (`read`, `scrape`, `batch_read`, `read_pdf`, `research`, `crawl`) declare `anthropic/maxResultSizeChars` = 500000 in their tool `_meta` so clients do not truncate.
+Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-validate before any fetch), cache-aware (content-addressed, per-source TTL), partial-failure tolerant where batched. Errors return a structured `{error, code, detail}` with MCP `isError: true` - never raise to the client. A DNS failure is `dns_failed` (retry-worthy); only a blocked address is `ssrf_blocked`. URLs that recently ended `blocked_by_antibot` fail fast for 10 minutes (negative cache). Parameters with fixed values (`format`, `category`, `time_range`, `mode`, `safesearch`, `report_type`) are JSON-schema enums. Every tool carries annotations (`readOnlyHint`/`openWorldHint`; `watch`/`unwatch` are the only non-read-only ones), and all fetched fields are untrusted third-party data. Since 0.4.20 every browser connection (redirect hops, subresources, page JS, WebSockets) goes through a loopback egress proxy that applies the same SSRF gate, not just the seed URL. Return shapes are JSON; the content tools (`read`, `scrape`, `batch_read`, `read_pdf`, `research`, `crawl`) declare `anthropic/maxResultSizeChars` = 500000 in their tool `_meta` so clients do not truncate.
 
 20 live tools (source of truth: `src/argus/server.py` `TOOLS` tuple): read, search, smart_search, read_pdf, scrape, batch_read, extract_structured, crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search, watch, list_watches, unwatch, forexfactory_calendar, cot_report, news_sentiment_feed.
 
@@ -61,7 +61,7 @@ PDF -> markdown (+ tables).
 ## `scrape(url, wait_for=null, actions=null, screenshot=false, format="markdown", timeout=90)`
 JS-rendered fetch + optional interactions.
 - **in:** `url`, `wait_for` (css selector|ms), `actions` (list of JavaScript snippets run in the page after load, e.g. `["document.querySelector('#more').click()"]`), `screenshot` (bool), `format`.
-- **out:** `{url, final_url, content, format, screenshot?(base64 png), render_path:"browser"}`.
+- **out:** `{url, final_url, content, format, screenshot?, render_path:"browser"}`. Over MCP a screenshot arrives as an `image/png` content block next to the JSON (the base64 is not repeated in the structured result).
 - **backing:** Crawl4AI + Playwright; stealth (Patchright) auto-escalate on bot-block.
 - **errors:** ssrf_blocked, render_failed, blocked_by_antibot.
 

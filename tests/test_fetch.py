@@ -18,6 +18,17 @@ ARTICLE = "<html><body><article>" + ("word " * 80) + "</article></body></html>"
 THIN = "<html><head><script>var x=1</script></head><body><div id=root></div></body></html>"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_ladder_state(monkeypatch):
+    """The negative cache and the archive cool-down are process-wide; isolate each test."""
+    import argus.fetch.core as core
+    import argus.fetch.fallback as fallback
+
+    monkeypatch.setattr(core, "_negative", {})
+    monkeypatch.setattr(fallback, "_off_until", 0.0)
+    monkeypatch.setattr(fallback, "_transport_fails", 0)
+
+
 def _gai(mapping):
     def _f(host, port, *a, **k):
         ip = mapping.get(host, "93.184.216.34")
@@ -366,14 +377,15 @@ async def test_static_timeout_not_capped_without_browser(monkeypatch):
     seen = {}
 
     def h(req):
-        seen.update(req.extensions["timeout"])
+        seen.setdefault(req.url.host, req.extensions["timeout"]["read"])
         raise httpx.TimeoutException("slow origin")
 
     async with _client(h) as c:
         with pytest.raises(FetchError):
             await fetch("http://blocked.example/", client=c, browser=None, timeout=60)
 
-    assert seen["read"] == 60
+    assert seen["blocked.example"] == 60
+    assert seen["archive.org"] == 10  # the archive step is capped on its own
 
 
 async def test_static_connecterror_no_browser_falls_back_to_archive(monkeypatch):

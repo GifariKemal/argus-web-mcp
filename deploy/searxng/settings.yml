@@ -52,8 +52,15 @@ outgoing:
   networks:
     proxied:
       proxies: socks5h://proxy:1080
-  request_timeout: 6.0
-  max_request_timeout: 15.0
+  # SearXNG answers only when its slowest engine does, so this is the floor of every
+  # search. Measured from the VPS (2026-10): healthy engines answer in 0.2-1 s, and at
+  # 6.0 live search p50 was 5.5 s - one stalling engine set the pace. 3.0 leaves 3x the
+  # slowest healthy answer; an engine that misses it is reported unresponsive and benched
+  # by Argus (escalating cooldown in search.py), so it stops costing anything.
+  request_timeout: 3.0
+  # Only caps a client-sent `timeout_limit`, which Argus never sends; kept low so no
+  # caller can quietly bring back the old 6 s wait.
+  max_request_timeout: 5.0
   pool_connections: 100
   pool_maxsize: 20
   retries: 1
@@ -73,7 +80,7 @@ outgoing:
 # Blocked or unreachable from the SURIOTA VPS (Tencent datacenter IP), verified
 # 2026-09-15 with a fresh suspension state: mojeek never answers (25 s with no response
 # at all), duckduckgo returns a CAPTCHA instantly, qwant returns access denied. Leaving
-# them on costs a 6 s timeout per search and an ERROR line per query, and returns
+# them on costs a full request_timeout per search and an ERROR line per query, and returns
 # nothing. Re-enable them behind a residential proxy or on a different network.
 # `startpage` and `marginalia` used to be listed here. Upstream SearXNG no longer ships
 # either engine (this image exposes 264 engines and neither is among them), and SearXNG

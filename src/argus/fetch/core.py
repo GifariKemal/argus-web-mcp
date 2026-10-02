@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from urllib.parse import urlsplit
 
 from ..models import record_stage
@@ -26,6 +27,34 @@ logger = logging.getLogger("argus.fetch")
 ESCALATE_BELOW_CHARS = 200
 STATIC_FALLBACK_TIMEOUT = 5
 
+# URLs whose last plain fetch was refused by an anti-bot wall on every rung. Agents retry
+# the same dead URL and each retry paid the whole ladder again (30-100 s in production).
+# Only the plain read path uses it, and only for blocked_by_antibot: a scrape (render,
+# actions, wait_for, screenshot) is the escalation an agent tries next and must get its
+# chance, and a timeout or transport error is not evidence the URL will fail again.
+NEGATIVE_TTL = 600
+_NEGATIVE_MAX = 512
+_negative: dict[str, tuple[float, str, str]] = {}  # url -> (expires, code, message)
+
+
+def _check_negative(url: str) -> None:
+    hit = _negative.get(url)
+    if hit is None:
+        return
+    expires, code, message = hit
+    if time.monotonic() < expires:
+        record_stage("fetch.negative_cache_hit")
+        raise FetchError(code, f"{message} (cached failure; not retried for up to "
+                               f"{NEGATIVE_TTL // 60} min)")
+    del _negative[url]
+
+
+def _remember_failure(url: str, exc: FetchError) -> None:
+    _negative.pop(url, None)
+    if len(_negative) >= _NEGATIVE_MAX:
+        del _negative[next(iter(_negative))]  # oldest insert first
+    _negative[url] = (time.monotonic() + NEGATIVE_TTL, exc.code, str(exc))
+
 _SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _TAGS = re.compile(r"<[^>]+>")
 
@@ -39,7 +68,11 @@ def _visible_text_len(html: str) -> int:
 async def fetch(url: str, *, throttle=None, **kwargs) -> dict:
     """Fetch ``url`` (see ``_do_fetch``) with an optional per-host courtesy/circuit-breaker
     ``throttle`` (a HostThrottle). None = no throttling (default; tests). Raises SSRFError /
-    FetchError; an open circuit surfaces as FetchError."""
+    FetchError; an open circuit surfaces as FetchError. A URL that recently ended blocked or
+    was walled on every rung fails fast with the same code (negative cache); browser
+    requests (render, actions, wait_for, screenshot) always get a fresh attempt."""
+    if not any(kwargs.get(k) for k in ("render", "screenshot", "actions", "wait_for")):
+        _check_negative(url)
     if throttle is None:
         return await _do_fetch(url, **kwargs)
     host = urlsplit(url).hostname or ""
@@ -81,10 +114,13 @@ async def _do_fetch(
         await _guard(url)  # SSRF resolve-then-validate before navigating (browser tier too)
         record_stage("fetch.forced_browser")
         logger.debug("fetch[%s]: forced browser render", url)
-        r = await browser.render(
-            url, wait_for=wait_for, actions=actions, screenshot=screenshot,
-            timeout=max(timeout, 45),
-        )
+        try:
+            r = await browser.render(
+                url, wait_for=wait_for, actions=actions, screenshot=screenshot,
+                timeout=max(timeout, 45),
+            )
+        except FetchError:
+            raise
         return {
             "final_url": r["final_url"],
             "status": 200,
@@ -138,6 +174,8 @@ async def _do_fetch(
         # 3) all fallbacks exhausted - surface the original transport failure.
         record_stage("fetch.fallback_exhausted")
         logger.warning("fetch[%s]: all fallbacks exhausted; raising transport failure", url)
+        if exc.code == "blocked_by_antibot":
+            _remember_failure(url, exc)
         raise exc
 
     if browser is not None and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS:

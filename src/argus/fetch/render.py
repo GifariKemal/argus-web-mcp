@@ -11,6 +11,7 @@ service came back through scrape.
 from __future__ import annotations
 
 import asyncio
+import re
 from urllib.parse import urlsplit
 
 from ..security.egress import guarded_browser_config
@@ -43,12 +44,43 @@ def _browser_dead(res) -> bool:
     return not getattr(res, "success", True) and any(m in msg for m in _DEAD_MARKERS)
 
 
+# crawl4ai verdicts that mean "thin page", not "wall": a tiny legit page or JS shell is the
+# thin-escalation path's business, and calling it blocked would fail a real read.
+_THIN_REASONS = ("Structural:", "Near-empty")
+# Our generic phrases ("access denied") appear in real docs; only trust them on short pages.
+_SHORT_PAGE = 10_000
+
+
+_TAG_OR_SCRIPT = re.compile(r"<(script|style)[^>]*>.*?</>|<[^>]+>", re.I | re.S)
+_CHALLENGE_TEXT_MAX = 3000  # visible chars; challenge pages carry a few hundred at most
+
+
+def _visible_chars(html: str) -> int:
+    return len(" ".join(_TAG_OR_SCRIPT.sub(" ", html[:200_000]).split()))
+
+
 def _looks_blocked(html: str, status: int | None) -> bool:
-    """Heuristic: does this response look like an anti-bot challenge rather than content?"""
+    """Heuristic: does this response look like an anti-bot challenge rather than content?
+
+    crawl4ai's detector supplies vendor fingerprints at any size (DataDome
+    captcha-delivery, PerimeterX, Incapsula, Kasada, Akamai reference ids, Cloudflare
+    challenge scripts) and generic phrases on error statuses; our markers add the
+    Cloudflare interstitial text a 200 challenge carries, on short pages only.
+    """
     if status in _BLOCK_STATUSES:
         return True
-    head = (html or "")[:4000].lower()
-    return any(m in head for m in _BLOCK_MARKERS)
+    from crawl4ai.antibot_detector import is_blocked  # lazy: crawl4ai costs ~1 s to import
+
+    html = html or ""
+    blocked, reason = is_blocked(status, html)
+    # On a 2xx, a fingerprint/phrase hit must come with a thin page: an article about bot
+    # walls quotes "Pardon Our Interruption" or "Reference #" and is content, while a real
+    # interstitial carries almost no visible text. Error statuses need no corroboration.
+    thin = (status or 200) >= 400 or _visible_chars(html) < _CHALLENGE_TEXT_MAX
+    if blocked and thin and not reason.startswith(_THIN_REASONS):
+        return True
+    head = html[:4000].lower()
+    return len(html) < _SHORT_PAGE and any(m in head for m in _BLOCK_MARKERS)
 
 
 class BrowserPool:
