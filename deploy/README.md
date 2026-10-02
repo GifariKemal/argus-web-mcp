@@ -29,6 +29,8 @@ support.
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
 | Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google,google cse,duckduckgo web,yandex` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
+| SearXNG config | `deploy/searxng/settings.yml` is a bind mount: a deploy that changes it does **not** reach the running SearXNG (git writes a new inode; the container keeps the old one). After such a deploy run `sudo docker restart argus_argus-searxng-1` and check `grep request_timeout /etc/searxng/settings.yml` inside it |
+| Data volume | `argus_argus_argus-data` at `/home/argus/.argus` (uid 10001) since 0.4.21; the old root-owned `argus_argus_argus-cache` is no longer mounted |
 
 Everything is drivable over the panel's REST API (`http://127.0.0.1:3000/api`,
 `Authorization: Bearer <api token>`; the full OpenAPI spec is served at
