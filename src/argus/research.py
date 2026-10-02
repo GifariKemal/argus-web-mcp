@@ -207,9 +207,6 @@ async def _read_one_inner(url, *, fetch_fn, fetch_bytes_fn, client, browser, tim
     )
 
 
-_progress_tasks: set = set()  # keep fire-and-forget progress reports alive until they run
-
-
 async def _deep_bundle(
     candidates, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, concurrency,
     target: int = 0, throttle=None, deadline: float | None = None, on_done=None,
@@ -222,7 +219,8 @@ async def _deep_bundle(
 
     `deadline` (loop time): fetches still running then are cancelled and recorded as
     `budget_exhausted`; the third return value says whether that happened.
-    `on_done(rec)` (async, optional) is awaited as each source finishes.
+    `on_done(rec)` (optional) is called as each source finishes and returns an
+    awaitable, which is sent in the background so a slow client cannot hold the source.
     """
     fetch_fn = fetch_fn or _default_fetch
     fetch_bytes_fn = fetch_bytes_fn or _default_fetch_bytes
@@ -234,6 +232,8 @@ async def _deep_bundle(
     loop = asyncio.get_running_loop()
     exhausted = False
 
+    reports: set = set()  # in-flight progress sends, flushed before returning
+
     async def _tracked(url):
         rec = await _read_one(
             url, fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn, client=client,
@@ -242,9 +242,7 @@ async def _deep_bundle(
         if on_done is not None:
             # Fire and forget: a stalled client write must not delay this source or let a
             # deadline cancel it after it was already read.
-            task = asyncio.ensure_future(on_done(rec))
-            _progress_tasks.add(task)
-            task.add_done_callback(_progress_tasks.discard)
+            reports.add(asyncio.ensure_future(on_done(rec)))
         return rec
 
     while i < len(candidates) and len(sources) < want and not exhausted:
@@ -269,6 +267,8 @@ async def _deep_bundle(
                 sources.append({k: v for k, v in rec.items() if k != "ok"})
             else:
                 failed.append({"url": rec["url"], "error": rec["error"]})
+    if reports:  # a report that lands after the result is useless; give them a moment
+        await asyncio.wait(reports, timeout=2)
     return sources, failed, exhausted
 
 
@@ -403,11 +403,13 @@ async def research(
         except Exception as exc:  # noqa: BLE001 - a progress sink must never sink research
             logger.warning("research progress callback failed: %s", exc)
 
-    async def _source_done(rec: dict) -> None:
+    def _source_done(rec: dict):
+        # The count is taken now, as the source finishes; only the send is deferred.
+        # Counting inside the deferred task let two reports read the same total.
         nonlocal good
         good += rec["ok"]
         status = "read" if rec["ok"] else f"failed ({rec['error']})"
-        await _report(good, f"{status}: {rec['url']}")
+        return _report(good, f"{status}: {rec['url']}")
 
     await _report(want if mode == "quick" else 0, f"search: {len(candidates)} candidates")
 

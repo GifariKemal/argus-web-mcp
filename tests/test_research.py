@@ -1216,8 +1216,12 @@ async def test_progress_called_after_search_and_each_source():
         fetch_fn=_fake_fetch(html),
     )
     assert calls[0][:2] == (0, 2) and calls[0][2].startswith("search:")
-    assert sorted(c[:2] for c in calls[1:]) == [(0, 2), (1, 2)]
-    assert len(calls) == 3
+    # Sources finish in either order, so check the cumulative count, not the order:
+    # one report per source, never decreasing, ending at the one good source.
+    dones = [c[0] for c in calls[1:]]
+    assert len(calls) == 3 and dones == sorted(dones) and dones[-1] == 1
+    kinds = sorted(c[2].split(" ")[0].rstrip(":") for c in calls[1:])
+    assert kinds == ["failed", "read"]
 
 
 async def test_failing_progress_callback_is_ignored():
