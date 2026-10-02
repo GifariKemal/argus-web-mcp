@@ -104,8 +104,11 @@ def test_empty_and_malformed_html_no_raise():
         "links_truncated": False,
         "images_truncated": False,
     }
-    # malformed / unclosed tags must not raise
-    res = extract_links_images("<a href='/x'>oops<img src='/y.png'", BASE)
+    # malformed / unclosed tags must not raise. The <img> is closed: a tag cut off at EOF
+    # is dropped per HTML5 (eof-in-tag), and libxml2 builds differ on it (Linux drops it,
+    # the Windows wheel kept it), so only the unclosed <a> is the malformed part here.
+    assert extract_links_images("<a href='/x'>oops<img src='/y.png'", BASE)["links"]
+    res = extract_links_images("<a href='/x'>oops<img src='/y.png'>", BASE)
     assert [link["url"] for link in res["links"]] == ["https://example.com/x"]
     assert [img["src"] for img in res["images"]] == ["https://example.com/y.png"]
 
