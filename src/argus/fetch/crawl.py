@@ -170,9 +170,13 @@ async def deep_crawl(
         else:
             results = await _run(crawler, seed_url, cfg)
     else:
-        from crawl4ai import AsyncWebCrawler, BrowserConfig
+        from crawl4ai import AsyncWebCrawler
 
-        crawler = AsyncWebCrawler(config=BrowserConfig(headless=True, verbose=False))
+        from ..security.egress import guarded_browser_config
+
+        crawler = AsyncWebCrawler(
+            config=await guarded_browser_config(headless=True, verbose=False)
+        )
         await crawler.start()
         try:
             results = await _run(crawler, seed_url, cfg)

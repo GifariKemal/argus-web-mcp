@@ -315,6 +315,35 @@ async def test_filters_emptying_results_raises_no_results():
     assert exc.value.code == "no_results"
 
 
+@respx.mock
+async def test_filters_sent_server_side_to_both_backends():
+    s2 = respx.get(_S2_SEARCH).mock(return_value=httpx.Response(200, json={"data": []}))
+    cr = respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": []}})
+    )
+    async with _client() as client:
+        with pytest.raises(ScholarError):
+            await scholar_search("x", year_from=2021, open_access=True, client=client)
+    s2_params = dict(s2.calls.last.request.url.params)
+    assert s2_params["year"] == "2021-"
+    assert s2_params["openAccessPdf"] == ""
+    cr_params = dict(cr.calls.last.request.url.params)
+    assert cr_params["filter"] == "from-pub-date:2021,has-full-text:true"
+
+
+@respx.mock
+async def test_no_filters_sends_no_filter_params():
+    s2 = respx.get(_S2_SEARCH).mock(return_value=httpx.Response(200, json={"data": []}))
+    cr = respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": []}})
+    )
+    async with _client() as client:
+        with pytest.raises(ScholarError):
+            await scholar_search("x", client=client)
+    assert not {"year", "openAccessPdf"} & set(s2.calls.last.request.url.params)
+    assert "filter" not in cr.calls.last.request.url.params
+
+
 # --------------------------------------------------------------------------- #
 # headers: S2 key + User-Agent + CrossRef mailto
 # --------------------------------------------------------------------------- #
@@ -377,9 +406,10 @@ async def test_builds_and_closes_own_client(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (pinned, port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai)
-    respx.get(f"https://{pinned}/graph/v1/paper/search").mock(
-        return_value=httpx.Response(200, json={"data": [_s2_paper(1)]})
-    )
+    # The SSRF transport either rewrites the URL to the pinned IP or pins at connect
+    # time and keeps the hostname; mock both so this test only checks client ownership.
+    for url in (f"https://{pinned}/graph/v1/paper/search", _S2_SEARCH):
+        respx.get(url).mock(return_value=httpx.Response(200, json={"data": [_s2_paper(1)]}))
 
     closed = {}
     real_build = scholar_search.__globals__["build_safe_async_client"]

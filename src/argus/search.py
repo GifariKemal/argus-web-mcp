@@ -55,7 +55,7 @@ _ENGINE_COOLDOWN = float(os.getenv("ARGUS_ENGINE_COOLDOWN", "120"))
 _MIN_FANOUT_ENGINES = 2  # never bench so many that fewer than this remain in the fan-out
 _engine_cooldowns: dict[str, float] = {}  # engine name -> monotonic deadline it may be used again
 _DEFAULT_LANG_ENV = "ARGUS_DEFAULT_SEARCH_LANG"
-_DEFAULT_LANG = "en"
+_MAX_SITE_TERMS = 5  # include_domains pushed into the query as site: terms (rest: post-filter)
 _MIN_KEEP = 3  # safety floor: never drop below this many of the backend's results
 _TITLE_WEIGHT = 2.0  # title-token coverage counts double vs snippet coverage
 # Recency boost (rerank v2): a bounded ADDITIVE bump for results carrying a `published`
@@ -528,12 +528,25 @@ def _reset_engine_cooldowns() -> None:
 
 
 def _default_lang() -> str | None:
-    """Default SearXNG language for stable relevance; empty env disables it."""
-    raw = os.getenv(_DEFAULT_LANG_ENV)
-    if raw is None:
-        return _DEFAULT_LANG
-    raw = raw.strip()
-    return raw or None
+    """Deployment-wide SearXNG language, if set. Unset sends no `language`, so SearXNG's
+    own `default_lang: auto` detects it per query - a forced `en` buried Indonesian
+    local results under English ones."""
+    return (os.getenv(_DEFAULT_LANG_ENV) or "").strip() or None
+
+
+_HOSTNAME_RE = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)*")
+
+
+def _site_query(q: str, include: list[str] | None) -> str:
+    """Prefix ``site:`` terms so the engines search inside the allowlist; the post-filter
+    alone threw away most of a general result page and ended in no_results."""
+    domains = [d for d in (d.strip().lower().lstrip(".") for d in include or []) if d]
+    # Hostnames only: anything else would smuggle engine operators into the query.
+    domains = [d for d in domains if _HOSTNAME_RE.fullmatch(d)][:_MAX_SITE_TERMS]
+    if not domains:
+        return q
+    sites = " OR ".join(f"site:{d}" for d in domains)
+    return f"{sites} {q}" if len(domains) == 1 else f"({sites}) {q}"
 
 
 def _is_low_relevance(query: str, results: list[dict]) -> bool:
@@ -562,6 +575,8 @@ async def _search_backend(
     base_url: str,
     client: "httpx.AsyncClient",
     retries: int,
+    *,
+    auto_engines: bool = False,
 ) -> list[dict]:
     """Run the paginated search (with retry-on-throttle) against ONE SearXNG instance.
 
@@ -572,6 +587,8 @@ async def _search_backend(
     results: list[dict] = []
     unresponsive: list = []
     for attempt in range(retries + 1):
+        if auto_engines:  # per attempt: the previous one may have just benched engines
+            params = {**params, "engines": ",".join(_healthy_engines(_DEFAULT_ENGINES))}
         results, unresponsive = await _search_once(q, count, params, base_url, client)
         if results or not unresponsive:
             break  # got results, or a genuine no_results (don't retry)
@@ -620,7 +637,8 @@ async def search(
 
     Domain filters: ``include_domains`` keeps only results whose host suffix-matches one
     of the given domains (``example.com`` matches ``www.example.com``); ``exclude_domains``
-    drops matching hosts. Both are POST-FILTERS applied to the mapped results BEFORE
+    drops matching hosts. Include domains are also sent to SearXNG as ``site:`` terms (up
+    to ``_MAX_SITE_TERMS``); both stay POST-FILTERS applied to the mapped results BEFORE
     rerank/``[:count]``. If ``include_domains`` filtering leaves zero results, that is a
     legitimate ``no_results`` (distinct from a transient throttle).
 
@@ -635,11 +653,10 @@ async def search(
     q = " ".join(query) if isinstance(query, list) else query
     categories = category if category in _VALID_CATEGORIES else "general"
 
-    params = {"q": q, "format": "json", "categories": categories}
+    params = {"q": _site_query(q, include_domains), "format": "json", "categories": categories}
+    auto_engines = engines is None and categories == "general"
     if engines is not None:
         params["engines"] = ",".join(engines)
-    elif categories == "general":
-        params["engines"] = ",".join(_healthy_engines(_DEFAULT_ENGINES))
     if time_range:
         params["time_range"] = time_range
     effective_lang = lang if lang is not None else _default_lang()
@@ -662,7 +679,9 @@ async def search(
     fb_owns = False
     try:
         try:
-            results = await _search_backend(q, count, params, base_url, client, retries)
+            results = await _search_backend(
+                q, count, params, base_url, client, retries, auto_engines=auto_engines
+            )
         except SearchError as primary_exc:
             # A genuine empty result means the backend WORKED - never fail over for that.
             if primary_exc.code == "no_results":
@@ -684,7 +703,9 @@ async def search(
             for fb in fallbacks:
                 try:
                     validate_url(fb)
-                    results = await _search_backend(q, count, params, fb, fb_client, retries)
+                    results = await _search_backend(
+                        q, count, params, fb, fb_client, retries, auto_engines=auto_engines
+                    )
                 except (SearchError, SSRFError):
                     results = None
                     continue
@@ -718,7 +739,10 @@ async def search(
     # available (A/B-validated +14.3% nDCG@5, +27.3% on conceptual queries); 'on'/'off' force it.
     # Ops kill-switch + in-prod A/B lever; None ('auto') preserves the existing auto behavior.
     _sr = {"on": True, "off": False}.get(os.getenv("ARGUS_SEMANTIC_RERANK", "auto").strip().lower())
-    results = rerank(q, results, recency=recency, semantic_rerank=_sr)[:count]
+    # Off the event loop: the semantic blend embeds every result (CPU-bound).
+    results = (await asyncio.to_thread(
+        rerank, q, results, recency=recency, semantic_rerank=_sr
+    ))[:count]
 
     # Relevance guard: rerank keeps >= _MIN_KEEP results even when the backend returned ONLY
     # off-topic pages (SearXNG engine-suspension: all quality engines CAPTCHA on a datacenter IP
@@ -772,10 +796,10 @@ async def search(
                     rescue_results = await _search_backend(
                         q, count, rescue_params, backend, client, retries
                     )
-                rescue_ranked = rerank(
-                    q, rescue_results, recency=routed == "news" or bool(time_range),
+                rescue_ranked = (await asyncio.to_thread(
+                    rerank, q, rescue_results, recency=routed == "news" or bool(time_range),
                     semantic_rerank=_sr,
-                )[:count]
+                ))[:count]
                 if not _is_low_relevance(q, rescue_ranked):
                     results = rescue_ranked
                     if degraded_reason == "low_relevance":

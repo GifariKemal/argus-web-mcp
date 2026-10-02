@@ -1107,3 +1107,42 @@ async def test_deep_unexpected_exception_is_isolated_per_source():
     assert {f["url"]: f["error"] for f in out["failed"]} == {
         "https://example.com/2": "extract_failed"
     }
+
+
+# --------------------------------------------------------------------------- #
+# Time budget: one slow source is bounded, and the overall deadline returns     #
+# the sources already read instead of losing them to the caller's timeout.     #
+# --------------------------------------------------------------------------- #
+def _slow_fetch(slow_url):
+    fast = _fake_fetch({f"https://example.com/{i}": ARTICLE_HTML for i in range(1, 5)})
+
+    async def _fetch(url, **kw):
+        if url == slow_url:
+            await asyncio.sleep(10)
+        return await fast(url, **kw)
+
+    return _fetch
+
+
+async def test_deep_slow_source_bounded_per_source():
+    out = await research(
+        "q", max_sources=3, timeout=3,  # per-source bound = 1 s, deadline 2.7 s
+        search_fn=_fake_search([_search_result(i) for i in range(1, 5)]),
+        fetch_fn=_slow_fetch("https://example.com/2"),
+    )
+    assert out["count"] == 3  # backfilled from the spare candidate
+    assert out["failed"] == [{"url": "https://example.com/2", "error": "timeout"}]
+    assert out["degraded"] is False
+
+
+async def test_deep_deadline_returns_partial_bundle(monkeypatch):
+    monkeypatch.setattr("argus.research._DEADLINE_FRACTION", 0.05)  # deadline 0.3 s
+    out = await research(
+        "q", max_sources=3, timeout=6,  # per-source bound 2 s, longer than the deadline
+        search_fn=_fake_search([_search_result(i) for i in range(1, 5)]),
+        fetch_fn=_slow_fetch("https://example.com/2"),
+    )
+    assert [s["url"] for s in out["sources"]] == ["https://example.com/1", "https://example.com/3"]
+    assert out["failed"] == [{"url": "https://example.com/2", "error": "budget_exhausted"}]
+    assert out["degraded"] is True
+    assert out["degraded_reason"] == "budget_exhausted"

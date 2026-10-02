@@ -176,6 +176,11 @@ async def _try_s2(client, base, query, limit, year_from, open_access):
     return None immediately without retrying.
     """
     params = {"query": query, "limit": limit, "fields": _S2_FIELDS}
+    # Filter server-side so `limit` counts matching papers; _apply_filters stays as the net.
+    if year_from is not None:
+        params["year"] = f"{year_from}-"
+    if open_access:
+        params["openAccessPdf"] = ""  # S2 treats it as a valueless presence flag
     attempt = 0
     while True:
         try:
@@ -199,6 +204,11 @@ async def _try_s2(client, base, query, limit, year_from, open_access):
 async def _try_crossref(client, base, query, limit, year_from, open_access):
     """Return mapped+filtered CrossRef results, or None on any failure."""
     params = {"query": query, "rows": limit}
+    filters = [f"from-pub-date:{year_from}"] if year_from is not None else []
+    if open_access:
+        filters.append("has-full-text:true")
+    if filters:
+        params["filter"] = ",".join(filters)
     try:
         resp = await client.get(
             f"{base}/works", params=params, headers=_headers("crossref")
@@ -224,8 +234,9 @@ async def scholar_search(
     """Structured academic-paper search.
 
     Tries Semantic Scholar first; on any S2 failure / 429 / empty result, falls back to
-    CrossRef. ``year_from`` drops papers older than that year (client-side); ``open_access``
-    keeps only items that carry an open-access PDF. ``limit`` is capped at 100.
+    CrossRef. ``year_from`` drops papers older than that year; ``open_access`` keeps only
+    items that carry an open-access PDF. Both are sent to the backend as filters and
+    re-applied client-side. ``limit`` is capped at 100.
 
     S2 HTTP 429 is retried up to _S2_MAX_RETRIES times with exponential backoff before
     falling back to CrossRef.  Results are relevance-reranked by query/title token-overlap

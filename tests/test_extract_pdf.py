@@ -108,34 +108,36 @@ def test_text_mode_does_not_populate_tables():
     assert res["tables"] == []
 
 
-def test_text_mode_disables_pymupdf4llm_table_and_graphics_detection(two_page_pdf, monkeypatch):
+def test_pymupdf4llm_engine_reported_and_pages_without_text_counted(monkeypatch):
+    # the layout engine ignores table_strategy/ignore_graphics, so they are not passed
     seen = {}
 
     def fake_to_markdown(doc, **kwargs):
         seen.update(kwargs)
-        return [{"text": "fast text path"}]
+        return [{"text": "page one"}, {"text": "  \n"}]
 
     monkeypatch.setattr("argus.extract.pdf.pymupdf4llm.to_markdown", fake_to_markdown)
-    res = extract_pdf(two_page_pdf, mode="text")
+    monkeypatch.setattr("argus.extract.pdf.pymupdf4llm._use_layout", True, raising=False)
+    res = extract_pdf(_make_pdf(["PAGEONE", ""]), mode="text")
 
-    assert res["content"] == "fast text path"
-    assert seen["table_strategy"] is None
-    assert seen["ignore_graphics"] is True
+    assert res["content"] == "page one"
+    assert res["metadata"]["engine"] == "pymupdf4llm-layout"
+    assert res["metadata"]["pages_without_text"] == 1
+    assert "table_strategy" not in seen and "ignore_graphics" not in seen
 
 
-def test_tables_mode_keeps_pymupdf4llm_table_detection(two_page_pdf, monkeypatch):
-    seen = {}
+def test_pymupdf4llm_installed_runs_layout_engine():
+    # guards the comment in extract_pdf: if this flips, table_strategy matters again
+    import pymupdf4llm
 
-    def fake_to_markdown(doc, **kwargs):
-        seen.update(kwargs)
-        return [{"text": "table-aware path"}]
+    assert pymupdf4llm._use_layout is True
+    assert extract_pdf(_make_pdf(["PAGEONE"]))["metadata"]["engine"] == "pymupdf4llm-layout"
 
-    monkeypatch.setattr("argus.extract.pdf.pymupdf4llm.to_markdown", fake_to_markdown)
-    res = extract_pdf(two_page_pdf, mode="tables")
 
-    assert res["content"] == "table-aware path"
-    assert seen["table_strategy"] == "lines_strict"
-    assert seen["ignore_graphics"] is False
+def test_fast_text_path_counts_pages_without_text():
+    res = extract_pdf(_make_pdf(["text"] * 20 + [""]), mode="text")
+    assert res["metadata"]["engine"] == "pymupdf-fast-text"
+    assert res["metadata"]["pages_without_text"] == 1
 
 
 def test_large_text_mode_uses_fast_plain_text_path(monkeypatch):

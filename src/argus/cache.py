@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .models import record_stage
+
 # Per-category TTL seconds. Categories come from tools: news, docs, trading, pdf, search, general.
 DEFAULT_TTLS = {
     "news": 900,
@@ -93,7 +95,9 @@ class Cache:
             "SELECT payload, blob_path, created FROM entries WHERE key=?", (key,)
         ).fetchone()
         if row is None or (time.time() - row[2]) >= ttl_seconds:
+            record_stage("cache.miss")
             return None
+        record_stage("cache.hit")
         return self._load(key, row)
 
     def get_stale(self, key: str) -> dict | None:

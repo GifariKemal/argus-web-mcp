@@ -301,7 +301,9 @@ async def test_params_present():
 
 
 @respx.mock
-async def test_default_language_param_present_when_unset():
+async def test_no_language_param_when_unset(monkeypatch):
+    # No forced default: SearXNG's own default_lang (auto) detects the query language.
+    monkeypatch.delenv("ARGUS_DEFAULT_SEARCH_LANG", raising=False)
     captured = {}
 
     def responder(request):
@@ -313,7 +315,7 @@ async def test_default_language_param_present_when_unset():
     await search("q", base_url=BASE)
 
     assert "time_range" not in captured
-    assert captured["language"] == ["en"]
+    assert "language" not in captured
     assert captured["categories"] == ["general"]
 
 
@@ -637,6 +639,24 @@ async def test_retry_succeeds_on_second_attempt(monkeypatch):
 
 
 @respx.mock
+async def test_retry_drops_engines_benched_by_previous_attempt(monkeypatch):
+    monkeypatch.setattr("argus.search.asyncio.sleep", AsyncMock())
+    seen = []
+
+    def responder(request):
+        seen.append(_query_of(request)["engines"][0].split(","))
+        if len(seen) == 1:
+            return httpx.Response(200, json=_throttled())  # benches brave
+        return httpx.Response(200, json=_page([_result(1)]))
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    await search("q", base_url=BASE, retries=2, count=1)
+    assert "brave" in seen[0]
+    assert "brave" not in seen[1]
+
+
+@respx.mock
 async def test_genuine_no_results_does_not_retry(monkeypatch):
     sleep = AsyncMock()
     monkeypatch.setattr("argus.search.asyncio.sleep", sleep)
@@ -850,6 +870,27 @@ async def test_include_domains_drops_hostless_and_empty_domain_noop():
     out = await search("esp claw", base_url=BASE, include_domains=["", "github.com"])
     hosts = {urlsplit(r["url"]).netloc for r in out["results"]}
     assert hosts == {"github.com"}  # hostless dropped, empty domain matched nothing
+
+
+@pytest.mark.parametrize(
+    ("domains", "sent"),
+    [
+        (["github.com"], "site:github.com esp claw"),
+        ([" .GitHub.com", ""], "site:github.com esp claw"),
+        (["a.com", "b.org"], "(site:a.com OR site:b.org) esp claw"),
+        ([f"d{i}.com" for i in range(7)],
+         "(" + " OR ".join(f"site:d{i}.com" for i in range(5)) + ") esp claw"),
+        ([""], "esp claw"),
+    ],
+)
+@respx.mock
+async def test_include_domains_sent_as_site_terms(domains, sent):
+    route = respx.get(f"{BASE}/search").mock(return_value=httpx.Response(200, json=_dom_page()))
+    try:
+        await search("esp claw", base_url=BASE, include_domains=domains)
+    except SearchError:
+        pass  # the post-filter may legitimately empty the canned page
+    assert _query_of(route.calls[0].request)["q"] == [sent]
 
 
 @respx.mock
@@ -1695,7 +1736,7 @@ async def test_low_relevance_general_search_rescues_to_routed_category(monkeypat
 async def test_category_rescue_preserves_backend_failover_degraded(monkeypatch):
     monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
 
-    async def fake_backend(q, count, params, base_url, client, retries):
+    async def fake_backend(q, count, params, base_url, client, retries, **_kw):
         if base_url == BASE:
             raise SearchError("search_backend_down", "primary down")
         if params["categories"] == "general":

@@ -26,6 +26,7 @@ import logging
 import os
 from urllib.parse import urlsplit
 
+from .config import PDF_EXECUTOR
 from .extract.article import extract_article
 from .extract.pdf import extract_pdf
 from .fetch.core import fetch as _default_fetch
@@ -44,6 +45,13 @@ ANSWER_SOURCE_BUDGET = 4000
 # Default 30. Overridable at runtime via ARGUS_MIN_CONTENT_WORDS (see _min_content_words)
 # so the floor can be tuned per-deployment without a code change.
 MIN_CONTENT_WORDS = 30
+# Per-source wall clock: one slow page (render escalation, a huge PDF) must not eat the
+# whole research budget. min(_SOURCE_CAP, timeout / 2) seconds each; 50 s leaves room for
+# the browser tier, which fetch/core gives at least 45 s.
+_SOURCE_CAP = 50.0
+# Stop launching/awaiting fetches at this fraction of `timeout`, so research returns the
+# sources it already has instead of the caller's own timeout discarding all of them.
+_DEADLINE_FRACTION = 0.9
 
 
 def _min_content_words() -> int:
@@ -131,50 +139,67 @@ async def _read_one(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, 
     """
     async with sem:
         try:
-            validate_url(url)
-            if _is_pdf_url(url):
-                final_url, data, _ctype = await fetch_bytes_fn(
-                    url, client=client, timeout=timeout
+            async with asyncio.timeout(timeout):
+                return await _read_one_inner(
+                    url, fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn, client=client,
+                    browser=browser, timeout=timeout, throttle=throttle,
                 )
-                pdf = extract_pdf(data, None, "text")
-                content = pdf["content"]
-                return _gate_content(
-                    url, title=(pdf.get("metadata") or {}).get("title") or url,
-                    content=content, word_count=len(content.split()),
-                    final_url=final_url, render_path="pdf",
-                )
-            # Pass throttle only when set: the real fetch (core.fetch) accepts it, but injected
-            # test/fake fetch_fns don't take a throttle kwarg. None (tests) => no-op, stays green.
-            _extra = {"throttle": throttle} if throttle is not None else {}
-            res = await fetch_fn(url, client=client, browser=browser, timeout=timeout, **_extra)
-            art = extract_article(res["html"], res["final_url"])
-        except (SSRFError, FetchError) as exc:
-            return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
-        except ValueError:  # extract_pdf('not_pdf'): a non-PDF body at a .pdf URL
-            return {"url": url, "ok": False, "error": "not_pdf"}
-        except Exception as exc:  # noqa: BLE001 - per-source isolation (module contract):
-            # one source's unexpected extractor/transport error must never kill the bundle.
-            logger.warning(
-                "research source %s failed unexpectedly: %s: %s", url, type(exc).__name__, exc
+        except TimeoutError:
+            return {"url": url, "ok": False, "error": "timeout"}
+
+
+async def _read_one_inner(url, *, fetch_fn, fetch_bytes_fn, client, browser, timeout,
+                          throttle) -> dict:
+    try:
+        validate_url(url)
+        if _is_pdf_url(url):
+            final_url, data, _ctype = await fetch_bytes_fn(
+                url, client=client, timeout=timeout
             )
-            return {"url": url, "ok": False, "error": "extract_failed"}
-        return _gate_content(
-            url, title=art["title"], content=art["content"],
-            word_count=art["metadata"]["word_count"], final_url=res["final_url"],
-            render_path=res.get("render_path"),
-            published=art["metadata"].get("published"),
+            pdf = await asyncio.get_running_loop().run_in_executor(
+                PDF_EXECUTOR, extract_pdf, data, None, "text"  # PyMuPDF: one thread
+            )
+            content = pdf["content"]
+            return _gate_content(
+                url, title=(pdf.get("metadata") or {}).get("title") or url,
+                content=content, word_count=len(content.split()),
+                final_url=final_url, render_path="pdf",
+            )
+        # Pass throttle only when set: the real fetch (core.fetch) accepts it, but injected
+        # test/fake fetch_fns don't take a throttle kwarg. None (tests) => no-op, stays green.
+        _extra = {"throttle": throttle} if throttle is not None else {}
+        res = await fetch_fn(url, client=client, browser=browser, timeout=timeout, **_extra)
+        art = await asyncio.to_thread(extract_article, res["html"], res["final_url"])
+    except (SSRFError, FetchError) as exc:
+        return {"url": url, "ok": False, "error": getattr(exc, "code", "fetch_failed")}
+    except ValueError:  # extract_pdf('not_pdf'): a non-PDF body at a .pdf URL
+        return {"url": url, "ok": False, "error": "not_pdf"}
+    except Exception as exc:  # noqa: BLE001 - per-source isolation (module contract):
+        # one source's unexpected extractor/transport error must never kill the bundle.
+        logger.warning(
+            "research source %s failed unexpectedly: %s: %s", url, type(exc).__name__, exc
         )
+        return {"url": url, "ok": False, "error": "extract_failed"}
+    return _gate_content(
+        url, title=art["title"], content=art["content"],
+        word_count=art["metadata"]["word_count"], final_url=res["final_url"],
+        render_path=res.get("render_path"),
+        published=art["metadata"].get("published"),
+    )
 
 
 async def _deep_bundle(
     candidates, *, fetch_fn, fetch_bytes_fn, client, browser, timeout, concurrency,
-    target: int = 0, throttle=None,
-) -> tuple[list, list]:
+    target: int = 0, throttle=None, deadline: float | None = None,
+) -> tuple[list, list, bool]:
     """Fetch+extract `candidates` in waves until `target` good sources collected.
 
     `target=0` (or target >= len(candidates)) fetches the whole list in one wave
     (original behaviour).  When target > 0 and the first wave yields enough good
     sources, spare candidates are left untouched (no wasted fetches).
+
+    `deadline` (loop time): fetches still running then are cancelled and recorded as
+    `budget_exhausted`; the third return value says whether that happened.
     """
     fetch_fn = fetch_fn or _default_fetch
     fetch_bytes_fn = fetch_bytes_fn or _default_fetch_bytes
@@ -183,25 +208,38 @@ async def _deep_bundle(
     failed: list[dict] = []
     i = 0
     want = target or len(candidates)  # 0 -> fetch all
-    while i < len(candidates) and len(sources) < want:
+    loop = asyncio.get_running_loop()
+    exhausted = False
+    while i < len(candidates) and len(sources) < want and not exhausted:
         wave = candidates[i : i + (want - len(sources))]
         i += len(wave)
-        records = await asyncio.gather(
-            *(
-                _read_one(
-                    r["url"], fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
-                    client=client, browser=browser, timeout=timeout, sem=sem,
-                    throttle=throttle,
-                )
-                for r in wave
-            )
-        )
-        for r in records:
-            if r["ok"]:
-                sources.append({k: v for k, v in r.items() if k != "ok"})
+        tasks = [
+            asyncio.ensure_future(_read_one(
+                r["url"], fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
+                client=client, browser=browser, timeout=timeout, sem=sem,
+                throttle=throttle,
+            ))
+            for r in wave
+        ]
+        left = None if deadline is None else max(deadline - loop.time(), 0)
+        try:
+            _done, pending = await asyncio.wait(tasks, timeout=left)
+        finally:
+            # Deadline or caller cancellation: stop the stragglers and wait for them, so
+            # none keeps a browser permit or throttle slot after research returns.
+            stragglers = [t for t in tasks if not t.done()]
+            for t in stragglers:
+                t.cancel()
+            await asyncio.gather(*stragglers, return_exceptions=True)
+        exhausted = bool(pending)
+        for r, t in zip(wave, tasks, strict=True):
+            rec = {"url": r["url"], "ok": False, "error": "budget_exhausted"}
+            rec = rec if t in pending else t.result()
+            if rec["ok"]:
+                sources.append({k: v for k, v in rec.items() if k != "ok"})
             else:
-                failed.append({"url": r["url"], "error": r["error"]})
-    return sources, failed
+                failed.append({"url": rec["url"], "error": rec["error"]})
+    return sources, failed, exhausted
 
 
 # Untrusted-content guard: web data inside <source> tags is data, NOT instructions.
@@ -290,6 +328,10 @@ async def research(
     capped source gains `truncated=True` + `full_chars=<orig len>` and keeps its original
     `word_count`. `None` (default) returns FULL content, identical to today.
 
+    `timeout` is the whole call's budget: each source fetch gets min(50, timeout/2) s, and
+    at 90% of it the sources already read are returned with `degraded_reason`
+    `budget_exhausted` (the rest land in `failed`).
+
     Raises ValueError on an unknown mode and SearchError if the search backend
     fails. In answer mode, raises RuntimeError when no LLM is available and none
     is injected. `search_fn`/`fetch_fn`/`llm_fn` are injection seams for testing.
@@ -300,6 +342,7 @@ async def research(
         )
 
     search_fn = search_fn or _default_search
+    deadline = asyncio.get_running_loop().time() + timeout * _DEADLINE_FRACTION
     # Overfetch *3 (not *2): every wave can have low_content/fetch failures, so a wider
     # candidate pool gives backfill more spares to still reach max_sources good sources.
     found = await search_fn(query, count=max_sources * 3)  # overfetch for dedup/drop/backfill
@@ -337,11 +380,14 @@ async def research(
             )
         llm_fn = extract_llm
 
-    sources, failed = await _deep_bundle(
+    sources, failed, exhausted = await _deep_bundle(
         candidates, fetch_fn=fetch_fn, fetch_bytes_fn=fetch_bytes_fn,
-        client=client, browser=browser, timeout=timeout, concurrency=concurrency,
-        target=max_sources, throttle=throttle,
+        client=client, browser=browser, timeout=min(_SOURCE_CAP, timeout / 2),
+        concurrency=concurrency, target=max_sources, throttle=throttle, deadline=deadline,
     )
+    if exhausted:
+        _deg["degraded"] = True
+        _deg.setdefault("degraded_reason", "budget_exhausted")
 
     if mode == "deep":
         _apply_char_cap(sources, max_chars_per_source)

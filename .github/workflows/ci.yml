@@ -1,0 +1,20 @@
+# Offline suite on every push and PR, against the exact versions in requirements.lock -
+# the same ones the Easypanel image installs - so green here means green for prod.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python 3.12
+      - run: uv pip install --require-hashes -r requirements.lock
+      - run: uv pip install --no-deps -e . && uv pip install pytest pytest-asyncio pytest-cov respx ruff
+      - run: uv run --no-sync ruff check src tests
+      - run: uv run --no-sync pytest -q -m "not browser and not slow and not network"

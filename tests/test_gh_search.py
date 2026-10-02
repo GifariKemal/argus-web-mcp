@@ -382,7 +382,8 @@ async def test_builds_and_closes_own_client(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (pinned, port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai)
-    respx.get(f"https://{pinned}/search/repositories").mock(
+    # The URL keeps the hostname (the IP is pinned at connect time, below respx).
+    respx.get(f"{GH_API}/search/repositories").mock(
         return_value=httpx.Response(200, json={"total_count": 1, "items": [_repo_item(1)]})
     )
     closed = {}

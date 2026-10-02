@@ -1,20 +1,18 @@
 [project]
 name = "argus"
-version = "0.4.13"
+version = "0.4.20"
 description = "Argus - SURIOTA self-hosted web fetch/scrape/search MCP server"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "fastmcp>=2.11",
+    "fastmcp>=4.0.10,<5",
     "crawl4ai>=0.9.0",
     "trafilatura>=2.0",
     "readability-lxml>=0.8.1",
-    # NOTE: lxml is held at <6 by crawl4ai 0.9.0 (latest). lxml 5.4.0 carries PYSEC-2026-87
-    # (XXE/local-file-read), but it is NOT reachable here: Argus only parses HTML
-    # (parsel Selector(text=...) HTML mode, lxml.html via readability/trafilatura) - no
-    # untrusted-XML parse with entity resolution. Bump to >=6.1.0 when crawl4ai relaxes the pin.
     "markdownify>=0.13",
     "httpx>=0.27",
-    "pymupdf4llm>=0.0.17",
+    # >=1.28: it pulls pymupdf-layout, whose 1.27.x builds were PolyForm NonCommercial;
+    # 1.28.x is AGPL-3.0 like pymupdf itself. Exact versions live in requirements.lock.
+    "pymupdf4llm>=1.28",
     "parsel>=1.9",
     "pydantic>=2.7",
     "pyyaml>=6.0",
@@ -27,6 +25,8 @@ dependencies = [
 pdf-quality = ["docling>=2.0"]
 # Local semantic search/rerank + find_similar. ONNX-based (no torch), small model cached on first use.
 semantic = ["fastembed>=0.4", "numpy>=1.26"]
+# HTTP serving (the Docker image); stdio use needs nothing extra.
+serve = ["uvicorn>=0.30"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",

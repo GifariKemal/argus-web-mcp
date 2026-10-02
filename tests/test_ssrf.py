@@ -15,6 +15,7 @@ import pytest
 from argus.security.ssrf import (
     ALLOWED_SCHEMES,
     SSRFError,
+    _PinnedBackend,
     aresolve_and_validate,
     build_safe_async_client,
     is_blocked_ip,
@@ -173,45 +174,72 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
         return httpx.Response(200, text="ok")
 
 
-async def test_client_pins_public_ip(monkeypatch):
+async def test_client_validates_but_keeps_hostname(monkeypatch):
+    """The transport pre-validates the host but leaves the URL on the hostname, so the
+    pool keys on it, TLS checks it, and response.url / final_url report it (not the IP)."""
     monkeypatch.setattr(
         socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34")
     )
     recorder = _RecordingTransport()
     client = build_safe_async_client()
-    # Swap the inner transport the safe transport wraps with our recorder.
     client._transport._inner = recorder  # type: ignore[attr-defined]
 
     resp = await client.get("http://example.com/path?q=1")
     assert resp.status_code == 200
-
-    seen = recorder.seen
-    assert seen is not None
-    # Connection pinned to the resolved public IP.
-    assert seen.url.host == "93.184.216.34"
-    # Original Host header preserved.
-    assert seen.headers["host"] == "example.com"
-    # SNI preserved so TLS still validates against the real hostname.
-    assert seen.extensions["sni_hostname"] == "example.com"
+    assert recorder.seen is not None
+    assert recorder.seen.url.host == "example.com"
+    assert str(resp.url) == "http://example.com/path?q=1"
     await client.aclose()
 
 
-async def test_client_pins_ipv6(monkeypatch):
+def test_client_pool_uses_pinned_backend():
+    """httpx has no public network_backend knob; guard the private wiring so an
+    httpx/httpcore upgrade that renames it fails here instead of silently unpinning."""
+    client = build_safe_async_client()
+    pool = client._transport._inner._pool  # type: ignore[attr-defined]
+    assert isinstance(pool._network_backend, _PinnedBackend)
+
+
+class _RecordingBackend:
+    def __init__(self):
+        self.calls = []
+
+    async def connect_tcp(self, host, port, **kw):
+        self.calls.append((host, port, kw))
+        return "stream"
+
+    async def sleep(self, seconds):
+        self.calls.append(("sleep", seconds))
+
+
+async def test_backend_connects_to_validated_ip(monkeypatch):
     monkeypatch.setattr(
         socket, "getaddrinfo", lambda *a, **k: _gai_result("2606:4700:4700::1111")
     )
-    recorder = _RecordingTransport()
-    client = build_safe_async_client()
-    client._transport._inner = recorder  # type: ignore[attr-defined]
+    inner = _RecordingBackend()
+    backend = _PinnedBackend(inner)
+    stream = await backend.connect_tcp("cloudflare-dns.com", 443, timeout=3.0)
+    assert stream == "stream"
+    host, port, kw = inner.calls[0]
+    assert (host, port) == ("2606:4700:4700::1111", 443)
+    assert kw["timeout"] == 3.0
+    await backend.sleep(0.01)
+    assert inner.calls[-1] == ("sleep", 0.01)
 
-    await client.get("https://cloudflare-dns.com/p")
-    seen = recorder.seen
-    assert seen is not None
-    # IPv6 literal is bracketed in the URL host normalization.
-    assert seen.url.host == "2606:4700:4700::1111"
-    assert seen.headers["host"] == "cloudflare-dns.com"
-    assert seen.extensions["sni_hostname"] == "cloudflare-dns.com"
-    await client.aclose()
+
+async def test_backend_blocks_rebound_private_ip(monkeypatch):
+    """Rebinding: the transport pre-check may have seen a public IP, but the connect
+    itself re-resolves and must refuse a private answer without opening a socket."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("10.0.0.1"))
+    inner = _RecordingBackend()
+    with pytest.raises(SSRFError):
+        await _PinnedBackend(inner).connect_tcp("rebind.evil", 443)
+    assert inner.calls == []
+
+
+async def test_backend_refuses_unix_sockets():
+    with pytest.raises(SSRFError):
+        await _PinnedBackend(_RecordingBackend()).connect_unix_socket("/var/run/docker.sock")
 
 
 async def test_client_blocks_private_ip(monkeypatch):

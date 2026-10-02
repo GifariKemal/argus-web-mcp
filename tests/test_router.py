@@ -246,3 +246,28 @@ def test_modal_may_does_not_route_news(q):
 @pytest.mark.parametrize("q", DATE_MAY_QUERIES)
 def test_date_anchored_may_routes_news(q):
     assert classify(q)["route"] == "news"
+
+
+# --- Indonesian queries + a bare year is not recency ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "route"),
+    [
+        ("peraturan menteri keuangan nomor 10 tahun 2026", "general"),
+        ("berita terbaru hari ini", "news"),
+        ("harga emas hari ini", "news"),
+        ("berita banjir jakarta 2026", "news"),
+        ("jurnal penelitian kualitas air sungai", "scholar"),
+        ("contoh skripsi teknik elektro", "scholar"),
+        ("harga iphone 16 di tokopedia", "general"),
+        ("repo github modbus esp32", "github"),
+        # English regressions
+        ("latest federal reserve decision 2026", "news"),
+        ("tax rules 2026", "general"),
+        ("journal paper on transformers", "scholar"),
+        ("how to install postgresql on ubuntu", "it"),
+    ],
+)
+def test_indonesian_and_bare_year_routing(query, route):
+    assert classify(query)["route"] == route

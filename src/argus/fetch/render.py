@@ -1,10 +1,11 @@
 """Browser render tier - a single shared Chromium (Crawl4AI) + a semaphore.
 
 One browser is launched in the server lifespan; each render uses a fresh page,
-bounded by an asyncio.Semaphore (RAM guard). Browser-tier SSRF is best-effort:
-we resolve+validate the host before navigating, but Chromium does its own DNS so
-this does not pin against rebinding the way the httpx tier does.
-ponytail: acceptable P1 ceiling - pin/proxy the browser only if a concrete need appears.
+bounded by an asyncio.Semaphore (RAM guard). Every Chromium connection - navigation,
+redirect hop, subresource, page JS, WebSocket - goes through the loopback egress proxy
+(security/egress.py), which runs the same SSRF gate as the httpx tier and dials the
+validated IP. Before 0.4.20 only the seed URL was checked, and a public 302 to an internal
+service came back through scrape.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
+from ..security.egress import guarded_browser_config
 from ..security.ssrf import aresolve_and_validate, validate_url
 from .static import _DEFAULT_PORTS, FetchError
 
@@ -55,9 +57,11 @@ class BrowserPool:
         return self._concurrency - self._sem._value
 
     async def start(self) -> None:
-        from crawl4ai import AsyncWebCrawler, BrowserConfig
+        from crawl4ai import AsyncWebCrawler
 
-        self._crawler = AsyncWebCrawler(config=BrowserConfig(headless=True, verbose=False))
+        self._crawler = AsyncWebCrawler(
+            config=await guarded_browser_config(headless=True, verbose=False)
+        )
         await self._crawler.start()
 
     async def stop(self) -> None:
@@ -76,10 +80,10 @@ class BrowserPool:
         if self._stealth is None:
             async with self._stealth_lock:
                 if self._stealth is None:
-                    from crawl4ai import AsyncWebCrawler, BrowserConfig
+                    from crawl4ai import AsyncWebCrawler
 
                     crawler = AsyncWebCrawler(
-                        config=BrowserConfig(
+                        config=await guarded_browser_config(
                             headless=True, verbose=False, enable_stealth=True
                         )
                     )
@@ -200,7 +204,8 @@ class BrowserPool:
                 "blocked_by_antibot", "challenge page persists after stealth escalation"
             )
         return {
-            "final_url": res.url or url,
+            # res.url is the URL we asked for; redirected_url is where the page landed.
+            "final_url": getattr(res, "redirected_url", None) or res.url or url,
             "html": res.html,
             "screenshot": res.screenshot if screenshot else None,
             "render_tier": tier,

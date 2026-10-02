@@ -6,6 +6,7 @@ No YAML file needed; 12-factor app style.
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 
 
@@ -60,3 +61,7 @@ DNS_TIMEOUT = _int("ARGUS_DNS_TIMEOUT", 5)
 
 # Metrics / health
 HEALTH_LATENCY_BUCKETS = _int("ARGUS_HEALTH_LATENCY_BUCKETS", 500)  # max latencies per tool
+
+# PyMuPDF is not thread-safe, so every PDF extraction (read_pdf, research) shares this
+# one worker; it still keeps the event loop free while a large PDF is parsed.
+PDF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pdf")

@@ -10,7 +10,9 @@
 # Easypanel flags them as issues. The local override adds the port back.
 services:
   searxng:
-    image: searxng/searxng:latest
+    # Pinned by digest (the build that 0.4.15-0.4.17 measured engines against); bump it
+    # deliberately and re-run scripts/check_engines.py, since engines drift between builds.
+    image: searxng/searxng@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
     restart: unless-stopped
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
@@ -48,6 +50,10 @@ services:
       # calls hit it. Use a fine-grained PAT with public-repo read only, nothing more.
       - ARGUS_GITHUB_TOKEN=${ARGUS_GITHUB_TOKEN:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
+    # The box (7 GB) is shared with other stacks: past this Argus is OOM-killed and
+    # restarted, instead of the host OOM killer picking a neighbour.
+    mem_limit: 3g
+    security_opt: ["no-new-privileges:true"]
     volumes:
       - argus-cache:/root/.argus
     healthcheck:

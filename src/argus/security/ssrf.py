@@ -15,6 +15,7 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 
 from ..config import DNS_TIMEOUT
@@ -110,32 +111,62 @@ async def aresolve_and_validate(
         raise SSRFError(f"resolution timed out for {host!r} after {timeout:g}s") from exc
 
 
-class _SafeTransport(httpx.AsyncBaseTransport):
-    """Pins each request to a validated resolved IP (anti-DNS-rebinding).
+class _PinnedBackend(httpcore.AsyncNetworkBackend):
+    """Opens every TCP connection to a freshly validated IP (anti-DNS-rebinding).
 
-    On every request we resolve+validate the host, rewrite the URL host to the
-    first validated IP, restore the original Host header, and set the
-    ``sni_hostname`` extension so TLS validates against the real hostname.
+    Pinning at connect time keeps the request URL on the real hostname, so the
+    connection pool keys on the hostname, TLS SNI and certificate checks use it,
+    and ``response.url`` reports it. The older approach rewrote the URL host to the
+    IP: the pool then reused one socket for every hostname behind a shared CDN IP,
+    sending host B's request over host A's TLS session (false 403s, B's cert never
+    checked) and leaking the IP into ``final_url``.
+    """
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend) -> None:
+        self._inner = inner
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None,
+                          socket_options=None):
+        ips = await aresolve_and_validate(host, port)
+        return await self._inner.connect_tcp(
+            ips[0], port, timeout=timeout, local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(self, *args, **kwargs):
+        raise SSRFError("unix sockets are not allowed")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+class _SafeTransport(httpx.AsyncBaseTransport):
+    """Validates each request's host before sending; the backend pins the connect.
+
+    The pre-check raises SSRFError before any byte leaves (and keeps transport-level
+    mocks such as respx honest); ``_PinnedBackend`` re-validates at connect time,
+    which is what actually binds the socket to a public IP.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
         self._inner = inner
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        original_host = request.url.host
         port = request.url.port or _DEFAULT_PORTS[request.url.scheme]
-
-        ips = await aresolve_and_validate(original_host, port)
-        pinned = ips[0]
-
-        request.url = request.url.copy_with(host=pinned)
-        request.headers["host"] = original_host
-        request.extensions["sni_hostname"] = original_host
-
+        await aresolve_and_validate(request.url.host, port)
         return await self._inner.handle_async_request(request)
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+def _pinned_http_transport() -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport()
+    # httpx exposes no network_backend knob; the pool attribute is private, so
+    # test_ssrf asserts it is ours - an httpx/httpcore upgrade that renames it fails loudly.
+    pool = transport._pool
+    pool._network_backend = _PinnedBackend(pool._network_backend)
+    return transport
 
 
 def build_safe_async_client(**kwargs: object) -> httpx.AsyncClient:
@@ -146,5 +177,5 @@ def build_safe_async_client(**kwargs: object) -> httpx.AsyncClient:
     not at construction. Extra **kwargs (timeout, etc.) pass through.
     """
     kwargs.setdefault("follow_redirects", False)
-    transport = _SafeTransport(httpx.AsyncHTTPTransport())
+    transport = _SafeTransport(_pinned_http_transport())
     return httpx.AsyncClient(transport=transport, **kwargs)  # type: ignore[arg-type]

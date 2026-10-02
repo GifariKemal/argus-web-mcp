@@ -1,0 +1,20 @@
+# Free alerting: a failed run e-mails the repo owner. /health answers through Cloudflare
+# like any client would, so this also catches DNS, edge and Traefik breakage.
+name: uptime
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: |
+          for i in 1 2 3; do
+            body=$(curl -fsS -m 20 https://argus.gifariksuryo.xyz/health) && break
+            sleep 20
+          done
+          echo "$body"
+          echo "$body" | grep -q '"status":"ok"'

@@ -7,6 +7,10 @@ from typing import Any
 import pymupdf
 import pymupdf4llm
 
+# pymupdf4llm's layout mode prints "=== Document parser messages ===" via pymupdf.message,
+# which defaults to stdout - on the stdio transport that is the MCP JSON-RPC stream.
+pymupdf.set_messages(pylogging=True, pylogging_name="argus.pdf")
+
 _FAST_TEXT_MIN_PAGES = 20
 
 
@@ -63,25 +67,28 @@ def _open(data: bytes) -> pymupdf.Document:
 def _find_tables(doc: pymupdf.Document, page_indices: list[int]) -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     for idx in page_indices:
-        found = doc[idx].find_tables()
+        # use_layout=False: once pymupdf4llm activates pymupdf.layout, find_tables keeps
+        # only grids its layout model also calls tables and missed plain ruled ones.
+        found = doc[idx].find_tables(use_layout=False)
         for t in found.tables:
             tables.append({"page": idx + 1, "rows": t.extract()})
     return tables
 
 
-def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int]) -> str:
+def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int]) -> tuple[str, int]:
     """Fast full-document text path for large PDFs.
 
     pymupdf4llm's markdown pipeline can spend tens of seconds on graphics-heavy
     report PDFs even when the caller only asked for text. This path still returns
-    every requested page, but skips expensive layout/table inference.
+    every requested page, but skips expensive layout/table inference. Returns the
+    text and the count of pages that had none.
     """
     parts: list[str] = []
     for idx in page_indices:
         text = doc[idx].get_text("text", sort=True).strip()
         if text:
             parts.append(f"## Page {idx + 1}\n\n{text}")
-    return "\n\n".join(parts).strip()
+    return "\n\n".join(parts).strip(), len(page_indices) - len(parts)
 
 
 def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> dict[str, Any]:
@@ -97,26 +104,29 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
         page_indices = _parse_pages(pages, total)
         metadata = dict(doc.metadata or {})
 
+        # pages_without_text lets a caller tell a scanned (image-only) PDF from an empty one.
         if mode == "text" and len(page_indices) >= _FAST_TEXT_MIN_PAGES:
+            content, metadata["pages_without_text"] = _extract_plain_text(doc, page_indices)
             metadata["engine"] = "pymupdf-fast-text"
             return {
                 "pages_total": total,
                 "pages_returned": len(page_indices),
-                "content": _extract_plain_text(doc, page_indices),
+                "content": content,
                 "tables": [],
                 "metadata": metadata,
             }
 
-        text_only = mode != "tables"
+        # pymupdf4llm >= 1.27 routes through the pymupdf.layout engine whenever it is
+        # installed, which silently ignores table_strategy / ignore_graphics; tables
+        # come from _find_tables below either way.
         chunks = pymupdf4llm.to_markdown(
-            doc,
-            pages=page_indices,
-            page_chunks=True,
-            table_strategy="lines_strict" if mode == "tables" else None,
-            ignore_graphics=text_only,
-            show_progress=False,
+            doc, pages=page_indices, page_chunks=True, show_progress=False
         )
-        content = "\n\n".join(c["text"].strip() for c in chunks).strip()
+        texts = [c["text"].strip() for c in chunks]
+        content = "\n\n".join(texts).strip()
+        metadata["pages_without_text"] = texts.count("")
+        layout = getattr(pymupdf4llm, "_use_layout", False)
+        metadata["engine"] = "pymupdf4llm-layout" if layout else "pymupdf4llm"
 
         tables = _find_tables(doc, page_indices) if mode == "tables" else []
 
@@ -170,10 +180,14 @@ def extract_pdf_quality(data: bytes, pages: str | None = None) -> dict[str, Any]
     result = DocumentConverter().convert(source)
     content = result.document.export_to_markdown()
 
+    # Text-LAYER count (Docling may still OCR these pages); same signal as extract_pdf.
+    with pymupdf.open(stream=data, filetype="pdf") as sliced:
+        blank = sum(not page.get_text().strip() for page in sliced)
+
     return {
         "pages_total": total,
         "pages_returned": len(page_indices),
         "content": content,
         "tables": [],
-        "metadata": {"engine": "docling"},
+        "metadata": {"engine": "docling", "pages_without_text": blank},
     }

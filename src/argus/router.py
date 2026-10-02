@@ -53,6 +53,12 @@ _TOKENS: dict[str, dict[str, int]] = {
         "citations": 2,
         "dataset": 2,
         "datasets": 2,
+        # Indonesian
+        "jurnal": 2,
+        "penelitian": 2,
+        "skripsi": 3,
+        "tesis": 3,
+        "disertasi": 3,
     },
     "news": {
         "news": 3,
@@ -65,6 +71,10 @@ _TOKENS: dict[str, dict[str, int]] = {
         "announcement": 2,
         "stock": 2,
         "stocks": 2,
+        # Indonesian
+        "berita": 3,
+        "terbaru": 2,
+        "terkini": 2,
     },
     "science": {
         "algorithm": 2,
@@ -151,6 +161,8 @@ _PHRASES: dict[str, list[tuple[str, int]]] = {
         ("just released", 4),
         ("this week", 3),
         ("this year", 2),
+        ("hari ini", 2),
+        ("harga hari ini", 2),  # stacks on "hari ini" to match "price today"
     ],
     "science": [
         ("bell inequality", 4),
@@ -182,9 +194,7 @@ _PHRASES: dict[str, list[tuple[str, int]]] = {
 
 # Regex signals: route -> [(compiled_pattern, weight)]. For things tokens/phrases miss.
 _PATTERNS: dict[str, list[tuple[re.Pattern[str], int]]] = {
-    # 4-digit year >= 2025 -> recency.
     "news": [
-        (re.compile(r"\b(20(2[5-9]|[3-9]\d))\b"), 3),
         # 'may' is excluded from the month alternation: as a modal verb ("what may
         # cause X") it misrouted ordinary questions to news. It only counts as a
         # month when date-anchored (a digit/year/temporal qualifier next to it).
@@ -204,6 +214,11 @@ _PATTERNS: dict[str, list[tuple[re.Pattern[str], int]]] = {
         ),
     ],
 }
+
+# A 4-digit year >= 2025 only reinforces another news signal: on its own it sent
+# "peraturan menteri ... tahun 2026" (a regulation lookup) to news.
+_YEAR_RE = re.compile(r"\b(20(2[5-9]|[3-9]\d))\b")
+_YEAR_WEIGHT = 3
 
 _WORD_RE = re.compile(r"[a-z0-9+#]+")  # keep '+'/'#' so 'c++'/'c#' survive tokenization
 
@@ -250,6 +265,10 @@ def classify(query: str) -> dict:
             if match:
                 scores[route] += weight
                 hits[route].append(match.group(0))
+
+    if scores["news"] and (match := _YEAR_RE.search(norm)):
+        scores["news"] += _YEAR_WEIGHT
+        hits["news"].append(match.group(0))
 
     # 'general' stays the zero baseline - it wins only when no other route scored.
     top = max(scores[r] for r in ROUTES if r != "general")

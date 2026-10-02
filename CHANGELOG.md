@@ -14,6 +14,73 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.20] - 2026-10-02 - the gap audit: a public server has to act like one
+
+A six-dimension audit (fetch, extraction, search, MCP surface, security, ops) against the
+October 2026 landscape, the 13-day live logs, and measurements taken from the VPS IP. The
+full write-up, including what was measured and rejected, is
+[`docs/qa/2026-10-02-gap-audit.md`](docs/qa/2026-10-02-gap-audit.md).
+
+### Security
+
+- **Browser-tier SSRF closed.** Only the seed URL used to be validated, so Chromium
+  followed redirects, subresources and page JavaScript to internal hosts; a public 302 to
+  the internal SearXNG service returned its config through `scrape`. Chromium (normal,
+  stealth and `crawl`) now runs with `--proxy-server` pointing at a loopback egress proxy
+  (`security/egress.py`, `--proxy-bypass-list=<-loopback>`): every connection - each
+  redirect hop, subresource, page `fetch()`, WebSocket - is validated by the same SSRF gate
+  and dialled to the validated IP, so Chromium never resolves DNS and rebinding is closed
+  too. A Playwright route handler was tried first and dropped: it only sees the first
+  request of a redirect chain, which only showed up when the image was attacked live.
+  Verified in the built image: 302s to `127.0.0.1`, `localhost` and the metadata IP, and a
+  page `fetch()` to loopback, are all refused; ordinary and JS-heavy pages still render.
+- **IP pinning moved to connect time.** The pin used to rewrite the URL host to the IP, so
+  the pool shared one TLS socket across every hostname behind a CDN IP (wrong-host
+  requests, false 403s, second host's certificate never checked) and `final_url` showed
+  the IP. An httpcore network backend now pins each new connection; URLs keep hostnames.
+- Hashed `requirements.lock` constrained to the versions running in production; base
+  image and SearXNG pinned by digest. CI installs the same lock.
+- `research.max_sources` capped at 10, `batch_read` concurrency at 16, watches at 50;
+  `list_watches` shows only the webhook's scheme and host; public `/health` returns status
+  only; container gets `mem_limit: 3g` and `no-new-privileges`.
+
+### Fixed
+
+- Every `err()` result now reaches clients with `isError: true` (127 failures in 13 days
+  looked like successes).
+- CPU-bound extraction, PDF parsing and embeddings ran on the single event loop, which is
+  why `research` p99 (223 s) overran its own 120 s cap. They run in threads now; PDFs share
+  one worker because PyMuPDF is not thread-safe.
+- `_dedup_blocks` was O(n^3): 4000 blocks 16.6 s -> 0.003 s, identical output.
+- Metadata date search took 31 s on a large listing and invented dates from copyright
+  footers; `extensive=False` brings it to 0.7 s.
+- `language=en` was sent on every search, Indonesian included; SearXNG's `auto` applies.
+- `include_domains` now reaches SearXNG as `site:` terms instead of filtering afterwards.
+- `research` returns a partial bundle (`degraded_reason: budget_exhausted`) at 90% of its
+  budget instead of discarding fetched sources; each source gets `min(50, timeout/2)` s.
+- `read_pdf(mode="tables")` found no tables under pymupdf4llm's layout mode; fixed with
+  `find_tables(use_layout=False)`. pymupdf messages no longer go to stdout (the stdio
+  transport's JSON-RPC stream).
+- `scrape` no longer returns raw page HTML labelled as markdown; retries no longer reuse
+  just-benched engines; scholar filters go to the backends; the router reads Indonesian.
+
+### Added
+
+- Tool annotations on all 20 tools, `anthropic/maxResultSizeChars` 500k on the content
+  tools, `stateless_http` (redeploys no longer drop sessions), one version source.
+- Extraction: JSON-LD Product/Offer in `metadata.structured`, `metadata.lang`, a balanced
+  pass when the precision result is thin, `metadata.pages_without_text` for PDFs.
+- `/metrics`: cumulative `_count`/`_sum`, `cache.hit`/`cache.miss`,
+  `fetch.browser_ssrf_blocked`. GitHub Actions: offline suite on push, `/health` every
+  30 minutes (a failure e-mails the owner).
+
+### Measured and not adopted
+
+- `curl_cffi` recovered 2 of 14 blocked sites from the VPS IP, both already recovered by
+  the browser tier; IP reputation, not the TLS fingerprint, is what blocks us.
+- Wayback answers 429 on every endpoint from this IP (0 of 61 archive fallbacks worked);
+  Common Crawl's index timed out at 10 s. Neither is a live fallback here.
+
 ## [0.4.19] - 2026-10-02 - what 13 days of live logs said
 
 A pass over the container's log and `/metrics` from 2026-09-19 to 2026-10-02 (1276 tool
