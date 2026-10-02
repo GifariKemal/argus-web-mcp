@@ -152,6 +152,10 @@ class BrowserPool:
             wait_for=wait_for,
             page_timeout=int(timeout * 1000),
             js_code=actions or None,
+            # Default True re-enables crawl4ai's console logger per run (BrowserConfig's
+            # verbose=False alone does not stick), flooding the log with per-URL lines and
+            # source dumps. Failures still surface through argus.fetch.
+            verbose=False,
         )
 
         crawler = await self._ensure_stealth() if stealth else self._crawler

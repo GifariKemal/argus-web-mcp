@@ -44,6 +44,9 @@ services:
       # compose only passes variables the service LISTS - setting it in the panel alone
       # would land in .env and never reach the container.
       - ARGUS_S2_API_KEY=${ARGUS_S2_API_KEY:-}
+      # GitHub token for github_search: anonymous search is 10 req/min and 1 in 5 live
+      # calls hit it. Use a fine-grained PAT with public-repo read only, nothing more.
+      - ARGUS_GITHUB_TOKEN=${ARGUS_GITHUB_TOKEN:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
     volumes:
       - argus-cache:/root/.argus

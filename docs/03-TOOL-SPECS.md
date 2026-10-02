@@ -53,7 +53,7 @@ Auto-route a query to the best backend (deterministic classifier, no LLM): githu
 
 ## `read_pdf(url_or_path, pages=null, mode="text", timeout=90)`
 PDF -> markdown (+ tables).
-- **in:** `url_or_path` (http/https; local paths gated by `ARGUS_ALLOW_LOCAL_PDF=1` - LFI guard on remote), `pages` (e.g. "1-5" or null=all), `mode`  in  {text,tables,quality} (unknown mode -> schema_invalid); `quality` routes to Docling for scanned/complex and honors `pages` (the PDF is sliced before Docling).
+- **in:** `url_or_path` (http/https; local paths gated by `ARGUS_ALLOW_LOCAL_PDF=1` - LFI guard on remote), `pages` (e.g. "1-5" or null=all), `mode`  in  {text,tables,quality} (unknown mode -> schema_invalid); `quality` routes to Docling for scanned/complex and honors `pages` (the PDF is sliced before Docling). `url` is accepted as an alias for `url_or_path`. When Docling is not installed (the deployed image leaves out the `pdf-quality` extra), `quality` falls back to `tables` and sets `metadata.quality_fallback`.
 - **out:** `{source, ...result}` (result carries pages_total/pages_returned, content (markdown), tables, metadata).
 - **backing:** pymupdf4llm (fast, digital) -> Docling (`mode="quality"`: tables/scanned). 64 MiB byte cap. URL fetches cached (`pdf` TTL 24h, + `from_cache`); local paths never cached.
 - **errors:** ssrf_blocked, fetch_failed, not_pdf, parse_failed, schema_invalid (bad mode / malformed or out-of-document `pages`).
@@ -115,7 +115,7 @@ Find pages semantically similar to a URL's content or a text snippet (local embe
 
 ## `github_search(query, mode="repositories", language=null, sort=null, order="desc", limit=10)`
 Structured GitHub search - repos / code / issues with stars/language/sort. Complements `search(category="it")`.
-- **in:** `query`, `mode`  in  {repositories,code,issues}, `language`, `sort`, `order`  in  {asc,desc}, `limit`. `code` mode needs `GITHUB_TOKEN`; optional token raises rate limits.
+- **in:** `query`, `mode`  in  {repositories,code,issues}, `language`, `sort`, `order`  in  {asc,desc}, `limit`. `mode` and `order` are JSON-schema enums, so a client sending `repos` is rejected at validation with the allowed values. `code` mode needs `ARGUS_GITHUB_TOKEN` (or `GITHUB_TOKEN`); a token also lifts the anonymous 10 req/min search limit.
 - **out:** structured GitHub result bundle (`{results:[...], total_count, degraded, degraded_reason, ...}`, + `from_cache`). `degraded: true` + `degraded_reason:"incomplete_results"` when GitHub's search timed out server-side (partial index scan); degraded results are never cached.
 - **backing:** GitHub Search API.
 - **errors:** search_backend_down, no_results, schema_invalid.

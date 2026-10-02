@@ -18,6 +18,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
@@ -375,13 +376,20 @@ async def search(
 
 
 async def read_pdf(
-    url_or_path: str,
+    url_or_path: str = "",
     pages: str | None = None,
-    mode: str = "text",
+    mode: Literal["text", "tables", "quality"] = "text",
     timeout: int = TIMEOUTS["read_pdf"],
+    url: str | None = None,
 ) -> dict:
-    """PDF (URL or local path) -> markdown + tables. mode: text | tables | quality."""
+    """PDF (URL or local path) -> markdown + tables. mode: text | tables | quality.
+    Pass the PDF as `url_or_path` (or `url`, an alias). `quality` uses Docling when the
+    server has it installed, else falls back to `tables` (metadata.quality_fallback)."""
     s = _state()
+    # Agents trained on the other tools send `url`; reject only when both are missing.
+    url_or_path = url_or_path or url or ""
+    if not url_or_path:
+        return err("schema_invalid", "read_pdf needs url_or_path (or url)")
     if mode not in {"text", "tables", "quality"}:
         return err("schema_invalid", f"unknown read_pdf mode {mode!r} (text|tables|quality)")
     is_url = _is_url(url_or_path)
@@ -412,7 +420,13 @@ async def read_pdf(
 
     try:
         if mode == "quality":
-            result = await asyncio.to_thread(extract_pdf_quality, data, pages)  # Docling (heavy)
+            try:
+                result = await asyncio.to_thread(extract_pdf_quality, data, pages)  # Docling
+            except ImportError:
+                # The deployed image leaves out the heavy pdf-quality extra (torch, GBs of
+                # RAM). Degrade to the tables path rather than failing the call.
+                result = extract_pdf(data, pages, "tables")
+                result["metadata"]["quality_fallback"] = "docling not installed; used tables"
         else:
             result = extract_pdf(data, pages, mode)
     except ValueError as e:
@@ -874,11 +888,13 @@ async def find_similar(url_or_text: str, count: int = 10) -> dict:
 
 
 async def github_search(
-    query: str, mode: str = "repositories", language: str | None = None,
-    sort: str | None = None, order: str = "desc", limit: int = 10,
+    query: str, mode: Literal["repositories", "code", "issues"] = "repositories",
+    language: str | None = None, sort: str | None = None,
+    order: Literal["desc", "asc"] = "desc", limit: int = 10,
 ) -> dict:
-    """Structured GitHub search - repos/code/issues with stars/language/sort. `code` mode needs
-    GITHUB_TOKEN; optional token raises rate limits. Complements `search(category='it')`."""
+    """Structured GitHub search - mode is exactly `repositories`, `code` or `issues` (not
+    `repos`). `code` needs GITHUB_TOKEN; a token also lifts the anonymous rate limit.
+    Complements `search(category='it')`."""
     s = _state()
     ck = s.cache.key(
         "github:" + query,
@@ -1096,6 +1112,15 @@ async def health(_request):
     return JSONResponse(body, status_code=200 if ok else 503)
 
 
+def _resident_bytes() -> int | None:
+    """Current RSS from /proc (Linux, i.e. the container); None where /proc is absent."""
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, AttributeError, ValueError, IndexError):
+        return None
+
+
 @mcp.custom_route("/metrics", methods=["GET"])
 async def metrics(_request):
     """Prometheus exposition format."""
@@ -1111,6 +1136,15 @@ async def metrics(_request):
         "# HELP argus_active_contexts in-flight browser pages (semaphore in use)",
         "# TYPE argus_active_contexts gauge",
         f"argus_active_contexts {active}",
+    ]
+    rss = _resident_bytes()
+    if rss is not None:
+        lines += [
+            "# HELP argus_process_resident_bytes server process RSS (Chromium not included)",
+            "# TYPE argus_process_resident_bytes gauge",
+            f"argus_process_resident_bytes {rss}",
+        ]
+    lines += [
         "# HELP argus_tool_requests_total MCP tool invocations since start",
         "# TYPE argus_tool_requests_total counter",
     ]

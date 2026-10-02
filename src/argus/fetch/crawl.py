@@ -65,6 +65,7 @@ def _build_config(
         check_robots_txt=respect_robots,
         cache_mode=CacheMode.BYPASS,
         stream=False,
+        verbose=False,  # see render.py: the run config re-enables crawl4ai's console log
         page_timeout=int(timeout * 1000),  # per-page bound (ms), matches the render tier
     )
 

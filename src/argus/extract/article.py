@@ -13,11 +13,16 @@ pages - doing so silently discarded legitimate content (e.g. example.com).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import trafilatura
 from markdownify import markdownify as _md
 from readability import Document
+
+# readability log.exception()s a full traceback on every empty page (a blocked fetch)
+# before raising; we already catch that and fall through, so the traceback is noise.
+logging.getLogger("readability").setLevel(logging.CRITICAL)
 
 
 def _dedup_blocks(text: str) -> str:

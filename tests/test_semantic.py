@@ -24,7 +24,10 @@ _FAKE = {
 class _FakeEmbedder:
     """Stands in for fastembed.TextEmbedding: .embed(texts) yields fixed vectors."""
 
-    def embed(self, texts):
+    batch_sizes: list = []
+
+    def embed(self, texts, batch_size=256):
+        self.batch_sizes.append(batch_size)
         for t in texts:
             yield list(_FAKE[t])
 
@@ -63,6 +66,15 @@ def test_embed_returns_list_of_lists(fake_embedder):
     out = semantic.embed(["python", "banana"])
     assert out == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
     assert all(isinstance(v, list) for v in out)
+
+
+def test_embed_caps_batch_size(monkeypatch):
+    # fastembed's default batch of 256 pins GBs in the ONNX arena; we must override it.
+    fake = _FakeEmbedder()
+    fake.batch_sizes = []
+    monkeypatch.setattr(semantic, "_get_embedder", lambda: fake)
+    semantic.embed(["python"])
+    assert fake.batch_sizes == [semantic._EMBED_BATCH] and semantic._EMBED_BATCH <= 32
 
 
 # --- similarities -----------------------------------------------------------

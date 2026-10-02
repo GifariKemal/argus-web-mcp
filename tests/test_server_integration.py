@@ -53,6 +53,23 @@ async def test_read_pdf_page_slice(app_state):
     assert "beta" not in r["content"]
 
 
+async def test_read_pdf_accepts_url_alias(app_state):
+    # Agents send `url` (like every other tool); that used to fail argument validation.
+    r = await server.read_pdf(url=f"{BASE}/doc.pdf")
+    assert r["pages_total"] == 2
+    assert (await server.read_pdf())["code"] == "schema_invalid"
+
+
+async def test_read_pdf_quality_falls_back_without_docling(app_state, monkeypatch):
+    def _no_docling(*_a, **_k):
+        raise ModuleNotFoundError("No module named 'docling'")
+
+    monkeypatch.setattr(server, "extract_pdf_quality", _no_docling)
+    r = await server.read_pdf(f"{BASE}/doc.pdf", mode="quality")
+    assert "alpha" in r["content"]
+    assert "docling" in r["metadata"]["quality_fallback"]
+
+
 async def test_read_pdf_not_pdf(app_state):
     r = await server.read_pdf(f"{BASE}/article")  # HTML, not a PDF
     assert r["code"] == "not_pdf"
@@ -437,6 +454,8 @@ async def test_health_and_metrics_endpoints():
         assert "argus_up 1" in body
         assert "argus_browser_up 1" in body
         assert "argus_active_contexts 3" in body
+        # RSS gauge appears wherever /proc exists (the Linux container), never breaks Windows.
+        assert ("argus_process_resident_bytes " in body) == (server._resident_bytes() is not None)
     finally:
         server._S = None
 

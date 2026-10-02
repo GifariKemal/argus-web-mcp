@@ -14,6 +14,44 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.19] - 2026-10-02 - what 13 days of live logs said
+
+A pass over the container's log and `/metrics` from 2026-09-19 to 2026-10-02 (1276 tool
+calls, about 10% structured errors) turned up the fixes below.
+
+### Fixed
+
+- **2.7 GB server RSS.** Two anonymous ~1 GB mappings in the uvicorn process were the
+  ONNX Runtime CPU arena: fastembed embeds with `batch_size=256` by default and the arena
+  keeps its peak forever. `semantic.embed` now passes `batch_size=8`. Measured locally on
+  48 x 512-token docs: batch 48 retained +1005 MB, batch 8 retained +263 MB, same speed.
+- **`github_search(mode="repos")` failed 17 times.** `mode` and `order` are now `Literal`
+  enums, so the JSON schema lists the allowed values and clients pick a valid one.
+- **`read_pdf(url=...)` failed argument validation.** Agents send `url` as they do for
+  every other tool; it is now an alias for `url_or_path`.
+- **`read_pdf(mode="quality")` raised `No module named 'docling'` on the VPS.** The image
+  leaves out the `pdf-quality` extra on purpose (torch, GBs of RAM on a 7 GB box), so the
+  mode now falls back to `tables` and says so in `metadata.quality_fallback`.
+- **Log noise.** crawl4ai's per-URL console lines and source dumps came back on every run
+  because `CrawlerRunConfig(verbose=True)` is the default; both run configs now pass
+  `verbose=False`. readability's traceback on every empty (blocked) page is silenced; the
+  caller already catches it.
+
+### Added
+
+- `argus_process_resident_bytes` gauge on `/metrics`, so memory growth is visible
+  without SSH.
+- `ARGUS_GITHUB_TOKEN` declared in `docker-compose.yml` so a token set in the panel
+  reaches the container. 15 of 71 `github_search` calls hit the anonymous rate limit.
+
+### Checked, no change
+
+- `fetch.fallback_stealth_ok` = `fallback_stealth_fail` = `fallback_exhausted` = 61 looked
+  like a counter bug. It is not: every stealth failure also exhausts (Wayback recovered
+  nothing), and 61 + 61 + 4 = 126 `static_fail`.
+- Anti-bot failures (monotaro, scribd, indotrading, biggo.id refusing the VPS IP) remain;
+  only a residential proxy would change that, and it stays declined.
+
 ## [0.4.18] - 2026-09-19 - the S2 key arrives, and one attempt is still not enough
 
 The Semantic Scholar key requested on 2026-09-18 was approved and is now set on the

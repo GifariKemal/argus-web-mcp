@@ -23,6 +23,13 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 # come from the top handful, so the tail is wasted compute.
 _MAX_CANDIDATES = 200
 
+# fastembed defaults to batch_size=256. One batch of 256 x 512-token inputs needs GBs of
+# attention scratch, and ONNX Runtime's CPU arena keeps that peak for the life of the
+# process - the live container sat at 2.7 GB RSS. Measured on 48 x 512-token docs:
+# batch 48 kept +1005 MB, 16 kept +516 MB, 8 kept +263 MB, at 9-12 s either way (CPU
+# bound), so a small batch only lowers the high-water mark.
+_EMBED_BATCH = 8
+
 _EMBEDDER = None  # lazily-created TextEmbedding singleton
 _EMBEDDER_LOCK = threading.Lock()  # guards the lazy init against concurrent first-calls
 
@@ -73,7 +80,8 @@ def embed(texts: list[str]) -> list[list[float]]:
     """Embed texts with the singleton model. Empty input -> []. Raises SemanticUnavailable."""
     if not texts:
         return []
-    return [np.asarray(vec, dtype=np.float64).tolist() for vec in _get_embedder().embed(texts)]
+    vectors = _get_embedder().embed(texts, batch_size=_EMBED_BATCH)
+    return [np.asarray(vec, dtype=np.float64).tolist() for vec in vectors]
 
 
 def cosine(a: list[float], b: list[float]) -> float:
