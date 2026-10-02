@@ -464,3 +464,18 @@ async def test_robots_sitemaps_are_capped(monkeypatch):
     async with _client(h) as c:
         await map_site("https://x.test/", client=c)
     assert len(fetched) <= _MAX_CHILD_SITEMAPS  # seed list bounded despite n>cap in robots.txt
+
+
+async def test_reachable_page_without_links_is_no_results(monkeypatch):
+    # example.com: the page loads, but has no sitemap and no same-site links.
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        if req.url.path in ("/robots.txt", "/sitemap.xml", "/sitemap_index.xml"):
+            return httpx.Response(404)
+        return httpx.Response(200, text="<html><body><a href='https://elsewhere.test/'>x</a></body></html>")
+
+    async with _client(h) as c:
+        with pytest.raises(MapError) as ei:
+            await map_site("https://x.test/", client=c)
+    assert ei.value.code == "no_results"

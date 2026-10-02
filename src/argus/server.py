@@ -865,7 +865,8 @@ async def map_urls(url: str, max_urls: int = 500, include_subdomains: bool = Tru
     except SSRFError as e:
         return _ssrf_err(e, "URL")
     except MapError as e:
-        return err("fetch_failed", "site map failed", _safe_detail(e))
+        code = e.code if e.code in ("no_results", "fetch_failed") else "fetch_failed"
+        return err(code, "site map failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("fetch_failed", "map failed", _safe_detail(e))
 

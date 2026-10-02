@@ -208,7 +208,8 @@ async def map_site(
 
     Returns ``{url, urls, count, source, truncated}`` where ``source`` is one of
     ``'robots+sitemap'``, ``'sitemap'`` or ``'links'``. Raises ``SSRFError`` if the seed is
-    blocked, or ``MapError('fetch_failed')`` if nothing could be discovered.
+    blocked, or ``MapError`` if nothing could be discovered: ``no_results`` when the page
+    loaded but has no same-site links or sitemap, ``fetch_failed`` when it did not load.
     """
     validate_url(url)
     parts = urlsplit(url)
@@ -258,7 +259,10 @@ async def map_site(
             if urls:
                 return shaped(urls, "links", truncated)
 
-        raise MapError("fetch_failed", f"no URLs discoverable for {url!r}")
+        # The page answered but links to nowhere on its own site (example.com): that is an
+        # empty result, not a fetch failure - the agent should not retry the fetch.
+        code = "no_results" if html else "fetch_failed"
+        raise MapError(code, f"no URLs discoverable for {url!r}")
 
     # A direct call with no client gets a default SSRF-guarded one, closed when we're done.
     if client is None:
