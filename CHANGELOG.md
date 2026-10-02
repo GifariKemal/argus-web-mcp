@@ -14,6 +14,45 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.21] - 2026-10-02 - the backlog, decided by measurement
+
+The P1 items from the 0.4.20 gap audit. Each one was measured from the VPS IP or on an
+eval set before it went in, and one was dropped because the numbers said so.
+
+### Added
+
+- **StackExchange API fallback** (`fetch/adapters.py`). stackoverflow.com question pages
+  answer 403 to the VPS IP while `api.stackexchange.com` answers 200, so after a static
+  failure on a question URL (stackoverflow, superuser, serverfault, askubuntu,
+  `*.stackexchange.com`) the ladder reads the question and top answers from the API before
+  trying the browser. `render_path: "api"`, stages `fetch.adapter_ok` / `fetch.adapter_fail`.
+- **OpenAlex in `scholar_search`**, between Semantic Scholar and CrossRef. S2 still 429s
+  about half the time, so its retry chain went from 3 retries (7 s of sleep) to 1. Keyless
+  OpenAlex is about 100 searches/day; an optional free key `ARGUS_OPENALEX_API_KEY` (bearer
+  header, never in URLs or logs) raises that to about 1000.
+- **Chromium self-healing.** When Playwright reports the shared browser closed (crash, OOM
+  kill), the pool relaunches it once under a lock and retries the render; `/health`
+  reports a dead browser instead of `ok`.
+
+### Changed
+
+- **Multilingual embedder.** `paraphrase-multilingual-MiniLM-L12-v2` replaces
+  `bge-small-en-v1.5`. On `benchmark/semantic_id.yaml` (32 queries, 22 Indonesian, hard
+  negatives) Indonesian AUC went 0.894 -> 0.960 and nDCG@3 0.850 -> 0.933; English AUC
+  1.000 -> 0.956. bge scored Indonesian junk 0.64-0.86, so `_SEM_FLOOR` 0.3 rejected 0% of
+  it; the floors are recalibrated to 0.40 / 0.60. Cost: about +400 MB RSS (container
+  ~1.2 GB measured) and a 470 MB model baked into the image.
+- **The container runs as uid 10001**, not root. Browsers and the model live under `/opt`;
+  data moved to a new `argus-data` volume at `/home/argus/.argus` (the root-owned
+  `argus-cache` volume is no longer mounted; its 13 MB cache rebuilds on its own).
+
+### Measured and not adopted
+
+- **Patchright** (`UndetectedAdapter`): 4/12 blocked sites vs 5/12 for the current
+  playwright-stealth tier, the same sites blocked in 0.3 s - before any JavaScript runs,
+  so the decision is made on the IP, not the fingerprint. Not worth +200 MB of image.
+  For the same reason the stale `Chrome/116` user agent was left alone.
+
 ## [0.4.20] - 2026-10-02 - the gap audit: a public server has to act like one
 
 A six-dimension audit (fetch, extraction, search, MCP surface, security, ops) against the

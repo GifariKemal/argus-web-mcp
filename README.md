@@ -153,7 +153,7 @@ claude mcp add --transport http argus-local http://127.0.0.1:8090/mcp
 ```
 
 Loopback-only, no auth token needed (nothing is exposed off-host). Cache lives in the
-`argus-cache` volume.
+`argus-data` volume (since 0.4.21; the container runs as uid 10001).
 
 ## Quickstart (local, no Docker for Argus itself)
 

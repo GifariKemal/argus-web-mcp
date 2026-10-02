@@ -49,13 +49,17 @@ services:
       # GitHub token for github_search: anonymous search is 10 req/min and 1 in 5 live
       # calls hit it. Use a fine-grained PAT with public-repo read only, nothing more.
       - ARGUS_GITHUB_TOKEN=${ARGUS_GITHUB_TOKEN:-}
+      # Optional free OpenAlex key: keyless is ~100 searches/day, a key ~1000.
+      - ARGUS_OPENALEX_API_KEY=${ARGUS_OPENALEX_API_KEY:-}
     shm_size: 1gb               # Chromium crashes on the default 64m
     # The box (7 GB) is shared with other stacks: past this Argus is OOM-killed and
     # restarted, instead of the host OOM killer picking a neighbour.
     mem_limit: 3g
     security_opt: ["no-new-privileges:true"]
     volumes:
-      - argus-cache:/root/.argus
+      # New volume since 0.4.21: the image runs as uid 10001, and the old argus-cache
+      # volume was written by root. A fresh volume takes its owner from the image dir.
+      - argus-data:/home/argus/.argus
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/health')"]
@@ -67,4 +71,4 @@ services:
       options: {max-size: "10m", max-file: "3"}
 
 volumes:
-  argus-cache:
+  argus-data:

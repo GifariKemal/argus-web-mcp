@@ -34,6 +34,14 @@ _BLOCK_STATUSES = {403, 429, 503}
 # held forever - 4 wedged renders permanently kill the browser tier. Monkeypatchable in tests.
 _RENDER_GRACE_S = 15.0
 
+# Playwright/crawl4ai error text once the Chromium process is gone (crash, OOM kill).
+_DEAD_MARKERS = ("has been closed", "browser has disconnected", "target closed")
+
+
+def _browser_dead(res) -> bool:
+    msg = (getattr(res, "error_message", "") or "").lower()
+    return not getattr(res, "success", True) and any(m in msg for m in _DEAD_MARKERS)
+
 
 def _looks_blocked(html: str, status: int | None) -> bool:
     """Heuristic: does this response look like an anti-bot challenge rather than content?"""
@@ -50,6 +58,7 @@ class BrowserPool:
         self._concurrency = concurrency
         self._sem = asyncio.Semaphore(concurrency)
         self._stealth_lock = asyncio.Lock()  # serialize lazy stealth init (audit R5)
+        self._restart_lock = asyncio.Lock()  # one relaunch even if many renders see it die
 
     @property
     def active_contexts(self) -> int:
@@ -59,10 +68,35 @@ class BrowserPool:
     async def start(self) -> None:
         from crawl4ai import AsyncWebCrawler
 
-        self._crawler = AsyncWebCrawler(
+        # Started before it is published: a render must never see a half-started crawler
+        # (crawl4ai would start it a second time and leak a Chromium).
+        crawler = AsyncWebCrawler(
             config=await guarded_browser_config(headless=True, verbose=False)
         )
-        await self._crawler.start()
+        await crawler.start()
+        self._crawler = crawler
+
+    def alive(self, crawler=None) -> bool:
+        """False once the Chromium behind ``crawler`` (default: the shared one) has exited.
+        Unknown -> True: a crawl4ai internals change must not flip health by itself."""
+        crawler = self._crawler if crawler is None else crawler
+        browser = getattr(getattr(getattr(crawler, "crawler_strategy", None),
+                                  "browser_manager", None), "browser", None)
+        is_connected = getattr(browser, "is_connected", None)
+        return crawler is not None and (is_connected is None or bool(is_connected()))
+
+    async def _restart_normal(self, dead) -> None:
+        """Relaunch the shared Chromium after it died. Before 0.4.21 a crash or OOM kill
+        left every render failing until the next deploy, with /health still ok."""
+        async with self._restart_lock:
+            if self._crawler is not dead:  # another render already relaunched it
+                return
+            try:
+                async with asyncio.timeout(10):  # a hung close must not pin the lock
+                    await dead.close()
+            except Exception:  # noqa: BLE001, S110 - the process is already gone
+                pass
+            await self.start()
 
     async def stop(self) -> None:
         for attr in ("_crawler", "_stealth"):
@@ -166,6 +200,19 @@ class BrowserPool:
         tier = "stealth" if stealth else "normal"
         async with self._sem:
             res = await self._bounded_arun(crawler, url, cfg, timeout, recycle_stealth=stealth)
+            # Page errors say "closed" too (window.close, a crashed tab); only relaunch
+            # when the browser process itself is confirmed gone.
+            if _browser_dead(res) and not self.alive(crawler):
+                if stealth:
+                    await self._recycle_stealth()  # next stealth call re-inits it
+                else:
+                    try:
+                        await self._restart_normal(crawler)
+                        res = await self._bounded_arun(self._crawler, url, cfg, timeout)
+                    except FetchError:
+                        raise
+                    except Exception as e:  # noqa: BLE001 - relaunch failed; surface as render
+                        raise FetchError("render_failed", "browser relaunch failed") from e
 
         # Auto-escalate to the stealth tier once on an anti-bot block.
         blocked = not res.success or _looks_blocked(

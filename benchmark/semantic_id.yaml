@@ -1,0 +1,362 @@
+# Offline semantic-rerank eval set (see benchmark/semantic_id.py).
+# Each snippet is what Argus embeds: "<title> <snippet>". 3 relevant + 3 plausible-but-
+# irrelevant (same domain, wrong answer) per query. Hand-written, no network.
+# Hard negatives on purpose: real SERP junk is usually easier than this.
+queries:
+  # ---------------- Indonesian: government regulations ----------------
+  - id: id-reg-01
+    lang: id
+    query: tarif PPN 12 persen berlaku untuk barang apa saja
+    relevant:
+      - "PMK 131 Tahun 2024: PPN 12% Hanya untuk Barang Mewah - Kemenkeu menetapkan tarif 12 persen hanya dikenakan atas barang dan jasa yang tergolong mewah dan dikenai PPnBM."
+      - "Daftar Barang Kena PPN 12 Persen Mulai 1 Januari 2025 - Pemerintah merinci kelompok barang seperti kendaraan bermotor mewah, kapal pesiar, dan hunian mewah yang dikenai tarif baru."
+      - "Penjelasan DJP soal Kenaikan PPN Menjadi 12% - Untuk barang non-mewah, dasar pengenaan pajak memakai nilai lain sehingga beban efektif tetap 11 persen."
+    irrelevant:
+      - "Cara Lapor SPT Tahunan Pribadi Lewat DJP Online - Panduan langkah demi langkah mengisi formulir 1770 S dan mengunggah bukti potong."
+      - "Tarif PBB Rumah Naik di Beberapa Daerah - Pemda menyesuaikan NJOP sehingga tagihan pajak bumi dan bangunan meningkat tahun ini."
+      - "Bea Cukai Perketat Impor Barang Kiriman - Batas pembebasan bea masuk barang kiriman tetap USD 3 per kiriman."
+  - id: id-reg-02
+    lang: id
+    query: syarat membuat NIB lewat OSS RBA untuk usaha mikro
+    relevant:
+      - "Cara Daftar NIB di OSS RBA untuk UMK - Pelaku usaha mikro cukup menyiapkan NIK, NPWP, email aktif, dan alamat usaha untuk mendapatkan Nomor Induk Berusaha."
+      - "Persyaratan Perizinan Berusaha Berbasis Risiko Usaha Mikro - Kegiatan berisiko rendah hanya memerlukan NIB yang sekaligus berlaku sebagai identitas dan legalitas usaha."
+      - "Panduan Lengkap OSS RBA: Mengurus NIB Gratis dan Online - Pendaftaran tidak dipungut biaya dan NIB terbit otomatis setelah data KBLI diisi."
+    irrelevant:
+      - "Syarat Pengajuan KUR BRI 2025 - Calon debitur wajib memiliki usaha produktif minimal enam bulan dan tidak sedang menerima kredit lain."
+      - "Cara Membuat SKCK Online di Polri - Pemohon mengisi formulir di aplikasi Super App Polri lalu datang ke Polres untuk sidik jari."
+      - "Prosedur Pendirian PT Perorangan - Pendirian dilakukan melalui AHU Online dengan surat pernyataan pendirian tanpa akta notaris."
+  - id: id-reg-03
+    lang: id
+    query: UMP Jawa Barat 2025 berapa
+    relevant:
+      - "UMP Jabar 2025 Resmi Ditetapkan Rp2.191.238 - Gubernur Jawa Barat menetapkan kenaikan upah minimum provinsi sebesar 6,5 persen sesuai Permenaker 16/2024."
+      - "Daftar UMK 27 Kabupaten Kota di Jawa Barat 2025 - Kota Bekasi tertinggi dan Kabupaten Pangandaran terendah setelah kenaikan upah minimum."
+      - "Kenaikan Upah Minimum 6,5 Persen, Ini Besaran UMP Jawa Barat - Pengumuman dilakukan serentak dengan provinsi lain menjelang akhir tahun."
+    irrelevant:
+      - "Gaji PNS Golongan III 2025 - Tabel gaji pokok aparatur sipil negara berdasarkan PP 5 Tahun 2024."
+      - "Lowongan Kerja Operator Produksi Karawang - Perusahaan manufaktur membuka rekrutmen lulusan SMK dengan penempatan di kawasan industri."
+      - "Cara Cek Saldo JHT BPJS Ketenagakerjaan - Peserta dapat melihat saldo jaminan hari tua melalui aplikasi JMO."
+  - id: id-reg-04
+    lang: id
+    query: aturan TKDN untuk pengadaan barang pemerintah
+    relevant:
+      - "Perpres 46 Tahun 2025 Wajibkan Produk Dalam Negeri di Pengadaan - Instansi wajib membeli produk dengan nilai TKDN ditambah BMP minimal 40 persen bila tersedia."
+      - "Cara Menghitung Nilai TKDN Barang Sesuai Permenperin 16/2011 - Nilai TKDN dihitung dari porsi biaya bahan, tenaga kerja, dan alat produksi dalam negeri."
+      - "Sertifikat TKDN Jadi Syarat Tender LKPP - Penyedia harus mencantumkan nilai TKDN yang tercatat di laman Kemenperin saat mengajukan penawaran."
+    irrelevant:
+      - "Cara Daftar Akun SIKaP LKPP untuk Penyedia - Penyedia mengisi data kualifikasi sebelum bisa mengikuti tender di SPSE."
+      - "Harga Mobil Dinas Pemerintah Dibatasi - Kementerian Keuangan menetapkan standar biaya masukan untuk kendaraan dinas pejabat eselon."
+      - "Program Bangga Buatan Indonesia Gelar Pameran UMKM - Kampanye mengajak masyarakat membeli produk lokal di pusat perbelanjaan."
+  - id: id-reg-05
+    lang: id
+    query: tarif listrik PLN per kWh golongan bisnis
+    relevant:
+      - "Tarif Listrik PLN Oktober 2025 untuk Pelanggan Bisnis - Golongan B-2 daya 6.600 VA hingga 200 kVA dikenakan Rp1.444,70 per kWh."
+      - "Daftar Tarif Tenaga Listrik Nonsubsidi Triwulan IV - Kementerian ESDM menahan tarif untuk golongan bisnis menengah dan besar."
+      - "Berapa Biaya Listrik per kWh untuk Toko dan Kantor - Pelanggan bisnis B-3 di atas 200 kVA membayar Rp1.114,74 per kWh."
+    irrelevant:
+      - "Cara Beli Token Listrik di PLN Mobile - Pelanggan prabayar dapat membeli token dengan dompet digital dan menerima kode 20 digit."
+      - "Pemadaman Bergilir di Sumatra Utara - PLN melakukan pemeliharaan gardu induk sehingga aliran listrik dipadamkan beberapa jam."
+      - "Harga Panel Surya Atap untuk Rumah - Paket PLTS 3 kWp ditawarkan mulai puluhan juta rupiah termasuk inverter."
+  - id: id-reg-06
+    lang: id
+    query: denda telat bayar iuran BPJS Kesehatan
+    relevant:
+      - "Aturan Denda BPJS Kesehatan Terbaru - Peserta yang menunggak tidak dikenai denda saat membayar, denda baru muncul bila memakai layanan rawat inap dalam 45 hari setelah aktif."
+      - "Besaran Denda Pelayanan BPJS Kesehatan Sesuai Perpres 64/2020 - Denda sebesar 5 persen dari biaya rawat inap dikali bulan tertunggak, maksimal Rp30 juta."
+      - "Telat Bayar BPJS Kesehatan, Ini Konsekuensinya - Status kepesertaan dinonaktifkan sementara hingga seluruh tunggakan dilunasi."
+    irrelevant:
+      - "Cara Pindah Faskes BPJS Kesehatan Lewat Mobile JKN - Peserta dapat mengganti puskesmas atau klinik setelah tiga bulan terdaftar."
+      - "Denda Tilang Elektronik ETLE Naik - Pelanggar lalu lintas wajib membayar denda melalui BRIVA dalam waktu tujuh hari."
+      - "Iuran BPJS Kesehatan Kelas 3 Disubsidi Pemerintah - Peserta mandiri kelas 3 cukup membayar Rp35.000 per bulan."
+  - id: id-reg-07
+    lang: id
+    query: standar SNI wajib untuk kabel listrik
+    relevant:
+      - "Kemenperin Wajibkan SNI Kabel Listrik - Kabel jenis NYA, NYM, dan NYY yang beredar di pasar wajib bersertifikat SNI sesuai Permenperin terbaru."
+      - "SNI IEC 60227 untuk Kabel Berisolasi PVC - Standar ini mengatur konstruksi, ukuran konduktor, dan uji ketahanan isolasi kabel tegangan rendah."
+      - "Cara Membedakan Kabel Listrik Ber-SNI dan Palsu - Kabel resmi mencantumkan tanda SNI, nomor LSPro, dan ukuran penampang pada selubung luar."
+    irrelevant:
+      - "Harga Kabel HDMI 2.1 Terbaru - Kabel HDMI berkualitas mendukung resolusi 8K dan refresh rate 120 Hz."
+      - "SNI Wajib Mainan Anak Diperketat - Produk mainan impor harus lolos uji kandungan logam berat sebelum diedarkan."
+      - "Tips Merapikan Kabel di Meja Kerja - Gunakan cable tray dan klip agar kabel charger tidak berantakan."
+  - id: id-reg-08
+    lang: id
+    query: PP pengelolaan limbah B3 industri
+    relevant:
+      - "PP 22 Tahun 2021 tentang Penyelenggaraan Perlindungan Lingkungan Hidup - Regulasi ini mengatur penyimpanan, pengangkutan, dan pemanfaatan limbah bahan berbahaya dan beracun."
+      - "Kewajiban Industri dalam Pengelolaan Limbah B3 - Penghasil limbah B3 wajib memiliki TPS berizin dan mencatat neraca limbah secara berkala."
+      - "Batas Waktu Penyimpanan Limbah B3 Menurut KLHK - Limbah B3 kategori 1 hanya boleh disimpan maksimal 90 hari sejak dihasilkan."
+    irrelevant:
+      - "Bank Sampah Desa Ubah Plastik Jadi Rupiah - Warga mengumpulkan sampah rumah tangga untuk ditukar dengan tabungan."
+      - "Cara Membuat Kompos dari Sisa Dapur - Campurkan daun kering dan sisa sayur lalu aduk setiap minggu."
+      - "KLHK Gelar Lomba Adiwiyata Sekolah - Penghargaan diberikan kepada sekolah yang menerapkan budaya peduli lingkungan."
+  # ---------------- Indonesian: product prices for quotations ----------------
+  - id: id-price-01
+    lang: id
+    query: harga PLC Siemens S7-1200 CPU 1214C
+    relevant:
+      - "Jual Siemens S7-1200 CPU 1214C DC/DC/DC 6ES7214-1AG40 - Harga Rp6.850.000, barang original bergaransi distributor resmi Jakarta."
+      - "PLC Siemens 1214C AC/DC/RLY Harga Terbaru - Tersedia stok 6ES7214-1BG40-0XB0 dengan harga mulai Rp6,2 juta, bisa kirim ke seluruh Indonesia."
+      - "Daftar Harga PLC Siemens Simatic S7-1200 2025 - Perbandingan harga CPU 1211C, 1212C, dan 1214C dari beberapa toko otomasi industri."
+    irrelevant:
+      - "Harga HP Samsung Galaxy S24 Terbaru - Ponsel flagship dibanderol mulai Rp13 juta di toko resmi."
+      - "Tutorial Pemrograman Ladder Diagram untuk Pemula - Pelajari instruksi kontak NO, NC, dan coil dalam satu jam."
+      - "Siemens Healthineers Buka Pabrik Alat Kesehatan - Investasi baru difokuskan pada produksi perangkat pencitraan medis."
+  - id: id-price-02
+    lang: id
+    query: harga kabel NYY 4x16 mm per meter
+    relevant:
+      - "Harga Kabel NYY 4x16 Supreme per Meter - Rp185.000 per meter, tersedia juga per roll 100 meter dengan harga grosir."
+      - "Jual Kabel Listrik NYY 4 x 16 mm2 Eterna - Kabel tanam tegangan rendah SNI dijual Rp172.500 per meter untuk proyek panel."
+      - "Daftar Harga Kabel NYY Semua Ukuran 2025 - Tabel harga NYY 4x10, 4x16, 4x25 dari merek Supreme, Kabelmetal, dan Jembo."
+    irrelevant:
+      - "Harga Kabel LAN Cat6 per Roll - Kabel jaringan UTP 305 meter dijual mulai Rp1,2 juta."
+      - "Cara Menghitung Kebutuhan Daya Listrik Rumah - Jumlahkan watt seluruh peralatan lalu tambahkan cadangan 20 persen."
+      - "Harga Besi Beton 16 mm per Batang - Besi ulir SNI panjang 12 meter dibanderol sekitar Rp150 ribu."
+  - id: id-price-03
+    lang: id
+    query: harga sensor suhu PT100 dengan transmitter 4-20mA
+    relevant:
+      - "Jual Sensor PT100 dengan Transmitter 4-20mA - RTD tipe probe stainless 10 cm harga Rp950.000 lengkap head transmitter."
+      - "Temperature Transmitter PT100 Output 4-20 mA Harga Murah - Rentang ukur 0 sampai 200 derajat Celsius, cocok untuk PLC dan DCS."
+      - "Harga RTD PT100 3 Wire Plus Transmitter - Paket sensor suhu industri mulai Rp780 ribu, garansi kalibrasi satu tahun."
+    irrelevant:
+      - "Harga Termometer Digital Badan untuk Bayi - Termometer infrared tanpa sentuh dijual mulai Rp150 ribu."
+      - "Sensor Parkir Mobil Terbaik 2025 - Pilihan sensor mundur dengan buzzer dan kamera untuk mobil keluarga."
+      - "Cara Kerja Termokopel Tipe K - Termokopel menghasilkan tegangan kecil dari perbedaan suhu dua logam."
+  - id: id-price-04
+    lang: id
+    query: harga inverter Schneider ATV320 2.2 kW
+    relevant:
+      - "Jual Inverter Schneider Altivar ATV320U22N4B - VSD 2,2 kW 3 fase 380 V harga Rp7.400.000, ready stock Surabaya."
+      - "Harga Schneider ATV320 2.2kW Terbaru - Variable speed drive Altivar Machine untuk motor 3 HP dengan Modbus dan CANopen bawaan."
+      - "Altivar 320 2,2 kW 220V Single Phase Harga - ATV320U22M2C dijual Rp6,9 juta, cocok untuk konveyor dan pompa."
+    irrelevant:
+      - "Harga Inverter AC Daikin 1 PK - AC hemat energi dengan teknologi inverter dibanderol mulai Rp5 juta."
+      - "Schneider Electric Raih Penghargaan Keberlanjutan - Perusahaan dinilai berhasil menurunkan emisi karbon di pabrik Batam."
+      - "Cara Memilih UPS untuk Komputer Kantor - Hitung beban VA dan durasi backup sebelum membeli UPS."
+  - id: id-price-05
+    lang: id
+    query: harga modul ESP32 DevKit
+    relevant:
+      - "Jual ESP32 DevKit V1 WiFi Bluetooth - Board mikrokontroler ESP32-WROOM-32 harga Rp65.000, bisa diprogram dengan Arduino IDE."
+      - "Harga ESP32 DevKitC Original Espressif - Modul pengembangan resmi dijual Rp145 ribu dengan USB-C dan chip CP2102."
+      - "ESP32 Development Board 38 Pin Murah - Harga grosir mulai Rp58 ribu per pcs untuk pembelian di atas 10 unit."
+    irrelevant:
+      - "Harga Raspberry Pi 5 di Indonesia - Single board computer 8 GB dijual sekitar Rp1,6 juta."
+      - "Kursus Pemrograman Python Online Gratis - Belajar dasar Python dan data science dari nol."
+      - "Harga Modem WiFi Indihome Terbaru - Paket internet rumah mulai Rp280 ribu per bulan."
+  - id: id-price-06
+    lang: id
+    query: harga panel box listrik outdoor 60x40
+    relevant:
+      - "Jual Box Panel Outdoor 60x40x20 cm - Panel listrik plat 1,2 mm cat powder coating harga Rp1.150.000 dengan atap pelindung hujan."
+      - "Harga Panel Box Listrik Outdoor Ukuran 60 x 40 - Tersedia tipe IP55 lengkap dengan mounting plate dan kunci."
+      - "Daftar Harga Box Panel Outdoor Berbagai Ukuran - Ukuran 40x30, 50x40, 60x40 dari produsen panel Jakarta."
+    irrelevant:
+      - "Harga Lemari Arsip Besi 4 Laci - Filing cabinet kantor dijual mulai Rp2 juta."
+      - "Cara Pasang MCB di Rumah - Matikan aliran listrik utama lalu sambungkan kabel fasa ke terminal atas."
+      - "Harga Kanopi Baja Ringan per Meter - Biaya pemasangan kanopi teras berkisar Rp350 ribu per meter persegi."
+  # ---------------- Indonesian: local e-commerce ----------------
+  - id: id-ecom-01
+    lang: id
+    query: cara jual barang di Tokopedia untuk pemula
+    relevant:
+      - "Panduan Membuka Toko di Tokopedia Seller - Daftar akun, verifikasi KTP, lalu unggah produk dengan foto dan deskripsi yang jelas."
+      - "Tips Jualan Online di Tokopedia agar Cepat Laku - Atur harga kompetitif, aktifkan gratis ongkir, dan balas chat pembeli dengan cepat."
+      - "Cara Upload Produk Pertama di Tokopedia - Isi kategori, berat, dan variasi produk agar mudah ditemukan pembeli."
+    irrelevant:
+      - "Cara Belanja di Tokopedia Pakai PayLater - Pembeli bisa mencicil tagihan hingga 12 bulan setelah pengajuan disetujui."
+      - "GoTo Laporkan Kinerja Kuartal III - Grup induk Tokopedia mencatat penurunan rugi bersih."
+      - "Cara Membuat Toko Online dengan WordPress - Pasang WooCommerce lalu atur metode pembayaran transfer bank."
+  - id: id-ecom-02
+    lang: id
+    query: biaya admin Shopee untuk penjual terbaru
+    relevant:
+      - "Biaya Admin Shopee Naik Mulai Oktober 2025 - Penjual non-star dikenai biaya administrasi 8 persen per transaksi untuk kategori elektronik."
+      - "Rincian Potongan Biaya Layanan Shopee untuk Seller - Selain biaya admin, ada biaya program gratis ongkir XTRA sebesar 4 persen."
+      - "Kalkulator Biaya Admin Shopee Mall dan Star Seller - Hitung potongan per kategori agar harga jual tetap untung."
+    irrelevant:
+      - "Kode Voucher Gratis Ongkir Shopee Hari Ini - Klaim voucher belanja minimal Rp30 ribu untuk pengguna baru."
+      - "Cara Membatalkan Pesanan di Shopee - Pembeli dapat mengajukan pembatalan sebelum penjual mengatur pengiriman."
+      - "Biaya Admin Bank Transfer Antarbank BI-FAST - Transfer antarbank kini hanya dikenai Rp2.500."
+  - id: id-ecom-03
+    lang: id
+    query: cara klaim garansi barang rusak di Shopee
+    relevant:
+      - "Cara Ajukan Pengembalian Barang dan Dana di Shopee - Pilih pesanan, tekan Ajukan Pengembalian, lalu unggah foto atau video barang rusak."
+      - "Prosedur Klaim Garansi Shopee untuk Barang Cacat - Pengajuan wajib dilakukan sebelum pesanan dikonfirmasi diterima atau dalam masa garansi Shopee."
+      - "Barang Diterima Rusak? Begini Cara Komplain di Shopee - Sertakan video unboxing agar klaim cepat disetujui tim Shopee."
+    irrelevant:
+      - "Cara Klaim Asuransi Mobil Lecet - Laporkan kejadian ke perusahaan asuransi maksimal tiga hari kerja."
+      - "Promo Tanggal Kembar Shopee 10.10 - Diskon hingga 90 persen untuk produk elektronik dan fashion."
+      - "Cara Servis Laptop Bergaransi Resmi - Bawa kartu garansi dan nota pembelian ke service center terdekat."
+  - id: id-ecom-04
+    lang: id
+    query: perbandingan ongkir JNE J&T SiCepat Jakarta Surabaya
+    relevant:
+      - "Cek Ongkir Jakarta ke Surabaya JNE REG, J&T, dan SiCepat - Tarif per kilogram mulai Rp11.000 dengan estimasi dua sampai tiga hari."
+      - "Ekspedisi Termurah Jakarta Surabaya 2025 - SiCepat HALU paling murah, sementara JNE YES paling cepat sampai besok."
+      - "Tabel Perbandingan Ongkos Kirim Kurir untuk Seller Online - Bandingkan harga dan durasi pengiriman antar kurir untuk rute Jawa."
+    irrelevant:
+      - "Harga Tiket Kereta Jakarta Surabaya - Tiket Argo Bromo Anggrek kelas eksekutif mulai Rp600 ribu."
+      - "Lowongan Kurir J&T Express - Dibutuhkan kurir dengan motor sendiri untuk area Jakarta Timur."
+      - "Cara Lacak Paket Internasional DHL - Masukkan nomor resi di laman resmi untuk melihat status pengiriman."
+  # ---------------- Indonesian: local news ----------------
+  - id: id-news-01
+    lang: id
+    query: banjir Jakarta hari ini wilayah terdampak
+    relevant:
+      - "Banjir Rendam 45 RT di Jakarta Timur dan Selatan - BPBD DKI mencatat ketinggian air hingga 120 cm di Cawang dan Kebon Pala."
+      - "Update Banjir Jakarta: Daftar Wilayah Tergenang Pagi Ini - Kali Ciliwung meluap setelah hujan deras semalaman di Bogor."
+      - "Warga Kampung Melayu Mengungsi Akibat Banjir - Petugas mendirikan posko pengungsian dan dapur umum di sekitar lokasi."
+    irrelevant:
+      - "Prakiraan Cuaca Bali Akhir Pekan - BMKG memprediksi cerah berawan di sebagian besar wilayah."
+      - "Pemprov DKI Resmikan Taman Kota Baru - Ruang terbuka hijau seluas dua hektare dibuka untuk umum."
+      - "Kemacetan Tol Dalam Kota Akibat Kecelakaan - Truk terguling menyebabkan antrean kendaraan hingga lima kilometer."
+  - id: id-news-02
+    lang: id
+    query: harga BBM Pertamina hari ini Pertalite Pertamax
+    relevant:
+      - "Harga BBM Pertamina Oktober 2025: Pertamax Turun, Pertalite Tetap - Pertalite Rp10.000 per liter, Pertamax Rp12.200 per liter di Jawa."
+      - "Daftar Harga Pertamax, Pertamax Turbo, dan Dexlite Terbaru - Pertamina menyesuaikan harga BBM nonsubsidi mengikuti harga minyak dunia."
+      - "Pertalite Masih Rp10 Ribu, Ini Harga BBM di SPBU Hari Ini - Harga berlaku di seluruh SPBU Pertamina sejak pukul 00.00 WIB."
+    irrelevant:
+      - "Harga Emas Antam Hari Ini Naik - Emas batangan satu gram dijual Rp1,5 juta."
+      - "Cara Daftar MyPertamina untuk Subsidi LPG - Warga cukup membawa KTP ke pangkalan resmi."
+      - "Pertamina Raih Laba Bersih Triliunan Rupiah - Kinerja hulu migas menopang pendapatan perusahaan."
+  - id: id-news-03
+    lang: id
+    query: kurs rupiah terhadap dolar hari ini
+    relevant:
+      - "Rupiah Melemah ke Rp16.450 per Dolar AS - Mata uang Garuda tertekan sentimen suku bunga The Fed pada perdagangan pagi."
+      - "Kurs Rupiah Hari Ini di BCA, Mandiri, dan BRI - Kurs jual dolar AS di bank berada di kisaran Rp16.500."
+      - "JISDOR BI: Rupiah Ditutup Menguat Tipis - Kurs referensi Bank Indonesia tercatat Rp16.390 per dolar AS."
+    irrelevant:
+      - "Harga Saham BBCA Turun Jelang Rilis Laporan Keuangan - Investor asing mencatat aksi jual bersih."
+      - "Inflasi September 2025 Tercatat 2,1 Persen - BPS menyebut kenaikan harga cabai sebagai penyumbang utama."
+      - "Cara Tukar Uang Baru untuk Lebaran - Bank Indonesia membuka layanan penukaran di sejumlah titik."
+  - id: id-news-04
+    lang: id
+    query: BI rate terbaru keputusan RDG Bank Indonesia
+    relevant:
+      - "BI Tahan Suku Bunga Acuan di 5,50 Persen - Rapat Dewan Gubernur memutuskan BI-Rate tetap untuk menjaga stabilitas rupiah."
+      - "Hasil RDG Bank Indonesia September 2025 - Suku bunga deposit facility 4,75 persen dan lending facility 6,25 persen."
+      - "Gubernur BI Jelaskan Alasan Pertahankan BI-Rate - Inflasi terkendali namun ketidakpastian global masih tinggi."
+    irrelevant:
+      - "Suku Bunga KPR BTN Turun untuk Rumah Subsidi - Program FLPP menawarkan bunga tetap 5 persen."
+      - "Bank Indonesia Luncurkan Uang Rupiah Kertas Baru - Desain baru dilengkapi fitur pengaman tambahan."
+      - "OJK Cabut Izin Usaha BPR di Jawa Tengah - Nasabah diminta menunggu proses pembayaran simpanan oleh LPS."
+  # ---------------- English: tech docs ----------------
+  - id: en-tech-01
+    lang: en
+    query: ESP-IDF configure UART baud rate and pins
+    relevant:
+      - "UART - ESP32 - ESP-IDF Programming Guide - Call uart_param_config() with a uart_config_t to set baud rate, data bits, parity and stop bits, then uart_set_pin() to route TX and RX."
+      - "ESP-IDF UART driver example: uart_driver_install - Install the driver with RX/TX ring buffers before reading data with uart_read_bytes()."
+      - "How to change UART pins on ESP32 with ESP-IDF - Any GPIO can be mapped through the GPIO matrix using uart_set_pin(UART_NUM_1, tx, rx, rts, cts)."
+    irrelevant:
+      - "ESP-IDF Wi-Fi station example - Connect to an access point with esp_wifi_set_config() and handle IP_EVENT_STA_GOT_IP."
+      - "Arduino Serial.begin() reference - Sets the data rate in bits per second for serial transmission on AVR boards."
+      - "ESP32 deep sleep current consumption - The RTC controller keeps power under 10 uA when only the ULP is active."
+  - id: en-tech-02
+    lang: en
+    query: FastAPI dependency injection with yield for database session
+    relevant:
+      - "Dependencies with yield - FastAPI - Code after the yield runs after the response is sent, which is the place to close the database session."
+      - "SQL (Relational) Databases - FastAPI - Create a get_session dependency that yields a SQLModel Session and use it with Depends in path operations."
+      - "FastAPI: managing SQLAlchemy sessions per request with Depends - A generator dependency guarantees the session is closed even when an exception is raised."
+    irrelevant:
+      - "FastAPI background tasks - Use BackgroundTasks to run a function after returning a response, such as sending an email."
+      - "Flask-SQLAlchemy quickstart - Initialize db = SQLAlchemy(app) and define models as subclasses of db.Model."
+      - "Python generators explained - A generator function returns an iterator that produces values lazily with yield."
+  - id: en-tech-03
+    lang: en
+    query: Modbus TCP function code 03 read holding registers frame format
+    relevant:
+      - "Modbus TCP/IP frame structure - The MBAP header is followed by function code 0x03, a starting address and the quantity of holding registers to read."
+      - "Read Holding Registers (FC 03) explained - The response carries a byte count and two bytes per register, big-endian."
+      - "Modbus Application Protocol Specification V1.1b3 - Function 03 reads the contents of a contiguous block of holding registers in a remote device."
+    irrelevant:
+      - "Modbus RTU wiring for RS-485 - Use twisted pair cable with 120 ohm termination at both ends of the bus."
+      - "OPC UA vs MQTT for industrial IoT - OPC UA offers rich information models while MQTT is a lightweight publish/subscribe protocol."
+      - "BACnet object types overview - Analog Input, Binary Output and Schedule objects describe building automation points."
+  - id: en-tech-04
+    lang: en
+    query: MQTT QoS levels difference 0 1 2
+    relevant:
+      - "MQTT Essentials: Quality of Service 0, 1 and 2 - QoS 0 is at most once, QoS 1 is at least once with PUBACK, and QoS 2 is exactly once via a four-step handshake."
+      - "Understanding MQTT QoS - Higher QoS levels add acknowledgements and storage overhead in exchange for delivery guarantees."
+      - "When to use MQTT QoS 1 vs QoS 2 - QoS 1 may deliver duplicates, so idempotent consumers usually prefer it over the slower QoS 2."
+    irrelevant:
+      - "MQTT retained messages - The broker stores the last retained message on a topic and sends it to new subscribers."
+      - "Installing Mosquitto on Ubuntu - Run apt install mosquitto and enable the service with systemctl."
+      - "Kafka consumer groups explained - Partitions are assigned to consumers within a group for parallel processing."
+  - id: en-tech-05
+    lang: en
+    query: docker compose healthcheck depends_on condition service_healthy
+    relevant:
+      - "Control startup order in Compose - Use depends_on with condition: service_healthy so a service waits until its dependency's healthcheck passes."
+      - "Docker Compose healthcheck example for Postgres - Define test: pg_isready with interval and retries, then gate the app with service_healthy."
+      - "Compose file reference: healthcheck - The healthcheck block configures a check that determines whether the container is healthy."
+    irrelevant:
+      - "Dockerfile multi-stage builds - Copy artifacts from a builder stage to keep the final image small."
+      - "Kubernetes liveness and readiness probes - Probes tell the kubelet when to restart a container or route traffic to it."
+      - "Docker Desktop license changes - Large companies need a paid subscription for commercial use."
+  - id: en-tech-06
+    lang: en
+    query: python asyncio run blocking function without blocking event loop
+    relevant:
+      - "asyncio.to_thread - Python docs - Asynchronously run a blocking function in a separate thread so the event loop stays responsive."
+      - "Running blocking code in asyncio with run_in_executor - Pass a ThreadPoolExecutor or ProcessPoolExecutor to loop.run_in_executor for CPU or IO bound calls."
+      - "Do not call time.sleep in async code - Offload synchronous libraries with asyncio.to_thread instead of blocking the loop."
+    irrelevant:
+      - "asyncio.gather vs asyncio.wait - gather returns results in order while wait gives sets of done and pending tasks."
+      - "Python threading.Lock tutorial - Use a lock to protect shared state between threads."
+      - "Node.js event loop phases - Timers, pending callbacks, poll, check and close callbacks run in order."
+  - id: en-tech-07
+    lang: en
+    query: postgres create index concurrently without locking table
+    relevant:
+      - "CREATE INDEX - PostgreSQL documentation - With CONCURRENTLY, PostgreSQL builds the index without taking locks that prevent inserts, updates or deletes."
+      - "Building indexes concurrently in production Postgres - It takes longer and cannot run inside a transaction block, but writes keep flowing."
+      - "How to add an index to a large Postgres table with zero downtime - Use CREATE INDEX CONCURRENTLY and check for INVALID indexes if it fails."
+    irrelevant:
+      - "Postgres VACUUM FULL explained - It rewrites the table and requires an exclusive lock for the duration."
+      - "MySQL online DDL with ALGORITHM=INPLACE - InnoDB can add secondary indexes while allowing concurrent DML."
+      - "Postgres connection pooling with PgBouncer - Transaction pooling reduces the number of backend processes."
+  - id: en-tech-08
+    lang: en
+    query: Traefik rate limit middleware by client IP header
+    relevant:
+      - "RateLimit middleware - Traefik - The sourceCriterion option selects requestHeaderName or ipStrategy to group requests by client."
+      - "Traefik rateLimit behind Cloudflare - Set sourceCriterion.requestHeaderName to CF-Connecting-IP so each visitor gets its own bucket."
+      - "Configuring average and burst in Traefik rate limiting - average sets requests per period and burst allows short spikes per source."
+    irrelevant:
+      - "Traefik basic auth middleware - Protect a router with users defined as htpasswd hashes."
+      - "Nginx limit_req_zone directive - Define a shared memory zone keyed by binary_remote_addr for request limiting."
+      - "Let's Encrypt rate limits - Certificates per registered domain are limited to 50 per week."
+  - id: en-tech-09
+    lang: en
+    query: flutter http request with timeout and retry
+    relevant:
+      - "Fetch data from the internet - Flutter - Use the http package and call .timeout(Duration(seconds: 10)) on the Future to fail fast."
+      - "Retry failed HTTP requests in Flutter with the retry package - Wrap the call in retry() with exponential backoff on SocketException or TimeoutException."
+      - "Dio interceptors for timeout and retry in Flutter - Configure connectTimeout and receiveTimeout and add a RetryInterceptor."
+    irrelevant:
+      - "Flutter state management with Riverpod - Providers expose state that widgets can watch and rebuild on change."
+      - "React Native fetch API - Use fetch with async await to call REST endpoints from a mobile app."
+      - "Flutter build APK release - Run flutter build apk --release and sign it with your keystore."
+  - id: en-tech-10
+    lang: en
+    query: SearXNG settings.yml disable engine
+    relevant:
+      - "Engine settings - SearXNG documentation - Set disabled: true under an engine entry in settings.yml to turn it off by default."
+      - "How to enable or disable search engines in SearXNG - Edit the engines list in settings.yml and restart the instance to apply changes."
+      - "SearXNG settings.yml engines section - Each engine has name, engine, shortcut and an optional disabled flag and timeout."
+    irrelevant:
+      - "Installing SearXNG with Docker - Clone searxng-docker and run docker compose up -d."
+      - "Elasticsearch index settings - Configure number_of_shards and number_of_replicas when creating an index."
+      - "How to change the default search engine in Chrome - Open Settings, Search engine, and pick a provider from the list."

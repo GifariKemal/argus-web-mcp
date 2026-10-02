@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from ..models import record_stage
 from ..security.ssrf import SSRFError
+from .adapters import fetch_stackexchange, stackexchange_target
 from .fallback import fetch_via_archive
 from .render import BrowserPool
 from .static import FetchError, _guard, fetch_static
@@ -102,6 +103,14 @@ async def _do_fetch(
         # propagate without any fallback attempt. Recover via server-side mirrors.
         record_stage("fetch.static_fail")
         logger.info("fetch[%s]: static hop failed (%s); trying fallbacks", url, exc)
+        # 0) official API for hosts that block our IP (StackExchange 403s the page).
+        if stackexchange_target(url):
+            api = await fetch_stackexchange(url, client=client, timeout=timeout)
+            if api is not None:
+                record_stage("fetch.adapter_ok")
+                logger.info("fetch[%s]: recovered via StackExchange API", url)
+                return api
+            record_stage("fetch.adapter_fail")
         # 1) stealth browser tier (may route/behave differently than the httpx hop).
         if browser is not None:
             try:

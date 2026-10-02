@@ -328,3 +328,11 @@ def test_real_embed_semantic_ranking():
         ["web crawling with python", "banana bread recipe"],
     )
     assert sims[0] > sims[1]
+
+
+def test_dockerfile_bakes_the_model_semantic_uses():
+    # A mismatch would make the container download the model on first use (or fail offline).
+    from pathlib import Path
+
+    dockerfile = Path(__file__).parents[1].joinpath("Dockerfile").read_text(encoding="utf-8")
+    assert f"TextEmbedding('{semantic.MODEL_NAME}')" in dockerfile

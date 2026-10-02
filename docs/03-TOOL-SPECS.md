@@ -34,7 +34,7 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 ## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=60)`
 URL -> clean main content.
 - **in:** `url` (str, http/https only), `format`  in  {markdown,text,html}, `clean` (strip boilerplate), `include_links` (keep hyperlinks), `extract_media` (also return the page's links + images lists), `timeout` (s).
-- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count}, render_path:"static|browser", from_cache}` (+ `links`, `images` when `extract_media`).
+- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP) (+ `links`, `images` when `extract_media`).
 - **backing:** httpx static -> trafilatura -> readability fallback -> Crawl4AI/Playwright if thin/JS. **No truncation.**
 - **errors:** ssrf_blocked, fetch_failed, empty_content.
 
@@ -121,10 +121,10 @@ Structured GitHub search - repos / code / issues with stars/language/sort. Compl
 - **errors:** search_backend_down, no_results, schema_invalid.
 
 ## `scholar_search(query, limit=10, year_from=null, open_access=false)`
-Structured academic-paper search (Semantic Scholar -> CrossRef fallback). Free, no key (optional S2 key).
+Structured academic-paper search (Semantic Scholar -> OpenAlex -> CrossRef). Free, no key required (optional `ARGUS_S2_API_KEY`, `ARGUS_OPENALEX_API_KEY`).
 - **in:** `query`, `limit`, `year_from`, `open_access` (bool).
 - **out:** `{results:[{title,authors,year,venue,citations,doi,abstract,open_access_pdf?}], ...}` (+ `from_cache`).
-- **backing:** Semantic Scholar -> CrossRef fallback.
+- **backing:** Semantic Scholar (one retry on 429) -> OpenAlex -> CrossRef; `source` reports which answered.
 - **errors:** search_backend_down, no_results.
 
 ## `watch(url, webhook, interval_minutes=60, selector=null)`

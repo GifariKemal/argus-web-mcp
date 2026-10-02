@@ -67,7 +67,8 @@ INSTRUCTIONS = (
     "(cited LLM answer); `map_urls(url)` discover a site's URLs (sitemap/robots/links); "
     "`find_similar(url/text)` semantically-related pages (local embeddings); "
     "`github_search(query, mode)` structured GitHub repos/code/issues; `scholar_search(query)` "
-    "academic papers (Semantic Scholar/CrossRef: citations/DOI/abstract); `smart_search(query)` "
+    "academic papers (Semantic Scholar/OpenAlex/CrossRef: citations/DOI/abstract); "
+    "`smart_search(query)` "
     "auto-routes to the best backend (github/scholar/science/news/it/general); "
     "`extract_structured(url, schema, mode)` pull fields via CSS/XPath, mode='llm'/'auto' "
     "uses an LLM. `watch(url, webhook)`/`list_watches`/`unwatch` monitor a page -> webhook on "
@@ -948,7 +949,7 @@ async def github_search(
 async def scholar_search(
     query: str, limit: int = 10, year_from: int | None = None, open_access: bool = False
 ) -> dict:
-    """Structured academic-paper search (Semantic Scholar -> CrossRef fallback): title, authors,
+    """Structured academic-paper search (Semantic Scholar -> OpenAlex -> CrossRef): title, authors,
     year, venue, citations, DOI, abstract, open-access PDF. Free, no key (optional S2 key)."""
     s = _state()
     ck = s.cache.key(
@@ -1139,7 +1140,11 @@ for _fn in TOOLS:
 
 
 def _healthy() -> bool:
-    return _S is not None and _S.browser is not None and _S.browser._crawler is not None
+    b = _S.browser if _S is not None else None
+    if b is None or b._crawler is None:
+        return False
+    alive = getattr(b, "alive", None)  # test doubles have no alive()
+    return alive() if alive is not None else True
 
 
 def _is_loopback(request) -> bool:
@@ -1157,6 +1162,12 @@ async def health(request):
     """Liveness + readiness probe. Unauthenticated, cheap (no render). The public body is
     status only; usage telemetry (tools in use, latencies, counts) is for loopback - the
     container healthcheck and an SSH operator - not for anyone on the internet."""
+    b = _S.browser if _S is not None else None
+    if b is not None and getattr(b, "_crawler", None) is not None and not _healthy():
+        # Nothing else relaunches a dead browser while no render traffic arrives, and
+        # compose does not restart unhealthy containers; the 30 s healthcheck heals it.
+        with contextlib.suppress(Exception):
+            await b._restart_normal(b._crawler)
     ok = _healthy()
     body = {
         "status": "ok" if ok else "degraded",

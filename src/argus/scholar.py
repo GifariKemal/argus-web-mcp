@@ -1,15 +1,18 @@
 """The `scholar_search` MCP tool - structured academic-paper search.
 
-Two FREE, key-less public APIs, queried via the SSRF-safe client (both hosts are
-public fixed hosts -> they pass the guard):
+Three free public APIs, queried in order via the SSRF-safe client (all are public
+fixed hosts -> they pass the guard):
 
 * Primary: **Semantic Scholar Graph API** - richest metadata (citations, abstract,
   open-access PDF). Often 429s anonymously; an optional ``SEMANTIC_SCHOLAR_API_KEY``
   / ``ARGUS_S2_API_KEY`` env raises the rate limit via an ``x-api-key`` header.
-* Fallback: **CrossRef** - used on any S2 failure / 429 / empty result. The polite
-  pool wants a ``mailto`` in the ``User-Agent``.
+* Second: **OpenAlex** - answers where S2 429s. Keyless use gets a tenth of the
+  free daily budget (~100 searches/day); an optional ``ARGUS_OPENALEX_API_KEY`` sent as
+  a bearer token raises it to ~1,000. The old ``mailto`` polite pool is gone (Feb 2026).
+* Last: **CrossRef** - used when both fail or come back empty. The polite pool wants a
+  ``mailto`` in the ``User-Agent``.
 
-Both return one lean, mapped shape (never raw backend JSON). See docs/03-TOOL-SPECS.md.
+All return one lean, mapped shape (never raw backend JSON). See docs/03-TOOL-SPECS.md.
 """
 
 import asyncio
@@ -23,13 +26,21 @@ from argus.security.ssrf import build_safe_async_client
 
 S2_BASE = "https://api.semanticscholar.org"
 CROSSREF_BASE = "https://api.crossref.org"
+OPENALEX_BASE = "https://api.openalex.org"
 
 _USER_AGENT = "ArgusBot/0.1"
 _CROSSREF_UA = "ArgusBot/0.1 (+https://suriota.com; mailto:research@suriota.com)"
 _S2_FIELDS = "title,authors,year,venue,citationCount,externalIds,abstract,url,openAccessPdf"
+_OA_SELECT = (
+    "id,display_name,authorships,publication_year,primary_location,cited_by_count,"
+    "doi,abstract_inverted_index,best_oa_location"
+)
 _TIMEOUT = 20.0
 _MAX_LIMIT = 100
-_S2_MAX_RETRIES = 3  # retry budget for HTTP 429 from S2
+_OA_MAX_LIMIT = 50
+# One retry only: OpenAlex now catches the 429s, so a long S2 backoff chain just adds
+# latency (the old 1+2+4 s chain put p99 at 10.6 s before any fallback ran).
+_S2_MAX_RETRIES = 1
 # Even a keyed S2 caps at 1 req/s and 429s well below that in practice (measured ~50%
 # rejects at 6 s spacing), so never retry sooner than the documented floor.
 _S2_BACKOFF_BASE = 1.0
@@ -55,9 +66,15 @@ def _s2_key() -> str | None:
 
 def _headers(backend: str) -> dict:
     """Per-backend request headers. UA always; CrossRef UA carries a mailto; S2 adds
-    ``x-api-key`` iff a key env is set."""
+    ``x-api-key`` and OpenAlex a bearer token iff their key env is set."""
     if backend == "crossref":
         return {"User-Agent": _CROSSREF_UA}
+    if backend == "openalex":
+        headers = {"User-Agent": _USER_AGENT}
+        # Header, not the api_key query param, so the key never lands in URLs or logs.
+        if key := os.environ.get("ARGUS_OPENALEX_API_KEY"):
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
     headers = {"User-Agent": _USER_AGENT}
     key = _s2_key()
     if key:
@@ -118,6 +135,35 @@ def _map_crossref(work: dict) -> dict:
         "url": work.get("URL"),
         "abstract": _cr_abstract(work),
         "open_access_pdf": _cr_pdf(work),
+    }
+
+def _oa_abstract(index: dict | None) -> str | None:
+    """Rebuild plain text from OpenAlex's ``abstract_inverted_index`` (word -> positions)."""
+    if not index:
+        return None
+    words = {pos: word for word, positions in index.items() for pos in positions}
+    return " ".join(words[i] for i in sorted(words))
+
+def _map_openalex(work: dict) -> dict:
+    loc = work.get("primary_location") or {}
+    doi = work.get("doi")
+    pdf = (work.get("best_oa_location") or {}).get("pdf_url")
+    return {
+        "title": work.get("display_name"),
+        "authors": [
+            (a.get("author") or {}).get("display_name", "")
+            for a in (work.get("authorships") or [])
+        ],
+        "year": work.get("publication_year"),
+        "venue": (loc.get("source") or {}).get("display_name") or loc.get("raw_source_name"),
+        "citations": work.get("cited_by_count"),
+        # OpenAlex gives the DOI as a URL; the other backends give the bare DOI.
+        "doi": doi.removeprefix("https://doi.org/") if doi else None,
+        "url": loc.get("landing_page_url") or work.get("id"),
+        "abstract": _oa_abstract(work.get("abstract_inverted_index")),
+        "open_access_pdf": (
+            pdf if isinstance(pdf, str) and pdf.startswith(("http://", "https://")) else None
+        ),
     }
 
 def _apply_filters(results: list[dict], year_from: int | None, open_access: bool) -> list[dict]:
@@ -201,6 +247,25 @@ async def _try_s2(client, base, query, limit, year_from, open_access):
         papers = data.get("data") or []
         return _apply_filters([_map_s2(p) for p in papers], year_from, open_access)
 
+async def _try_openalex(client, base, query, limit, year_from, open_access):
+    """Return mapped+filtered OpenAlex results, or None on any failure."""
+    params = {"search": query, "per_page": min(limit, _OA_MAX_LIMIT), "select": _OA_SELECT}
+    filters = [f"from_publication_date:{year_from}-01-01"] if year_from is not None else []
+    if open_access:
+        filters.append("is_oa:true")
+    if filters:
+        params["filter"] = ",".join(filters)
+    try:
+        resp = await client.get(f"{base}/works", params=params, headers=_headers("openalex"))
+        if resp.status_code < 200 or resp.status_code >= 300:
+            return None
+        # Mapping inside the try: a malformed body must fall through to CrossRef, not
+        # escape as an exception that skips the last source.
+        works = resp.json().get("results") or []
+        return _apply_filters([_map_openalex(w) for w in works], year_from, open_access)
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError, KeyError):
+        return None
+
 async def _try_crossref(client, base, query, limit, year_from, open_access):
     """Return mapped+filtered CrossRef results, or None on any failure."""
     params = {"query": query, "rows": limit}
@@ -230,27 +295,29 @@ async def scholar_search(
     client: "httpx.AsyncClient | None" = None,
     s2_base: str = S2_BASE,
     crossref_base: str = CROSSREF_BASE,
+    openalex_base: str = OPENALEX_BASE,
 ) -> dict:
     """Structured academic-paper search.
 
-    Tries Semantic Scholar first; on any S2 failure / 429 / empty result, falls back to
-    CrossRef. ``year_from`` drops papers older than that year; ``open_access`` keeps only
-    items that carry an open-access PDF. Both are sent to the backend as filters and
-    re-applied client-side. ``limit`` is capped at 100.
+    Tries Semantic Scholar, then OpenAlex, then CrossRef; each later backend runs only
+    when the earlier ones failed / 429ed / came back empty. ``year_from`` drops papers
+    older than that year; ``open_access`` keeps only items that carry an open-access PDF.
+    Both are sent to each backend as filters and re-applied client-side. ``limit`` is
+    capped at 100 (50 for OpenAlex).
 
     S2 HTTP 429 is retried up to _S2_MAX_RETRIES times with exponential backoff before
-    falling back to CrossRef.  Results are relevance-reranked by query/title token-overlap
+    falling back.  Results are relevance-reranked by query/title token-overlap
     fraction (desc) then citations (desc) before returning.
 
     Returns ``{query, source, results, count}`` where ``source`` is
-    ``'semantic_scholar'`` or ``'crossref'`` and each result is::
+    ``'semantic_scholar'``, ``'openalex'`` or ``'crossref'`` and each result is::
 
         {title, authors: [str], year, venue, citations, doi, url, abstract, open_access_pdf}
 
-    Both backends empty -> ``ScholarError('no_results')``. ``search_backend_down`` is raised
-    only when BOTH backends hard-errored (HTTP non-2xx / transport / non-JSON). A backend
+    All backends empty -> ``ScholarError('no_results')``. ``search_backend_down`` is raised
+    only when ALL backends hard-errored (HTTP non-2xx / transport / non-JSON). A backend
     that returns a valid-but-empty page counts as a "soft zero", so e.g. S2-empty +
-    CrossRef-error is treated as ``no_results`` (not both errored).
+    the rest erroring is treated as ``no_results``.
 
     The injected ``client`` is used as-is; if ``None`` an SSRF-safe client is built here and
     closed before returning.
@@ -270,6 +337,11 @@ async def scholar_search(
                 "results": ranked, "count": len(ranked),
             }
 
+        oa = await _try_openalex(client, openalex_base, query, limit, year_from, open_access)
+        if oa:
+            ranked = _rerank_results(query, oa)
+            return {"query": query, "source": "openalex", "results": ranked, "count": len(ranked)}
+
         cr = await _try_crossref(client, crossref_base, query, limit, year_from, open_access)
         if cr:
             ranked = _rerank_results(query, cr)
@@ -278,8 +350,8 @@ async def scholar_search(
         if owns_client:
             await client.aclose()
 
-    # Neither backend produced usable results. If at least one hard-errored (returned
-    # None), it's a backend outage; if both returned valid-but-empty lists, it's no_results.
-    if s2 is None and cr is None:
-        raise ScholarError("search_backend_down", "both scholar backends failed")
+    # No backend produced usable results. Only when every one hard-errored (returned None)
+    # is it an outage; any valid-but-empty page makes it no_results.
+    if s2 is None and oa is None and cr is None:
+        raise ScholarError("search_backend_down", "all scholar backends failed")
     raise ScholarError("no_results", f"no academic results for query: {query!r}")

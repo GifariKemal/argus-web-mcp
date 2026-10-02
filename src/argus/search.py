@@ -73,8 +73,11 @@ _SEM_WEIGHT = 0.6
 # A result with ZERO lexical overlap is NOT hard-dropped under semantic (a paraphrase can be
 # rescued), but one with BOTH zero lexical overlap AND cosine < _SEM_FLOOR is clearly
 # irrelevant and dropped (subject to the _MIN_KEEP safety floor).
-_SEM_FLOOR = 0.3
-_SEM_GUARD_FLOOR = 0.55
+# Calibrated for the multilingual model on benchmark/semantic_id.yaml: the floor is the
+# 5th percentile of relevant scores (keep paraphrases), the guard floor the 95th
+# percentile of irrelevant ones (do not count junk as on-topic).
+_SEM_FLOOR = 0.40
+_SEM_GUARD_FLOOR = 0.60
 # Relative relevance gate (v3): after the zero-overlap / SEM_FLOOR drop, apply a gentle
 # relative floor: drop a kept result only if BOTH (a) its score < _REL_FLOOR * top_score
 # AND (b) keeping the drop still leaves at least _MIN_KEEP results. This trims "single

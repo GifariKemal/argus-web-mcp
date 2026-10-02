@@ -1,7 +1,7 @@
 """Tests for the `scholar_search` tool (offline via respx).
 
-Structured academic-paper search: tries Semantic Scholar Graph API first, falls back
-to CrossRef on S2 failure/429/empty, and maps both backends into one lean shape. One
+Structured academic-paper search: tries Semantic Scholar Graph API first, then OpenAlex,
+then CrossRef on failure/429/empty, and maps every backend into one lean shape. One
 @pytest.mark.network test hits the live free APIs once.
 """
 
@@ -13,6 +13,7 @@ from argus.scholar import (
     _S2_BACKOFF_BASE,
     _S2_MAX_RETRIES,
     CROSSREF_BASE,
+    OPENALEX_BASE,
     S2_BASE,
     ScholarError,
     _headers,
@@ -24,13 +25,19 @@ _KEY_ENVS = ("SEMANTIC_SCHOLAR_API_KEY", "ARGUS_S2_API_KEY")
 
 _S2_SEARCH = f"{S2_BASE}/graph/v1/paper/search"
 _CR_WORKS = f"{CROSSREF_BASE}/works"
+_OA_WORKS = f"{OPENALEX_BASE}/works"
 
 
 @pytest.fixture(autouse=True)
 def no_key(monkeypatch):
     """Default: no S2 API key in the environment. Tests opt into a key."""
-    for name in _KEY_ENVS:
+    for name in (*_KEY_ENVS, "ARGUS_OPENALEX_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+
+
+def _oa_empty():
+    """OpenAlex answers a valid-but-empty page, so the chain reaches CrossRef."""
+    return respx.get(_OA_WORKS).mock(return_value=httpx.Response(200, json={"results": []}))
 
 
 def _client():
@@ -143,6 +150,7 @@ async def test_s2_429_falls_back_to_crossref():
             },
         )
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("attention", limit=10, client=client)
 
@@ -169,6 +177,7 @@ async def test_s2_empty_falls_back_to_crossref():
     cr = respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("x", client=client)
     assert cr.called
@@ -185,6 +194,7 @@ async def test_both_empty_raises_no_results():
     respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": []}})
     )
+    _oa_empty()
     async with _client() as client:
         with pytest.raises(ScholarError) as exc:
             await scholar_search("zzznope", client=client)
@@ -194,6 +204,7 @@ async def test_both_empty_raises_no_results():
 @respx.mock
 async def test_both_error_raises_backend_down():
     respx.get(_S2_SEARCH).mock(return_value=httpx.Response(429, json={"message": "rate"}))
+    respx.get(_OA_WORKS).mock(return_value=httpx.Response(500, json={"message": "boom"}))
     respx.get(_CR_WORKS).mock(return_value=httpx.Response(500, json={"message": "boom"}))
     async with _client() as client:
         with pytest.raises(ScholarError) as exc:
@@ -219,6 +230,7 @@ async def test_crossref_open_access_pdf_surfaces_under_oa_filter():
             ]}},
         )
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("attention", open_access=True, client=client)
     assert out["source"] == "crossref"
@@ -232,6 +244,7 @@ async def test_s2_empty_crossref_error_is_no_results():
     # valid-but-empty page (a "soft zero"), so not both errored -> no_results.
     respx.get(_S2_SEARCH).mock(return_value=httpx.Response(200, json={"data": []}))
     respx.get(_CR_WORKS).mock(return_value=httpx.Response(503, json={"message": "down"}))
+    _oa_empty()
     async with _client() as client:
         with pytest.raises(ScholarError) as exc:
             await scholar_search("x", client=client)
@@ -244,6 +257,7 @@ async def test_s2_transport_error_falls_back():
     cr = respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("x", client=client)
     assert cr.called
@@ -254,6 +268,7 @@ async def test_s2_transport_error_falls_back():
 async def test_both_transport_error_raises_backend_down():
     # Both backends raise transport errors (the except-branch in each helper) -> backend_down.
     respx.get(_S2_SEARCH).mock(side_effect=httpx.ConnectError("s2 down"))
+    respx.get(_OA_WORKS).mock(side_effect=httpx.ConnectError("oa down"))
     respx.get(_CR_WORKS).mock(side_effect=httpx.ConnectError("cr down"))
     async with _client() as client:
         with pytest.raises(ScholarError) as exc:
@@ -309,6 +324,7 @@ async def test_filters_emptying_results_raises_no_results():
     respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1, year=1990)]}})
     )
+    _oa_empty()
     async with _client() as client:
         with pytest.raises(ScholarError) as exc:
             await scholar_search("x", year_from=2020, client=client)
@@ -316,8 +332,9 @@ async def test_filters_emptying_results_raises_no_results():
 
 
 @respx.mock
-async def test_filters_sent_server_side_to_both_backends():
+async def test_filters_sent_server_side_to_all_backends():
     s2 = respx.get(_S2_SEARCH).mock(return_value=httpx.Response(200, json={"data": []}))
+    oa = _oa_empty()
     cr = respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": []}})
     )
@@ -327,6 +344,8 @@ async def test_filters_sent_server_side_to_both_backends():
     s2_params = dict(s2.calls.last.request.url.params)
     assert s2_params["year"] == "2021-"
     assert s2_params["openAccessPdf"] == ""
+    oa_params = dict(oa.calls.last.request.url.params)
+    assert oa_params["filter"] == "from_publication_date:2021-01-01,is_oa:true"
     cr_params = dict(cr.calls.last.request.url.params)
     assert cr_params["filter"] == "from-pub-date:2021,has-full-text:true"
 
@@ -337,6 +356,7 @@ async def test_no_filters_sends_no_filter_params():
     cr = respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": []}})
     )
+    _oa_empty()
     async with _client() as client:
         with pytest.raises(ScholarError):
             await scholar_search("x", client=client)
@@ -443,7 +463,7 @@ async def test_live_scholar_search():
         assert exc.code == "search_backend_down"
         pytest.skip(f"both scholar backends rate-limited: {exc}")
     assert out["count"] >= 1
-    assert out["source"] in ("semantic_scholar", "crossref")
+    assert out["source"] in ("semantic_scholar", "openalex", "crossref")
     for r in out["results"]:
         assert r["title"]
         assert r["citations"] is not None or r["doi"] is not None
@@ -453,14 +473,13 @@ async def test_live_scholar_search():
 # FIX A -- S2 retry on 429 (up to _S2_MAX_RETRIES retries, backoff, sleep injected)
 # --------------------------------------------------------------------------- #
 @respx.mock
-async def test_s2_429_retries_twice_then_uses_s2_on_third_success(monkeypatch):
+async def test_s2_429_retries_once_then_uses_s2_on_second_success(monkeypatch):
     import asyncio
     slept = []
     async def _fake_sleep(s):
         slept.append(s)
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
     responses = [
-        httpx.Response(429, json={"message": "rate"}),
         httpx.Response(429, json={"message": "rate"}),
         httpx.Response(200, json={"data": [_s2_paper(1)]}),
     ]
@@ -477,9 +496,7 @@ async def test_s2_429_retries_twice_then_uses_s2_on_third_success(monkeypatch):
         out = await scholar_search("attention", client=client)
     assert out["source"] == "semantic_scholar"
     assert not cr.called
-    assert len(slept) == 2
-    assert slept[0] == pytest.approx(_S2_BACKOFF_BASE * 2**0)
-    assert slept[1] == pytest.approx(_S2_BACKOFF_BASE * 2**1)
+    assert slept == [pytest.approx(_S2_BACKOFF_BASE)]
 
 
 @respx.mock
@@ -493,11 +510,12 @@ async def test_s2_429_exhausted_falls_back_to_crossref(monkeypatch):
     cr = respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("attention", client=client)
     assert out["source"] == "crossref"
     assert cr.called
-    assert len(slept) == _S2_MAX_RETRIES
+    assert len(slept) == _S2_MAX_RETRIES == 1
 
 
 @respx.mock
@@ -511,6 +529,7 @@ async def test_s2_non_429_error_no_retry(monkeypatch):
     respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("x", client=client)
     assert out["source"] == "crossref"
@@ -528,6 +547,7 @@ async def test_s2_transport_error_no_retry(monkeypatch):
     respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search("x", client=client)
     assert out["source"] == "crossref"
@@ -607,6 +627,7 @@ async def test_rerank_crossref_surfaces_canonical_above_derivatives(monkeypatch)
     respx.get(_CR_WORKS).mock(
         return_value=httpx.Response(200, json={"message": {"items": works}})
     )
+    _oa_empty()
     async with _client() as client:
         out = await scholar_search(query, client=client)
     assert out["results"][0]["title"] == "Attention Is All You Need"
@@ -725,3 +746,110 @@ async def test_rerank_high_overlap_beats_high_citation_low_overlap():
     assert out["results"][0]["title"] == "Quantum Error Correction with Surface Codes", (
         "relevance must dominate; citations alone must not override a clearly better match"
     )
+
+
+# --------------------------------------------------------------------------- #
+# OpenAlex (second backend, between S2 and CrossRef)
+# --------------------------------------------------------------------------- #
+def _oa_work(i, *, year=2022, pdf=True):
+    return {
+        "id": f"https://openalex.org/W{i}",
+        "display_name": f"OA Paper {i}",
+        "authorships": [
+            {"author": {"display_name": "Seok Young Kim"}},
+            {"author": {"display_name": "Jaewook Lee"}},
+        ],
+        "publication_year": year,
+        "primary_location": {
+            "landing_page_url": f"https://doi.org/10.1109/oa{i}",
+            "source": {"display_name": f"OA Venue {i}"},
+            "raw_source_name": "raw venue",
+        },
+        "cited_by_count": 13,
+        "doi": f"https://doi.org/10.1109/oa{i}",
+        # Words out of order on purpose: positions, not dict order, define the text.
+        "abstract_inverted_index": {"memory": [3], "The": [0], "model": [1, 4], "uses": [2]},
+        "best_oa_location": {"pdf_url": f"https://ex.org/oa{i}.pdf"} if pdf else None,
+    }
+
+
+def _s2_429():
+    return respx.get(_S2_SEARCH).mock(return_value=httpx.Response(429, json={"message": "r"}))
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    import asyncio
+
+    async def _noop(s):
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", _noop)
+
+
+@respx.mock
+async def test_s2_429_uses_openalex_and_maps_shape(no_sleep):
+    _s2_429()
+    oa = respx.get(_OA_WORKS).mock(
+        return_value=httpx.Response(200, json={"results": [_oa_work(1)]})
+    )
+    cr = respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("x", limit=80, client=client)
+    assert out["source"] == "openalex"
+    assert not cr.called
+    assert out["results"][0] == {
+        "title": "OA Paper 1",
+        "authors": ["Seok Young Kim", "Jaewook Lee"],
+        "year": 2022,
+        "venue": "OA Venue 1",
+        "citations": 13,
+        "doi": "10.1109/oa1",
+        "url": "https://doi.org/10.1109/oa1",
+        "abstract": "The model uses memory model",
+        "open_access_pdf": "https://ex.org/oa1.pdf",
+    }
+    params = dict(oa.calls.last.request.url.params)
+    assert params["search"] == "x"
+    assert params["per_page"] == "50"  # capped below the tool-wide 100
+    assert "abstract_inverted_index" in params["select"]
+    assert "filter" not in params
+
+
+@respx.mock
+async def test_openalex_failure_falls_back_to_crossref(no_sleep):
+    _s2_429()
+    respx.get(_OA_WORKS).mock(return_value=httpx.Response(429, json={"error": "budget"}))
+    respx.get(_CR_WORKS).mock(
+        return_value=httpx.Response(200, json={"message": {"items": [_cr_work(1)]}})
+    )
+    async with _client() as client:
+        out = await scholar_search("x", client=client)
+    assert out["source"] == "crossref"
+
+
+@respx.mock
+async def test_openalex_unsafe_pdf_url_and_missing_fields(no_sleep):
+    _s2_429()
+    work = _oa_work(1)
+    work["best_oa_location"] = {"pdf_url": "javascript:alert(1)"}
+    work["primary_location"] = None
+    work["abstract_inverted_index"] = None
+    work["doi"] = None
+    respx.get(_OA_WORKS).mock(return_value=httpx.Response(200, json={"results": [work]}))
+    async with _client() as client:
+        out = await scholar_search("x", client=client)
+    r = out["results"][0]
+    assert r["open_access_pdf"] is None
+    assert r["venue"] is None
+    assert r["abstract"] is None
+    assert r["doi"] is None
+    assert r["url"] == "https://openalex.org/W1"
+
+
+def test_openalex_headers_bearer_only_when_key_set(monkeypatch):
+    assert "Authorization" not in _headers("openalex")
+    monkeypatch.setenv("ARGUS_OPENALEX_API_KEY", "oakey")
+    assert _headers("openalex")["Authorization"] == "Bearer oakey"

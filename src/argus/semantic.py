@@ -1,6 +1,6 @@
-"""Local semantic embedding + rerank - ONNX bge-small via fastembed (no torch, no vector store).
+"""Local semantic embedding + rerank - ONNX multilingual MiniLM via fastembed (no torch).
 
-The model (~130MB) is lazily downloaded on first ``embed`` and cached by fastembed; the
+The model (~470MB, baked into the image) is lazily loaded on first ``embed``; the
 ``TextEmbedding`` instance is a module singleton reused across calls. ``available()`` only
 checks importability, so it never triggers a download. numpy powers the cosine/batch math.
 """
@@ -13,7 +13,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
+# Multilingual since 0.4.21: the workload is mostly Indonesian, and the English-only
+# bge-small-en scored Indonesian junk 0.64-0.86, above every floor (benchmark/
+# semantic_id.py: Indonesian AUC 0.894 -> 0.960, English 1.000 -> 0.956, +400 MB RSS).
+MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 # Sentence-ish splitter: break after .!? + whitespace, or on blank/newline runs. Good enough
 # for highlight selection - we never need perfect linguistic segmentation here.

@@ -189,3 +189,29 @@ tutorial).
   tag-stripped text. Another free baseline.
 - **paid (Jina/Firecrawl/Exa/Tavily)** - `KEYED_ADAPTERS` stub, intentionally
   empty in P1. Not called (would cost money + need secrets).
+
+## Embedding-model eval (offline, Indonesian + English)
+
+`semantic_id.py` answers one question: which fastembed model should the semantic rerank use?
+`semantic_id.yaml` holds 32 hand-written queries (22 Indonesian: regulations, quotation
+prices, e-commerce, local news; 10 English tech docs), each with 3 relevant and 3
+plausible-but-irrelevant SERP snippets. Hard negatives on purpose, so absolute rejection
+rates are a lower bound for live traffic.
+
+Each model runs in its own subprocess (clean RSS) and is embedded like Argus does it: plain
+query, `"<title> <snippet>"` docs, `batch_size=8`, `threads=2`. Per language it reports mean
+relevant / irrelevant cosine, margin (min relevant minus max irrelevant per query, averaged),
+pairwise AUC and nDCG@3, then load RSS, embed time, the rejection / recall of the current and
+suggested `_SEM_FLOOR` / `_SEM_GUARD_FLOOR`, and a threshold sweep. Fully offline once the
+models are in the fastembed cache; results are deterministic.
+
+```bash
+./.venv/Scripts/python.exe benchmark/semantic_id.py                 # all candidates
+./.venv/Scripts/python.exe benchmark/semantic_id.py --json out.json \
+    --models BAAI/bge-small-en-v1.5 sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+Threshold rule: `_SEM_FLOOR` = 5th percentile of relevant cosine (worst language, rounded down
+to 0.05), because it only decides whether a zero-lexical-overlap row survives and losing a
+relevant row is the costly error. `_SEM_GUARD_FLOOR` = 95th percentile of irrelevant cosine
+(worst language, rounded up to 0.05), because a false "on-topic" vote is the costly error there.
