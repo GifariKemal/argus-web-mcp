@@ -29,7 +29,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from . import __version__, semantic
+from . import __version__, config, semantic
 from .cache import Cache, ttl_for
 from .config import HEALTH_LATENCY_BUCKETS, PDF_EXECUTOR, TIMEOUTS, clamp_timeout
 from .extract.article import extract_article
@@ -37,6 +37,7 @@ from .extract.links import extract_links_images
 from .extract.llm import extract_llm, llm_available
 from .extract.pdf import extract_pdf, extract_pdf_quality
 from .extract.structured import extract_selectors
+from .fetch import static as static_fetch
 from .fetch.core import fetch
 from .fetch.crawl import deep_crawl
 from .fetch.render import BrowserPool
@@ -1197,6 +1198,36 @@ def _is_loopback(request) -> bool:
     return client is not None and client.host in ("127.0.0.1", "::1")
 
 
+# WARP failures are silent by design (listed hosts fall back to the blocked direct path),
+# so /health reports them and .github/workflows/uptime.yml turns "egress":false into a
+# failed run, which GitHub e-mails. One probe per TTL however often /health is hit.
+EGRESS_PROBE_TTL = 60
+_EGRESS_PROBE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+_egress_probe: tuple[float, bool] = (float("-inf"), False)
+
+
+async def _egress_ok() -> bool | None:
+    """True when the egress proxy exits through WARP (``warp=on``), False when it does
+    not, None when no egress proxy is configured."""
+    global _egress_probe
+    if not config.EGRESS_PROXY:
+        return None
+    at, ok = _egress_probe
+    if time.monotonic() - at < EGRESS_PROBE_TTL:
+        return ok
+    try:
+        r = await static_fetch._proxied_client(config.EGRESS_PROXY).get(
+            _EGRESS_PROBE_URL, timeout=8)
+        ok = r.status_code == 200 and "warp=on" in r.text
+    except Exception:  # noqa: BLE001 - any failure means the egress is not usable
+        ok = False
+    _egress_probe = (time.monotonic(), ok)
+    if not ok:
+        logger.warning("egress proxy probe failed: %s now go out from the VPS IP",
+                       ",".join(config.EGRESS_PROXY_HOSTS))
+    return ok
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request):
     """Liveness + readiness probe. Unauthenticated, cheap (no render). The public body is
@@ -1213,6 +1244,9 @@ async def health(request):
         "status": "ok" if ok else "degraded",
         "browser": ok,
     }
+    egress = await _egress_ok()
+    if egress is not None:  # reported, never part of the status: WARP is optional
+        body["egress"] = egress
     if not _is_loopback(request):
         return JSONResponse(body, status_code=200 if ok else 503)
     body["version"] = __version__

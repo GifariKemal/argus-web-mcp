@@ -25,7 +25,7 @@ support.
 |---|---|
 | Project / service | `argus` / `argus` |
 | Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
-| Containers | `argus` (uvicorn `:8090`), `searxng` (reached at `http://searxng:8080` over the compose network) and `warp` (Cloudflare WARP CONNECT proxy at `http://warp:9091`, compose network only, since 0.4.23); Docker names them `argus_argus-argus-1`, `argus_argus-searxng-1` and `argus_argus-warp-1` |
+| Containers | `argus` (uvicorn `:8090`), `searxng` (reached at `http://searxng:8080` over the compose network) and `warp` (Cloudflare WARP CONNECT proxy at `http://warp:9091`, compose network only, since 0.4.23; `/health` reports `"egress"` and `uptime.yml` e-mails when it is false); Docker names them `argus_argus-argus-1`, `argus_argus-searxng-1` and `argus_argus-warp-1` |
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
 | Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google,google cse,duckduckgo web,yandex` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently). Optional: `ARGUS_EGRESS_PROXY` (compose default `http://warp:9091`, empty = off) and `ARGUS_EGRESS_PROXY_HOSTS` (empty = `archive.org,reuters.com,wsj.com,fxstreet.com`) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |

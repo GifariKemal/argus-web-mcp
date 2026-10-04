@@ -14,6 +14,25 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.26] - 2026-10-04 - an alert when WARP breaks
+
+A broken WARP was silent by design: Argus stays up and the listed hosts quietly go back
+to the VPS IP, which they block. The only trace was `fetch.egress_proxy_fail` on a
+loopback-only metrics page nobody watches.
+
+### Added
+
+- `/health` reports `"egress": true|false` when `ARGUS_EGRESS_PROXY` is set. The probe
+  fetches Cloudflare's trace through the proxy and needs `warp=on`, so it also catches a
+  WARP registration that stopped working (the image is a pinned third-party build). One
+  probe per 60 s however often `/health` is hit; a failure logs a warning.
+- The status and the HTTP code ignore it: an unhealthy Argus would be dropped from
+  Traefik's routing over an optional dependency.
+- `.github/workflows/uptime.yml` (every 30 min, already e-mails the owner on failure) now
+  fails on `"egress":false`.
+
+---
+
 ## [0.4.25] - 2026-10-04 - WARP egress, closing the gaps
 
 Three validation passes over 0.4.23-0.4.24: the whole suite inside the production image

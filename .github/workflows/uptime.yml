@@ -18,3 +18,9 @@ jobs:
           done
           echo "$body"
           echo "$body" | grep -q '"status":"ok"'
+          # WARP down = Wayback/Reuters/WSJ/FXStreet silently go out from the blocked VPS
+          # IP again; Argus stays up, so only this check notices.
+          if echo "$body" | grep -q '"egress":false'; then
+            echo "::error::WARP egress proxy is down (argus_argus-warp-1)"
+            exit 1
+          fi

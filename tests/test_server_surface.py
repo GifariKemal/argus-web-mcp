@@ -146,3 +146,72 @@ def test_package_logger_reaches_stderr_at_info():
     pkg = logging.getLogger("argus")
     assert pkg.isEnabledFor(logging.INFO)
     assert any(type(h) is logging.StreamHandler for h in pkg.handlers)
+
+
+async def _probe_with(monkeypatch, handler):
+    """Run server._egress_ok with the proxied client answering through ``handler``."""
+    import httpx
+
+    from argus import config
+    from argus.fetch import static
+
+    calls = []
+
+    def h(req):
+        calls.append(str(req.url))
+        return handler(req)
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(server, "_egress_probe", (float("-inf"), False))
+    monkeypatch.setattr(static, "_proxied_client",
+                        lambda via: httpx.AsyncClient(transport=httpx.MockTransport(h)))
+    return await server._egress_ok(), calls
+
+
+async def test_egress_probe_ok_only_when_warp_is_on(monkeypatch):
+    import httpx
+
+    ok, calls = await _probe_with(
+        monkeypatch, lambda r: httpx.Response(200, text="ip=1\nwarp=on\n"))
+    assert ok is True and calls == ["https://www.cloudflare.com/cdn-cgi/trace"]
+    off, _ = await _probe_with(monkeypatch, lambda r: httpx.Response(200, text="warp=off\n"))
+    assert off is False  # reachable but not through WARP (e.g. registration broke)
+
+    def down(req):
+        raise httpx.ProxyError("warp unreachable")
+
+    dead, _ = await _probe_with(monkeypatch, down)
+    assert dead is False
+
+
+async def test_egress_probe_is_cached_and_off_when_unconfigured(monkeypatch):
+    import httpx
+
+    from argus import config
+
+    ok, calls = await _probe_with(monkeypatch, lambda r: httpx.Response(200, text="warp=on"))
+    assert ok is True
+    assert await server._egress_ok() is True and len(calls) == 1  # cached, no second probe
+    monkeypatch.setattr(config, "EGRESS_PROXY", "")
+    assert await server._egress_ok() is None
+
+
+async def test_health_reports_egress_but_stays_200(app_state, monkeypatch):
+    """A broken WARP must alert (uptime.yml greps "egress":false) without making Argus
+    unhealthy: Traefik would then stop routing to it over an optional dependency."""
+    app_state.browser._crawler = object()
+
+    async def down():
+        return False
+
+    monkeypatch.setattr(server, "_egress_ok", down)
+    public = await server.health(SimpleNamespace(client=SimpleNamespace(host="10.11.0.9")))
+    assert public.status_code == 200
+    assert b'"status":"ok"' in bytes(public.body) and b'"egress":false' in bytes(public.body)
+
+    async def off():
+        return None
+
+    monkeypatch.setattr(server, "_egress_ok", off)
+    body = bytes((await server.health(SimpleNamespace(client=None))).body)
+    assert b"egress" not in body
