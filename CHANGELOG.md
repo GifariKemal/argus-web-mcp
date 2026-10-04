@@ -14,6 +14,51 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.23] - 2026-10-04 - WARP egress for hosts that block the VPS IP
+
+Idea from a "free proxy pool" post (Cloudflare WARP wrapped as SOCKS, rotated on rate
+limits). Measured from the VPS before building anything, with three WARP accounts:
+
+| Target | VPS IP | WARP |
+|---|---|---|
+| Wayback availability API and snapshots | 429 | 200, real snapshot |
+| Reuters | 401 (DataDome) | 200, full page |
+| WSJ | 401 | 200 |
+| FXStreet | 403 | 200 |
+| Semantic Scholar | 1 of 8 answered | 1 of 24 answered |
+| DuckDuckGo, Qwant, Mojeek, Google Scholar, StackOverflow HTML, Reddit, Bloomberg, Medium | blocked | still blocked |
+
+All three accounts left through the **same IPv4** (`104.28.222.43`, SIN); only IPv6
+differed, and the StackExchange quota counted them as one. So there is no pool to rotate:
+WARP is one extra, cleaner exit, and only for the hosts that improved.
+
+### Added
+
+- `warp` compose service (digest-pinned `ghcr.io/mon-ius/docker-warp-socks`, compose
+  network only, no published port) and `ARGUS_EGRESS_PROXY` (default `http://warp:9091`
+  in compose, empty = off) plus `ARGUS_EGRESS_PROXY_HOSTS` (default
+  `archive.org,reuters.com,wsj.com,fxstreet.com`, subdomains included).
+- `fetch/static.py` picks the client per redirect hop, so every caller of `fetch_static`
+  and `fetch_bytes` (read, the Wayback fallback, PDFs) gets it. Stage counter
+  `fetch.egress_proxy`.
+
+### Security
+
+- The SSRF pinning is unchanged: `_PinnedBackend` resolves and validates the target, then
+  sends `CONNECT <validated-ip>:<port>` to the proxy. The proxy never sees a hostname, so it
+  cannot resolve to a private address; TLS runs end to end over the tunnel with the real
+  SNI. Refusals, hang-ups and oversized replies close the stream (100% branch coverage).
+- Attacked on the real image built on the VPS: with `localtest.me`, `nip.io`, `warp`,
+  `searxng`, `127.0.0.1` and `httpbin.org` all listed as proxied hosts, every private
+  target and every public 302 to `searxng`/`127.0.0.1` was refused (9 of 9).
+- From the independent review: the proxied client keeps no cookies (it is shared by every
+  caller), a down or refusing proxy falls back to the direct path for that hop, the tunnel
+  prefers a validated IPv4 address (the WARP exit is IPv4), bytes after the CONNECT reply
+  are refused, `via_proxy` must be `http://host:port`, and a test pins NAT64
+  (`64:ff9b::/96`) as blocked. The browser tier still exits from the VPS IP.
+
+---
+
 ## [0.4.22] - 2026-10-02 - the P2 backlog
 
 The remaining gap-audit items, each measured or reviewed before it went in. An

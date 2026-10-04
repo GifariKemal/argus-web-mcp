@@ -397,3 +397,107 @@ async def test_aresolve_never_retries_a_blocked_ip(monkeypatch):
     with pytest.raises(SSRFError):
         await aresolve_and_validate("internal.example.com", 443)
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------- #
+# _PinnedBackend via an upstream CONNECT proxy (ARGUS_EGRESS_PROXY)
+# --------------------------------------------------------------------------- #
+
+class _FakeStream:
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.sent = b""
+        self.closed = False
+
+    async def write(self, data, timeout=None):
+        self.sent += data
+
+    async def read(self, max_bytes, timeout=None):
+        return self.replies.pop(0) if self.replies else b""
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _ProxyBackend(_RecordingBackend):
+    def __init__(self, stream):
+        super().__init__()
+        self.stream = stream
+
+    async def connect_tcp(self, host, port, **kw):
+        self.calls.append((host, port, kw))
+        return self.stream
+
+
+async def test_backend_via_proxy_connects_to_validated_ip(monkeypatch):
+    """The proxy only ever sees the IP we validated, never the hostname: it cannot
+    resolve its way to a private address (no rebinding window on its side)."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34"))
+    stream = _FakeStream(b"HTTP/1.1 200 Connection established\r\n", b"\r\n")
+    inner = _ProxyBackend(stream)
+    out = await _PinnedBackend(inner, via=("warp", 9091)).connect_tcp("example.com", 443)
+    assert out is stream
+    assert inner.calls[0][:2] == ("warp", 9091)
+    assert stream.sent.startswith(b"CONNECT 93.184.216.34:443 HTTP/1.1\r\n")
+    assert b"example.com" not in stream.sent
+
+
+async def test_backend_via_proxy_brackets_ipv6(monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: _gai_result("2606:4700:4700::1111")
+    )
+    stream = _FakeStream(b"HTTP/1.1 200 OK\r\n\r\n")
+    await _PinnedBackend(_ProxyBackend(stream), via=("warp", 9091)).connect_tcp("x.com", 443)
+    assert stream.sent.startswith(b"CONNECT [2606:4700:4700::1111]:443 ")
+
+
+async def test_backend_via_proxy_blocks_private_before_dialing(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("10.0.0.1"))
+    inner = _ProxyBackend(_FakeStream())
+    with pytest.raises(SSRFError):
+        await _PinnedBackend(inner, via=("warp", 9091)).connect_tcp("rebind.evil", 443)
+    assert inner.calls == []
+
+
+@pytest.mark.parametrize("replies", [
+    (b"HTTP/1.1 403 Forbidden\r\n\r\n",),
+    (b"HTTP/1.1 200 OK\r\n",),  # proxy hangs up mid-reply
+    (b"x" * 9000,),  # never ends its header block
+    (b"HTTP/1.1 200 OK\r\n\r\nTLS",),  # bytes past the header would be lost
+])
+async def test_backend_via_proxy_refusal_closes_stream(monkeypatch, replies):
+    import httpcore
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34"))
+    stream = _FakeStream(*replies)
+    with pytest.raises(httpcore.ProxyError):
+        await _PinnedBackend(_ProxyBackend(stream), via=("warp", 9091)).connect_tcp("a.com", 443)
+    assert stream.closed
+
+
+def test_client_via_proxy_parses_url():
+    client = build_safe_async_client(via_proxy="http://warp:9091")
+    backend = client._transport._inner._pool._network_backend
+    assert isinstance(backend, _PinnedBackend)
+    assert backend._via == ("warp", 9091)
+
+
+async def test_backend_via_proxy_prefers_ipv4(monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: _gai_result("2606:4700::1", "93.184.216.34")
+    )
+    stream = _FakeStream(b"HTTP/1.1 200 OK\r\n\r\n")
+    await _PinnedBackend(_ProxyBackend(stream), via=("warp", 9091)).connect_tcp("x.com", 443)
+    assert stream.sent.startswith(b"CONNECT 93.184.216.34:443 ")
+
+
+@pytest.mark.parametrize("bad", ["socks5://warp:9091", "http://", "https://warp:9091"])
+def test_client_via_proxy_rejects_non_http(bad):
+    with pytest.raises(ValueError):
+        build_safe_async_client(via_proxy=bad)
+
+
+@pytest.mark.parametrize("ip", ["64:ff9b::a00:1", "64:ff9b:1::a00:1"])
+def test_is_blocked_ip_blocks_nat64(ip):
+    """A NAT64 address can map to a private IPv4 on a proxy's far side."""
+    assert is_blocked_ip(ip)

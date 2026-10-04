@@ -2,6 +2,8 @@
 # proxy. Only useful with a provider whose exit IPs those engines accept - Cloudflare
 # WARP was measured on 2026-09-15 and rejected (duckduckgo still CAPTCHAs, qwant and
 # mojeek still return access denied), because its egress range is itself a known VPN.
+# (WARP does help plain fetches of some hosts; that is the `warp` service in the base
+# compose file plus ARGUS_EGRESS_PROXY_HOSTS, not this overlay.)
 #
 #   1. set RESIDENTIAL_PROXY_URL in the service env, e.g.
 #        http://user:pass@gate.example-provider.com:7000

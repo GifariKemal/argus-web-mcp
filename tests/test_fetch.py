@@ -636,3 +636,60 @@ async def test_exhausted_fallback_records_stage(monkeypatch):
         with pytest.raises(FetchError):
             await fetch("http://blocked.example/", client=c, browser=None)
     assert models.STAGE_COUNTS.get("fetch.fallback_exhausted") == 1
+
+
+async def test_egress_proxy_routes_listed_hosts_only(monkeypatch):
+    """Hosts in ARGUS_EGRESS_PROXY_HOSTS (and their subdomains) go through the proxied
+    client on every hop; everything else keeps the caller's client."""
+    import argus.fetch.static as static
+
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+    seen = []
+
+    def direct(req):
+        seen.append(("direct", req.url.host))
+        return httpx.Response(302, headers={"location": "https://web.archive.org/web/1/x"})
+
+    def proxied(req):
+        seen.append(("proxy", req.url.host))
+        return httpx.Response(200, text=ARTICLE)
+
+    monkeypatch.setattr(static, "_egress_client", _client(proxied))
+    res = await fetch_static("https://example.com/", client=_client(direct))
+    assert res["status"] == 200
+    assert seen == [("direct", "example.com"), ("proxy", "web.archive.org")]
+
+
+async def test_egress_proxy_off_by_default(monkeypatch):
+    import argus.fetch.static as static
+
+    monkeypatch.setattr(static, "EGRESS_PROXY", "")
+    assert static._egress_client_for("archive.org") is None
+    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+    monkeypatch.setattr(static, "_egress_client", None)
+    assert static._egress_client_for("notarchive.org") is None
+    assert static._egress_client_for("ARCHIVE.org.") is not None
+    # shared across callers, so it must never keep a site's cookies
+    assert not static._egress_client.cookies.jar._policy.set_ok_domain(
+        __import__("http.cookiejar").cookiejar.Cookie(
+            0, "a", "b", None, False, ".archive.org", True, True, "/", False, False,
+            None, False, None, None, {}), None)
+
+
+async def test_egress_proxy_down_falls_back_to_direct(monkeypatch):
+    import argus.fetch.static as static
+
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+
+    def proxied(req):
+        raise httpx.ConnectError("warp unreachable", request=req)
+
+    monkeypatch.setattr(static, "_egress_client", _client(proxied))
+    res = await fetch_static("https://archive.org/x", client=_client(
+        lambda req: httpx.Response(200, text=ARTICLE)))
+    assert res["status"] == 200

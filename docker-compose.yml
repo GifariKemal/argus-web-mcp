@@ -30,10 +30,27 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
+  warp:
+    # Cloudflare WARP as an HTTP/SOCKS proxy on :9091, compose network only. Argus sends
+    # only ARGUS_EGRESS_PROXY_HOSTS through it, as CONNECT to an IP it already validated.
+    # One container is enough: extra WARP accounts share the same IPv4 exit (measured).
+    image: ghcr.io/mon-ius/docker-warp-socks@sha256:8f96f5e3fc4c0c997036c5ab5e50c09a97a46ccafe8f5a0b220a3d0badc5b21b
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "-x", "socks5h://127.0.0.1:9091", "-fsSL",
+             "https://www.cloudflare.com/cdn-cgi/trace"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
   argus:
     build: .
     restart: unless-stopped
-    depends_on: [searxng]
+    depends_on: [searxng, warp]
     environment:
       - ARGUS_SEARXNG_URL=http://searxng:8080
       # Empty locally (loopback-only, no auth); the Easypanel deploy sets a real
@@ -51,6 +68,10 @@ services:
       - ARGUS_GITHUB_TOKEN=${ARGUS_GITHUB_TOKEN:-}
       # Optional free OpenAlex key: keyless is ~100 searches/day, a key ~1000.
       - ARGUS_OPENALEX_API_KEY=${ARGUS_OPENALEX_API_KEY:-}
+      # Hosts that block this box's IP but answer through WARP (Wayback, Reuters, ...).
+      # Empty ARGUS_EGRESS_PROXY turns it off; the host list default lives in config.py.
+      - ARGUS_EGRESS_PROXY=${ARGUS_EGRESS_PROXY-http://warp:9091}
+      - ARGUS_EGRESS_PROXY_HOSTS=${ARGUS_EGRESS_PROXY_HOSTS:-archive.org,reuters.com,wsj.com,fxstreet.com}
     shm_size: 1gb               # Chromium crashes on the default 64m
     # The box (7 GB) is shared with other stacks: past this Argus is OOM-killed and
     # restarted, instead of the host OOM killer picking a neighbour.

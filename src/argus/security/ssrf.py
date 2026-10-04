@@ -141,22 +141,51 @@ class _PinnedBackend(httpcore.AsyncNetworkBackend):
     checked) and leaking the IP into ``final_url``.
     """
 
-    def __init__(self, inner: httpcore.AsyncNetworkBackend) -> None:
+    def __init__(self, inner: httpcore.AsyncNetworkBackend,
+                 via: tuple[str, int] | None = None) -> None:
         self._inner = inner
+        self._via = via  # operator-set CONNECT proxy (ARGUS_EGRESS_PROXY), not user input
 
     async def connect_tcp(self, host, port, timeout=None, local_address=None,
                           socket_options=None):
         ips = await aresolve_and_validate(host, port)
-        return await self._inner.connect_tcp(
-            ips[0], port, timeout=timeout, local_address=local_address,
+        stream = await self._inner.connect_tcp(
+            *(self._via or (ips[0], port)), timeout=timeout, local_address=local_address,
             socket_options=socket_options,
         )
+        if self._via is not None:
+            # The WARP exit is IPv4 (measured), so prefer a validated IPv4 address.
+            ip = next((i for i in ips if ":" not in i), ips[0])
+            await _connect_tunnel(stream, ip, port, timeout)
+        return stream
 
     async def connect_unix_socket(self, *args, **kwargs):
         raise SSRFError("unix sockets are not allowed")
 
     async def sleep(self, seconds: float) -> None:
         await self._inner.sleep(seconds)
+
+
+async def _connect_tunnel(stream, ip: str, port: int, timeout) -> None:
+    """HTTP CONNECT through the egress proxy to the IP we already validated. The proxy is
+    handed an address, never a hostname, so it cannot resolve its way somewhere else."""
+    target = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+    try:
+        await stream.write(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode(),
+                           timeout=timeout)
+        reply = b""
+        while b"\r\n\r\n" not in reply:
+            chunk = await stream.read(4096, timeout=timeout)
+            if not chunk or len(reply) > 8192:
+                raise httpcore.ProxyError("egress proxy closed or sent an oversized reply")
+            reply += chunk
+        status = reply.split(b"\r\n", 1)[0].split(b" ")
+        # Bytes past the header block would belong to the TLS stream and be lost here.
+        if len(status) < 2 or status[1] != b"200" or not reply.endswith(b"\r\n\r\n"):
+            raise httpcore.ProxyError(f"egress proxy refused: {reply[:60]!r}")
+    except BaseException:
+        await stream.aclose()
+        raise
 
 
 class _SafeTransport(httpx.AsyncBaseTransport):
@@ -179,22 +208,29 @@ class _SafeTransport(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
-def _pinned_http_transport() -> httpx.AsyncHTTPTransport:
+def _pinned_http_transport(via: tuple[str, int] | None = None) -> httpx.AsyncHTTPTransport:
     transport = httpx.AsyncHTTPTransport()
     # httpx exposes no network_backend knob; the pool attribute is private, so
     # test_ssrf asserts it is ours - an httpx/httpcore upgrade that renames it fails loudly.
     pool = transport._pool
-    pool._network_backend = _PinnedBackend(pool._network_backend)
+    pool._network_backend = _PinnedBackend(pool._network_backend, via)
     return transport
 
 
-def build_safe_async_client(**kwargs: object) -> httpx.AsyncClient:
+def build_safe_async_client(via_proxy: str | None = None, **kwargs: object) -> httpx.AsyncClient:
     """An ``httpx.AsyncClient`` that pins connections to validated IPs.
 
     ``follow_redirects`` defaults to False - the fetch layer re-validates each
     hop itself. SSRFError surfaces at *send* time (when the request is made),
-    not at construction. Extra **kwargs (timeout, etc.) pass through.
+    not at construction. ``via_proxy`` (``http://host:port``) tunnels every pinned
+    connection through that CONNECT proxy. Extra **kwargs (timeout, etc.) pass through.
     """
     kwargs.setdefault("follow_redirects", False)
-    transport = _SafeTransport(_pinned_http_transport())
+    via = None
+    if via_proxy:
+        u = httpx.URL(via_proxy)
+        if u.scheme != "http" or not u.host:
+            raise ValueError(f"egress proxy must be http://host:port, got {via_proxy!r}")
+        via = (u.host, u.port or 80)
+    transport = _SafeTransport(_pinned_http_transport(via))
     return httpx.AsyncClient(transport=transport, **kwargs)  # type: ignore[arg-type]

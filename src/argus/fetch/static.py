@@ -7,11 +7,14 @@ every hop is re-guarded - closing the open-redirect-to-internal SSRF hole.
 from __future__ import annotations
 
 import re
+from http.cookiejar import DefaultCookiePolicy
 from urllib.parse import urlsplit
 
 import httpx
 
-from ..security.ssrf import aresolve_and_validate, validate_url
+from ..config import EGRESS_PROXY, EGRESS_PROXY_HOSTS
+from ..models import record_stage
+from ..security.ssrf import aresolve_and_validate, build_safe_async_client, validate_url
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _DEFAULT_UA = "ArgusBot/0.1 (+https://suriota.com; self-hosted research)"
@@ -63,6 +66,24 @@ async def _guard(url: str) -> None:
     await aresolve_and_validate(parts.hostname, port)
 
 
+_egress_client: httpx.AsyncClient | None = None
+
+
+def _egress_client_for(host: str) -> httpx.AsyncClient | None:
+    """The proxied client when ``host`` is listed in ARGUS_EGRESS_PROXY_HOSTS, else None.
+    Same SSRF-pinned client, only tunnelled (see security.ssrf._connect_tunnel)."""
+    global _egress_client
+    host = host.lower().rstrip(".")
+    if not EGRESS_PROXY or not any(host == d or host.endswith("." + d)
+                                   for d in EGRESS_PROXY_HOSTS):
+        return None
+    if _egress_client is None:  # ponytail: process-lifetime client, never closed
+        _egress_client = build_safe_async_client(via_proxy=EGRESS_PROXY)
+        # Shared across every caller: never keep a site's anti-bot/paywall cookies.
+        _egress_client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return _egress_client
+
+
 async def _stream_capped(resp: httpx.Response) -> bytes:
     """Read the body via streaming, aborting once it exceeds ``MAX_FETCH_BYTES``."""
     buf = bytearray()
@@ -84,21 +105,34 @@ async def _get_guarded(
     """
     current = url
     headers = {"user-agent": _DEFAULT_UA}
+
+    async def _hop(c: httpx.AsyncClient) -> tuple[httpx.Response, bytes | None]:
+        async with c.stream("GET", current, timeout=timeout, headers=headers) as resp:
+            if resp.is_redirect and "location" in resp.headers:
+                return resp, None  # Do NOT read the body on a redirect hop.
+            _check_size(resp)  # header fast-path
+            return resp, await _stream_capped(resp)  # streaming hard-cap
+
     for _ in range(max_redirects + 1):
         await _guard(current)
+        proxied = _egress_client_for(httpx.URL(current).host)
         try:
-            async with client.stream(
-                "GET", current, timeout=timeout, headers=headers
-            ) as resp:
-                if resp.is_redirect and "location" in resp.headers:
-                    # Do NOT read the body on a redirect hop; re-guard the target.
-                    current = str(httpx.URL(current).join(resp.headers["location"]))
-                    continue
-                _check_size(resp)  # header fast-path
-                body = await _stream_capped(resp)  # streaming hard-cap
-                return resp, body
+            if proxied is None:
+                resp, body = await _hop(client)
+            else:
+                record_stage("fetch.egress_proxy")
+                try:
+                    resp, body = await _hop(proxied)
+                except (httpx.ProxyError, httpx.ConnectError):
+                    # Proxy down or refused: the direct path is no worse than before.
+                    record_stage("fetch.egress_proxy_fail")
+                    resp, body = await _hop(client)
         except httpx.HTTPError as exc:
             raise FetchError("fetch_failed", f"{type(exc).__name__}: {exc}") from exc
+        if body is None:
+            current = str(httpx.URL(current).join(resp.headers["location"]))  # re-guarded
+            continue
+        return resp, body
     raise FetchError("fetch_failed", f"exceeded {max_redirects} redirects")
 
 

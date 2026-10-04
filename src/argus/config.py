@@ -70,3 +70,16 @@ PDF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_
 # Pages extracted when no `pages` range is given, so one huge PDF cannot hold that single
 # worker for minutes; the result reports `pages_capped` and the caller pages through the rest.
 PDF_MAX_PAGES = _int("ARGUS_PDF_MAX_PAGES", 300)
+
+# Optional egress proxy for hosts that block this box's IP but accept another exit. A
+# Cloudflare WARP container measured from the VPS on 2026-10-04: Wayback 429 -> 200,
+# Reuters 401 -> 200, WSJ 401 -> 200, FXStreet 403 -> 200. Empty = off. Only the listed
+# hosts and their subdomains use it; search engines and S2 did not improve, so not listed.
+EGRESS_PROXY = os.environ.get("ARGUS_EGRESS_PROXY", "").strip()
+EGRESS_PROXY_HOSTS = tuple(
+    h.strip().strip(".").lower()  # ".archive.org" and "archive.org." mean archive.org
+    for h in os.environ.get(
+        "ARGUS_EGRESS_PROXY_HOSTS", "archive.org,reuters.com,wsj.com,fxstreet.com"
+    ).split(",")
+    if h.strip().strip(".")
+)
