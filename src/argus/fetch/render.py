@@ -11,11 +11,12 @@ service came back through scrape.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from urllib.parse import urlsplit
 
 from ..security.egress import guarded_browser_config
-from ..security.ssrf import aresolve_and_validate, validate_url
+from ..security.ssrf import DNSError, aresolve_and_validate, validate_url
 from .static import _DEFAULT_PORTS, FetchError
 
 # Markers of an anti-bot interstitial (Cloudflare / Akamai / PerimeterX challenge pages).
@@ -57,6 +58,22 @@ _CHALLENGE_TEXT_MAX = 3000  # visible chars; challenge pages carry a few hundred
 
 def _visible_chars(html: str) -> int:
     return len(" ".join(_TAG_OR_SCRIPT.sub(" ", html[:200_000]).split()))
+
+
+async def _raise_if_landed_internal(landed: str | None, asked: str) -> None:
+    """Raise SSRFError when a failed render ended on a host the SSRF gate refuses. Nothing
+    reached it (the egress proxy refused the hop); this only names the cause correctly."""
+    if not landed or landed == asked:
+        return
+    try:  # the landing URL comes from the page; a malformed one is not a finding
+        parts = urlsplit(landed)
+        port = parts.port or _DEFAULT_PORTS.get(parts.scheme)
+    except ValueError:
+        return
+    if parts.scheme not in _DEFAULT_PORTS or not parts.hostname:
+        return  # about:blank, chrome-error://: not a navigation target
+    with contextlib.suppress(DNSError):  # unresolvable is not an SSRF finding
+        await aresolve_and_validate(parts.hostname, port)
 
 
 def _looks_blocked(html: str, status: int | None) -> bool:
@@ -262,6 +279,15 @@ class BrowserPool:
                 getattr(res2, "html", ""), getattr(res2, "status_code", None)
             ):
                 res, tier = res2, "stealth"
+            else:  # discarded, but if it ended on an internal host that is the real cause
+                await _raise_if_landed_internal(getattr(res2, "redirected_url", None), url)
+
+        # A redirect to an internal host is refused by the egress proxy and lands here as a
+        # failed or blocked page; say ssrf_blocked, which callers do not retry.
+        if not res.success or _looks_blocked(
+            getattr(res, "html", ""), getattr(res, "status_code", None)
+        ):
+            await _raise_if_landed_internal(getattr(res, "redirected_url", None), url)
 
         if not res.success:
             still_blocked = _looks_blocked(

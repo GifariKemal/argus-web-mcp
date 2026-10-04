@@ -163,7 +163,10 @@ async def fetch_static(
     # not content. Raise FetchError so fetch.core escalates to the stealth-browser + Wayback
     # ladder (that ladder is gated on `except FetchError` and previously NEVER fired on a
     # status block - a challenge page was returned as if it were real content).
-    if resp.status_code in (403, 429, 503):
+    # DataDome walls answer 401 with x-datadome (Reuters, WSJ, measured 2026-10-04). Other
+    # 401s (API auth, Basic auth) are an honest answer and stay content.
+    datadome_401 = resp.status_code == 401 and "x-datadome" in resp.headers
+    if resp.status_code in (403, 429, 503) or datadome_401:
         raise FetchError(
             "blocked_by_antibot", f"status {resp.status_code} (anti-bot block)",
             status=resp.status_code,

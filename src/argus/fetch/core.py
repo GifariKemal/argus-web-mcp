@@ -151,7 +151,9 @@ async def _do_fetch(
         if browser is not None:
             try:
                 r = await browser.render(url, stealth=True, timeout=max(timeout, 45))
-            except FetchError as rexc:
+            except (FetchError, SSRFError) as rexc:
+                # SSRFError here = the page redirected to an internal host (nothing reached
+                # it); the URL itself passed the gate, so its Wayback copy is still fair.
                 record_stage("fetch.fallback_stealth_fail")
                 logger.info("fetch[%s]: stealth fallback failed (%s)", url, rexc)
             else:
@@ -184,7 +186,7 @@ async def _do_fetch(
                     url, ESCALATE_BELOW_CHARS)
         try:
             r = await browser.render(url, timeout=max(timeout, 45))
-        except FetchError as rexc:
+        except (FetchError, SSRFError) as rexc:  # SSRFError: JS sent it to an internal host
             record_stage("fetch.thin_escalate_fail")
             logger.info("fetch[%s]: escalation failed (%s); keeping thin static result",
                         url, rexc)

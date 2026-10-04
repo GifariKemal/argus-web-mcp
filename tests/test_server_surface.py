@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from argus import __version__, server
 
@@ -215,3 +218,94 @@ async def test_health_reports_egress_but_stays_200(app_state, monkeypatch):
     monkeypatch.setattr(server, "_egress_ok", off)
     body = bytes((await server.health(SimpleNamespace(client=None))).body)
     assert b"egress" not in body
+
+
+_REPORT = {"at": "2026-10-04T00:00:00+00:00", "sites": {
+    "reuters.com": {"direct": 401, "warp": 403},
+    "example.com": {"direct": 200, "warp": 200}}}
+
+
+async def test_reach_loop_measures_both_paths_and_survives_errors(app_state, monkeypatch):
+    from argus import config
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("reuters.com",))
+    monkeypatch.setattr(server, "_REACH", None)
+    monkeypatch.setattr(server, "_REACH_PREV", None)
+    seen, sleeps = [], []
+
+    async def measure(direct, proxied=None):
+        seen.append((direct, proxied is not None))
+        if len(seen) == 1:
+            raise RuntimeError("network hiccup")
+        return _REPORT
+
+    async def sleep(s):
+        sleeps.append(s)
+        if len(sleeps) > 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.reachability, "measure", measure)
+    monkeypatch.setattr(server.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await server._reach_loop()
+    # failed run -> daily; a run with a failing listed host -> re-measure within the hour
+    assert sleeps == [server.REACH_FIRST_S, server.REACH_EVERY_S, server.REACH_RETRY_S]
+    assert seen == [(app_state.client, True), (app_state.client, True)]
+    assert server._REACH == _REPORT
+
+
+async def test_health_and_metrics_surface_the_reachability_map(app_state, monkeypatch):
+    from argus import config
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("reuters.com",))
+    monkeypatch.setattr(server, "_REACH", _REPORT)
+    monkeypatch.setattr(server, "_REACH_PREV", _REPORT)  # failing twice in a row
+
+    async def up():
+        return True
+
+    monkeypatch.setattr(server, "_egress_ok", up)
+    app_state.browser._crawler = object()
+    app_state.browser.active_contexts = 0
+    public = bytes((await server.health(SimpleNamespace(
+        client=SimpleNamespace(host="10.11.0.9")))).body)
+    assert b'"egress_hosts_failing":["reuters.com"]' in public and b"example.com" not in public
+    local = bytes((await server.health(SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1")))).body)
+    assert b'"reachability"' in local and b'"example.com"' in local
+    metrics = bytes((await server.metrics(SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1")))).body)
+    assert b'argus_reach_ok{site="reuters.com",via="warp"} 0' in metrics
+    assert b'argus_reach_ok{site="example.com",via="direct"} 1' in metrics
+
+
+async def test_one_failing_run_does_not_alert(app_state, monkeypatch):
+    from argus import config
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("reuters.com",))
+    monkeypatch.setattr(server, "_REACH", _REPORT)
+    monkeypatch.setattr(server, "_REACH_PREV", None)  # e.g. right after a restart
+
+    async def up():
+        return True
+
+    monkeypatch.setattr(server, "_egress_ok", up)
+    app_state.browser._crawler = object()
+    public = bytes((await server.health(SimpleNamespace(
+        client=SimpleNamespace(host="10.11.0.9")))).body)
+    assert b"egress_hosts_failing" not in public
+
+
+async def test_scrape_landing_on_internal_host_reports_ssrf_blocked(app_state):
+    """Forced browser (scrape): the client hears ssrf_blocked, which it does not retry."""
+    from argus.security.ssrf import SSRFError
+
+    async def render(*a, **k):
+        raise SSRFError("blocked IP for 'searxng': 172.20.0.2")
+
+    app_state.browser.render = render
+    out = await server.scrape("https://example.com/redirect")
+    assert out["code"] == "ssrf_blocked"

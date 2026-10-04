@@ -81,16 +81,18 @@ src/argus/
   server.py            # FastMCP app + the 20 tools + lifespan + /health + /metrics + auth
   models.py            # err() structured-error helper + ERROR_CODES
   security/ssrf.py     # the trust boundary (100% covered)
+  security/egress.py   # Chromium's loopback egress proxy (SSRF per connection, WARP routing)
   fetch/               # static.py / render.py / core.py / crawl.py / fallback.py / throttle.py
   extract/             # article.py / pdf.py / structured.py / llm.py / links.py
   search.py / scholar.py / gh_search.py / router.py / semantic.py / cache.py / watch.py
+  reachability.py      # daily direct-vs-WARP map of blocked sites (loopback /health, metrics)
   trading/             # forexfactory.py / cot.py / news.py
 tests/                 # mirror per module; conftest.py = offline MockTransport fixture-server
 ```
 
 - New tool -> add the async fn in `server.py`, wrap all failures in `err(...)`, register it in the `mcp.tool(_fn)` loop, add it to `INSTRUCTIONS` (keep **< 2 KB**), and update the tool-count test.
 - External APIs (GitHub, Semantic Scholar, ...) go through the SSRF-safe `s.client`; add a `User-Agent`.
-- A host that blocks the VPS IP but answers through WARP goes in `ARGUS_EGRESS_PROXY_HOSTS` (measure it through the `warp` container first). Never hand a proxy a hostname: `ssrf.connect_tunnel` sends the validated IP, and that is what keeps SSRF pinning intact.
+- A host that blocks the VPS IP but answers through WARP goes in `ARGUS_EGRESS_PROXY_HOSTS` (the daily reachability map in loopback `/health` shows which sites need it). Never hand a proxy a hostname: `ssrf.connect_tunnel` sends the validated IP, and that is what keeps SSRF pinning intact.
 - Optional/heavy features are **lazy + default-off** (LLM via `ARGUS_ENABLE_LLM`, semantic via the `[semantic]` extra). Argus must stay fully functional with none of them.
 
 ## Secrets & deploy

@@ -888,3 +888,66 @@ async def test_fetch_via_archive_whole_step_has_a_deadline(monkeypatch):
         assert await fetch_via_archive("http://blocked.example/", client=c) is None
     assert stages == ["fetch.archive_fail_deadline"]
     assert fallback._off_until == 0.0 and fallback._transport_fails == 0
+
+
+async def test_datadome_401_is_an_antibot_block(monkeypatch):
+    """DataDome answers 401 with x-datadome (Reuters, WSJ, measured). That is a wall, not
+    content: it goes down the ladder. Other 401s (API auth, Basic auth) stay content."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        if req.url.host == "wall.test":
+            return httpx.Response(401, headers={"x-datadome": "protected"},
+                                  text="Please enable JS and disable any ad blocker")
+        if req.url.host == "basic.test":
+            return httpx.Response(401, headers={"www-authenticate": 'Basic realm="x"'},
+                                  text="auth required")
+        return httpx.Response(401, json={"message": "Requires authentication"})
+
+    async with _client(h) as c:
+        with pytest.raises(FetchError) as ei:
+            await fetch_static("https://wall.test/", client=c)
+        assert (ei.value.code, ei.value.status) == ("blocked_by_antibot", 401)
+        assert (await fetch_static("https://basic.test/", client=c))["status"] == 401
+        assert (await fetch_static("https://api.test/user", client=c))["status"] == 401
+
+
+class _InternalLanding:
+    """A browser whose page always redirects to an internal host (egress proxy refused)."""
+
+    calls = 0
+
+    async def render(self, url, **kw):
+        self.calls += 1
+        raise SSRFError("blocked IP for 'searxng': 172.20.0.2")
+
+
+async def test_read_ladder_internal_landing_still_tries_wayback(monkeypatch):
+    """In a plain read the URL itself passed the gate; a stealth render that redirected
+    internally is one failed rung, and the Wayback copy of the URL is still fair."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        if req.url.host == "blocked.example":
+            return httpx.Response(403, text="denied")
+        if req.url.host == "archive.org":
+            return httpx.Response(200, text=_avail_json(SNAPSHOT_URL))
+        return httpx.Response(200, text=SNAPSHOT_HTML)
+
+    browser = _InternalLanding()
+    async with _client(h) as c:
+        res = await fetch("http://blocked.example/", client=c, browser=browser)
+    assert res["render_path"] == "archive" and browser.calls == 1
+
+
+async def test_read_thin_page_redirecting_internally_keeps_static_result(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    async with _client(lambda req: httpx.Response(200, text=THIN)) as c:
+        res = await fetch("http://thin.example/", client=c, browser=_InternalLanding())
+    assert res["render_path"] == "static"
+
+
+async def test_forced_render_internal_landing_raises_ssrf(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    with pytest.raises(SSRFError):
+        await fetch("http://example.com/", client=None, browser=_InternalLanding(), render=True)

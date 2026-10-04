@@ -29,7 +29,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from . import __version__, config, semantic
+from . import __version__, config, reachability, semantic
 from .cache import Cache, ttl_for
 from .config import HEALTH_LATENCY_BUCKETS, PDF_EXECUTOR, TIMEOUTS, clamp_timeout
 from .extract.article import extract_article
@@ -224,13 +224,17 @@ async def lifespan(_server: FastMCP):
     # (no-op when the [semantic] extra is absent).
     warm_task = asyncio.create_task(asyncio.to_thread(semantic.warm))
     watch_task = asyncio.create_task(_watch_loop())
+    reach_task = asyncio.create_task(_reach_loop())
     try:
         yield
     finally:
         watch_task.cancel()
         warm_task.cancel()
+        reach_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watch_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await reach_task
         with contextlib.suppress(asyncio.CancelledError):
             await warm_task
         if _S.browser is not None:
@@ -273,6 +277,34 @@ async def _watch_loop() -> None:
                     logger.info("cache purge: removed %d expired entries", n)
             except Exception as exc:  # noqa: BLE001 - purge is housekeeping, never fatal
                 logger.warning("cache purge failed: %s: %s", type(exc).__name__, exc)
+
+
+REACH_FIRST_S = 300  # after startup, so a deploy settles before it measures
+REACH_EVERY_S = 24 * 3600
+REACH_RETRY_S = 3600  # re-measure sooner while a listed host is failing
+_REACH: dict | None = None  # last reachability.measure() report
+_REACH_PREV: dict | None = None  # the one before: alerts need two failing runs in a row
+
+
+async def _reach_loop() -> None:
+    """Measure the reachability map shortly after start, then daily. Never raises."""
+    global _REACH, _REACH_PREV
+    await asyncio.sleep(REACH_FIRST_S)
+    while True:
+        s = _S
+        if s is not None:
+            try:
+                proxied = (static_fetch._proxied_client(config.EGRESS_PROXY)
+                           if config.EGRESS_PROXY else None)
+                _REACH_PREV, _REACH = _REACH, await reachability.measure(s.client, proxied)
+                failing = reachability.failing_listed(_REACH)
+                if failing:
+                    logger.warning("reachability: %s no longer answer through the egress "
+                                   "proxy", ",".join(failing))
+            except Exception as exc:  # noqa: BLE001 - a measurement must never kill the loop
+                logger.warning("reachability run failed: %s: %s", type(exc).__name__, exc)
+        await asyncio.sleep(REACH_RETRY_S if reachability.failing_listed(_REACH)
+                            else REACH_EVERY_S)
 
 
 def _is_url(s: str) -> bool:
@@ -1247,9 +1279,13 @@ async def health(request):
     egress = await _egress_ok()
     if egress is not None:  # reported, never part of the status: WARP is optional
         body["egress"] = egress
+    failing = reachability.confirmed_failing(_REACH_PREV, _REACH)
+    if failing:  # WARP is up but these listed sites stopped answering through it (2 runs)
+        body["egress_hosts_failing"] = failing
     if not _is_loopback(request):
         return JSONResponse(body, status_code=200 if ok else 503)
     body["version"] = __version__
+    body["reachability"] = _REACH
     body["uptime_seconds"] = (
         round(time.monotonic() - _STARTUP_TIME, 1) if _STARTUP_TIME else None
     )
@@ -1308,6 +1344,13 @@ async def metrics(request):
             "# TYPE argus_process_resident_bytes gauge",
             f"argus_process_resident_bytes {rss}",
         ]
+    if _REACH:
+        lines += ["# HELP argus_reach_ok 1 if the site answered (<400) in the last daily run",
+                  "# TYPE argus_reach_ok gauge"]
+        for site, row in sorted(_REACH["sites"].items()):
+            for via, result in row.items():
+                lines.append(f'argus_reach_ok{{site="{site}",via="{via}"}} '
+                             f"{int(reachability.ok(result))}")
     lines += [
         "# HELP argus_tool_requests_total MCP tool invocations since start",
         "# TYPE argus_tool_requests_total counter",

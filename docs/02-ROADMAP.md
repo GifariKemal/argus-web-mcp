@@ -100,6 +100,7 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
 - [x] **F1 closed (2026-09-19):** `ARGUS_S2_API_KEY` is set in the Easypanel service env. It lifts `scholar_search`'s S2 hit rate but does not remove 429s (roughly half even at 6 s spacing), so the retry budget went to 3 attempts at a 1 s backoff base and CrossRef stays the fallback.
 - [x] **WARP egress (2026-10-04, CHANGELOG 0.4.23 - 0.4.25):** measured from the VPS first: Wayback 429 -> 200, Reuters 401 -> 200, WSJ 401 -> 200, FXStreet 403 -> 200 through Cloudflare WARP; search engines and S2 did not improve. A `warp` compose service carries those hosts in the httpx and browser tiers (`CONNECT <validated-ip>`, SSRF unchanged, direct fallback), Wayback gained a CDX fallback, browser DNS failures are no longer counted as SSRF blocks. Validated three ways: suite in the production image, live end-to-end and attack runs, independent review.
+- [x] **Reachability map + alerts (2026-10-04, CHANGELOG 0.4.26 - 0.4.27):** `/health` reports the WARP egress and listed hosts failing through it; `uptime.yml` e-mails on either. Daily direct-vs-WARP map of 13 sites picks the next official-API adapter: reddit, medium, quora, investing, npmjs are blocked both ways.
 - Phase-future (YAGNI): owned search index, 24h soak on the live box. (A rotating proxy pool is not needed: extra WARP accounts share one IPv4 exit, measured 2026-10-04.)
 
 ---

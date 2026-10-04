@@ -305,3 +305,110 @@ async def test_screenshot_of_challenge_page_still_returns(monkeypatch):
 
     out = await pool.render("http://example.com/", screenshot=True)
     assert out["screenshot"] == "BASE64PNG"
+
+
+@pytest.mark.parametrize("success,html,status", [
+    (False, "", None),  # the egress proxy refused the hop: navigation failed
+    (True, "<html><body></body></html>", 403),  # Chromium shows the proxy's 403
+])
+async def test_render_landing_on_internal_host_is_ssrf_blocked(monkeypatch, success, html,
+                                                               status):
+    """A public page that redirects to an internal host is refused by the egress proxy; the
+    caller must hear ssrf_blocked, not render_failed / blocked_by_antibot (retryable)."""
+    import argus.fetch.render as r
+    from argus.security.ssrf import SSRFError
+
+    async def resolve(host, port, timeout=None):
+        if host == "searxng":
+            raise SSRFError("blocked IP for 'searxng': 172.20.0.2")
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(r, "aresolve_and_validate", resolve)
+    res = _result(success=success, html=html, status=status)
+    res.redirected_url = "http://searxng:8080/search?q=x"
+
+    class _Crawler:
+        async def arun(self, url, config=None):
+            return res
+
+    pool = BrowserPool()
+    pool._crawler = _Crawler()
+
+    async def same():
+        return pool._crawler
+
+    monkeypatch.setattr(pool, "_ensure_stealth", same)
+    with pytest.raises(SSRFError):
+        await pool.render("https://httpbin.org/redirect-to?url=http://searxng:8080/")
+
+
+async def test_render_failure_on_public_landing_keeps_its_code(monkeypatch):
+    import argus.fetch.render as r
+    from argus.fetch.static import FetchError
+
+    monkeypatch.setattr(r, "aresolve_and_validate", _fake_aresolve)
+    res = _result(success=False, html="", status=None)
+    res.redirected_url = "https://elsewhere.example/"
+
+    class _Crawler:
+        async def arun(self, url, config=None):
+            return res
+
+    pool = BrowserPool()
+    pool._crawler = _Crawler()
+
+    async def same():
+        return pool._crawler
+
+    monkeypatch.setattr(pool, "_ensure_stealth", same)
+    with pytest.raises(FetchError) as ei:
+        await pool.render("https://example.com/")
+    assert ei.value.code == "render_failed"
+
+
+@pytest.mark.parametrize("landed", [None, "about:blank", "chrome-error://chromewebdata/",
+                                    "http://bad:port/", "http://gone.test/", "http://[bad"])
+async def test_landing_check_ignores_non_targets(monkeypatch, landed):
+    import argus.fetch.render as r
+    from argus.security.ssrf import DNSError
+
+    async def resolve(host, port, timeout=None):
+        raise DNSError("nxdomain")
+
+    monkeypatch.setattr(r, "aresolve_and_validate", resolve)
+    await r._raise_if_landed_internal(landed, "https://example.com/")  # must not raise
+
+
+async def test_discarded_stealth_result_landing_internal_is_ssrf_blocked(monkeypatch):
+    """Normal tier blocked on a public page; the stealth retry followed a redirect to an
+    internal host and is discarded - the cause must still be reported."""
+    import argus.fetch.render as r
+    from argus.security.ssrf import SSRFError
+
+    async def resolve(host, port, timeout=None):
+        if host == "searxng":
+            raise SSRFError("blocked IP for 'searxng': 172.20.0.2")
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(r, "aresolve_and_validate", resolve)
+    blocked = _result(success=True, html="<title>Just a moment...</title>", status=503)
+    blocked.redirected_url = "https://example.com/"
+    landed = _result(success=False, html="", status=None)
+    landed.redirected_url = "http://searxng:8080/"
+
+    class _C:
+        def __init__(self, res):
+            self.res = res
+
+        async def arun(self, url, config=None):
+            return self.res
+
+    pool = BrowserPool()
+    pool._crawler = _C(blocked)
+
+    async def stealth():
+        return _C(landed)
+
+    monkeypatch.setattr(pool, "_ensure_stealth", stealth)
+    with pytest.raises(SSRFError):
+        await pool.render("https://example.com/")

@@ -24,3 +24,9 @@ jobs:
             echo "::error::WARP egress proxy is down (argus_argus-warp-1)"
             exit 1
           fi
+          # WARP is up, but the daily reachability run saw listed sites refuse it too:
+          # take them off ARGUS_EGRESS_PROXY_HOSTS or find another route (adapter).
+          if echo "$body" | grep -q '"egress_hosts_failing"'; then
+            echo "::error::listed sites no longer answer through WARP"
+            exit 1
+          fi

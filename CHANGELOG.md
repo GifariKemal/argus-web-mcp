@@ -14,6 +14,55 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.27] - 2026-10-04 - DataDome 401, honest SSRF codes, a daily reachability map
+
+### Fixed
+
+- **DataDome walls answer 401** (`x-datadome` header; Reuters and WSJ from the VPS IP), and
+  `fetch_static` only escalated 403/429/503, so "Please enable JS and disable any ad
+  blocker" came back as page content with status 401. A 401 carrying `x-datadome` is now
+  `blocked_by_antibot` and goes down the ladder; any other 401 (API or Basic auth: GitHub's
+  API answers 401 without `WWW-Authenticate`, measured) stays an honest answer.
+- **A browser redirect to an internal host surfaced as `render_failed`** (retryable). The
+  egress proxy had refused the hop correctly; the render now checks where a failed page
+  landed and raises `SSRFError`, so the caller sees `ssrf_blocked`. Unresolvable landings,
+  `about:blank` and `chrome-error://` keep their old code. Verified on the built image:
+  public 302s to `searxng`, `warp` and `169.254.169.254` all report `ssrf_blocked`, and a
+  public 302 to a public page still renders. Scope (from review): this applies where the
+  browser is the request itself (`scrape`, `screenshot`, `read(render=True)`). Inside a
+  plain `read` ladder the URL already passed the gate, so an internal landing during the
+  stealth or thin-page escalation is one failed rung: Wayback is still tried and a thin
+  static result is still returned, and the host's circuit breaker is not charged. A
+  stealth retry that is discarded is checked too, and a malformed landing URL is ignored.
+
+### Added
+
+- **Daily reachability map** (`argus/reachability.py`): 13 sites (the egress list, the
+  sites still blocked, a control) are fetched once a day, directly and through the egress
+  proxy, with Argus's own user agent; a 2xx/3xx whose body is an anti-bot page counts as
+  `challenge`. The report is on loopback `/health` (`reachability`) and in `/metrics`
+  (`argus_reach_ok{site,via}`). A listed host that fails through WARP shows on public
+  `/health` as `egress_hosts_failing`, and `uptime.yml` fails on it: the case the WARP
+  probe cannot see (WARP fine, the site now blocks WARP too). From review: it needs two
+  failing runs in a row (one bad minute must not keep the alert red for a day), a run with
+  a failing listed host re-measures within the hour instead of a day, and each probe reads
+  at most 256 KB of body.
+- First run, from the VPS:
+
+  | Site | VPS IP | WARP |
+  |---|---|---|
+  | web.archive.org | 429 | 302 |
+  | reuters.com, wsj.com | 401 | 200 |
+  | fxstreet.com | 403 | 200 |
+  | bloomberg.com, forexfactory.com | 200 | 200 |
+  | reddit, medium, quora, investing, npmjs, stackoverflow | 403 | 403 |
+  | example.com (control) | 200 | 200 |
+
+  Bloomberg and ForexFactory are real pages (1028 and 975 words) with Argus's honest user
+  agent; the manual run earlier the same day had used a Chrome user agent and got 403.
+
+---
+
 ## [0.4.26] - 2026-10-04 - an alert when WARP breaks
 
 A broken WARP was silent by design: Argus stays up and the listed hosts quietly go back
