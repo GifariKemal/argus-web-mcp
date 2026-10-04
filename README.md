@@ -6,7 +6,7 @@
 
 <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/MCP-Streamable_HTTP-2dd4bf?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP"/></a>
 <img src="https://img.shields.io/badge/tools-20-22c55e?style=for-the-badge" alt="20 tools"/>
-<img src="https://img.shields.io/badge/tests-997_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
+<img src="https://img.shields.io/badge/tests-998_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
 <img src="https://img.shields.io/badge/SSRF_coverage-100%25-16a34a?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="SSRF 100%"/>
 <img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
 <br/>
@@ -207,7 +207,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 
 **DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04), running as an **Easypanel Compose service** built from this repo's `docker-compose.yml`: the `argus` container serves uvicorn on `:8090`, the `searxng` one answers it over the compose network, and the `warp` one (Cloudflare WARP, compose network only) carries fetches of hosts that block the VPS IP (`ARGUS_EGRESS_PROXY_HOSTS`: Wayback, Reuters, WSJ, FXStreet), with Easypanel's Traefik terminating Let's Encrypt TLS on `:80`/`:443`. The domain is **Cloudflare-proxied** and Traefik answers the public router only for Cloudflare ranges, so the origin cannot be reached around the edge. `/health` is public, `/metrics` host-only. A GitHub push webhook redeploys `main`.
 
-20 tools / **997 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). No owner input is open: the Semantic Scholar key (`ARGUS_S2_API_KEY`) has been set since 2026-09-19. See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
+20 tools / **998 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). No owner input is open: the Semantic Scholar key (`ARGUS_S2_API_KEY`) has been set since 2026-09-19. See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
 
 <div align="center">
 <sub>Built for <b>PT Surya Inovasi Prioritas (SURIOTA)</b> / self-hosted / unlimited / owned</sub>

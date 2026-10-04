@@ -86,6 +86,14 @@ logger = logging.getLogger("argus.server")
 logging.getLogger("argus").setLevel(
     getattr(logging, os.environ.get("ARGUS_LOG_LEVEL", "INFO").upper(), logging.INFO)
 )
+# uvicorn configures only its own loggers and the root logger has no handler, so INFO
+# records from argus.* were dropped (only WARNING+ reached stderr via logging.lastResort):
+# the fallback ladder and egress refusals never showed in `docker logs`. Give the package
+# logger its own stderr handler; records still propagate for pytest's caplog.
+if not logging.getLogger("argus").handlers:
+    _log_handler = logging.StreamHandler()
+    _log_handler.setFormatter(logging.Formatter("%(levelname)s: %(name)s: %(message)s"))
+    logging.getLogger("argus").addHandler(_log_handler)
 
 # Per-tool latency samples (deque maxlen for bounded memory). Filled by _MetricsMiddleware.
 _tool_latencies: dict[str, deque[float]] = {}

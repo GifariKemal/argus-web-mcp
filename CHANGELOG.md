@@ -50,6 +50,11 @@ the second review), live end-to-end and attack runs, and two independent reviews
   proxied client is cached per (loop, proxy); the refusal log drops the query string;
   the whole Wayback step has a 20 s deadline (`ARCHIVE_DEADLINE`, stage
   `fetch.archive_fail_deadline`, no cool-down).
+- **INFO logs never reached `docker logs`** (found by the live pass, older than this
+  feature): uvicorn leaves the root logger without a handler, so every `argus.*` INFO
+  record (the fallback ladder, egress refusals) was dropped and only WARNING+ came out
+  through `logging.lastResort`, although `ARGUS_LOG_LEVEL` is documented. The package
+  logger now has its own stderr handler.
 
 ### Added
 

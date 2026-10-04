@@ -136,3 +136,13 @@ async def test_research_ctx_is_not_part_of_the_schema():
     assert "ctx" not in tools["research"].parameters["properties"]
     assert tools["search"].parameters["properties"]["category"]["enum"] == [
         "general", "news", "science", "it"]
+
+
+def test_package_logger_reaches_stderr_at_info():
+    """uvicorn leaves the root logger without a handler; argus.* INFO (fallback ladder,
+    egress refusals) must still reach the container log."""
+    import logging
+
+    pkg = logging.getLogger("argus")
+    assert pkg.isEnabledFor(logging.INFO)
+    assert any(type(h) is logging.StreamHandler for h in pkg.handlers)
