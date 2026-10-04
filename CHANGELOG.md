@@ -14,6 +14,66 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.25] - 2026-10-04 - WARP egress, closing the gaps
+
+Three validation passes over 0.4.23-0.4.24: the whole suite inside the production image
+(976 passed on 0.4.24, including the 3 real-Chromium tests; 994 on this release before
+the second review), live end-to-end and attack runs, and two independent reviews (of
+`11abf02..HEAD`, then of this release). Everything they found is fixed here.
+
+### Fixed
+
+- **Malformed `ARGUS_EGRESS_PROXY`** (review): it escaped as a raw `ValueError` on every
+  read of a listed host and echoed the value, credentials included. It is now validated
+  once at startup (`http://host:port`, no userinfo) and switched off with a warning that
+  does not print it.
+- **Hung WARP in the httpx tier** (review): a proxy that accepts the TCP connection and never
+  answers raised `ReadTimeout`, which skipped the direct fallback. Every handshake failure
+  (unreachable, refused, reset, hung) is now `ProxyError`, the proxied hop has an 8 s
+  connect bound, and the fallback catches exactly that.
+- **Cookies** (review): dropping all cookies on the proxied client would loop a
+  set-cookie-then-302 wall. Cookies now live in a per-call jar on both paths, and every
+  SSRF-safe client keeps none, so one caller's site cookies never reach the next (this
+  also closes the older cross-caller leak through the shared direct client).
+- The proxied client is cached per event loop (a pooled client belongs to its loop).
+- `warp` is no longer in `depends_on`: Argus goes direct when WARP is down, so a failed
+  WARP image must not keep Argus from starting. `ARGUS_EGRESS_PROXY_HOSTS` empty in
+  compose now means the default list in `config.py` (one source of truth).
+- **Browser refusals counted by cause:** `DNSError` subclasses `SSRFError`, so a dead
+  tracker domain was counted as `fetch.browser_ssrf_blocked`. The stage is now
+  `fetch.browser_ssrf_blocked` or `fetch.browser_dns_failed`, and the refused request line
+  is logged.
+
+- From the second review: proxy config and `parse_proxy` now agree (empty userinfo
+  `http://:@warp:9091` and port 0 are rejected by both); a TLS failure through the tunnel
+  (`ConnectError`/`ConnectTimeout` on the proxied hop) also falls back to direct; the
+  proxied client is cached per (loop, proxy); the refusal log drops the query string;
+  the whole Wayback step has a 20 s deadline (`ARCHIVE_DEADLINE`, stage
+  `fetch.archive_fail_deadline`, no cool-down).
+
+### Added
+
+- **Wayback CDX fallback.** `/wayback/available` answered "no snapshot" for 4 of 7 URLs
+  that have one (measured through WARP); the CDX API found 3 of those 4. It is asked only
+  after an empty answer, because it is slow (1-16 s) and timed out on 3 of 7, and its
+  misses do not feed the archive cool-down. Stages `fetch.archive_cdx_ok` /
+  `fetch.archive_cdx_fail`.
+
+### Docs and tests
+
+- `deploy/README.md` (containers, env, the WARP note), `deploy/argus.env.example`,
+  `README.md` (stack, test count, the S2 key line that was stale since 2026-09-19),
+  `docs/00-DESIGN.md` (request path, the real fallback ladder), `docs/02-ROADMAP.md`,
+  `AGENTS.md`, the `fetch/crawl.py` docstring (stale since 0.4.20).
+- New tests: end-to-end through a real CONNECT server (tunnel, refuse, hang, dead), per-hop
+  routing back to direct, TLS failure through the tunnel, the cookie wall, no cookie across
+  hosts, the archive deadline, the 8 KiB cap over several reads, config
+  validation, and a conftest default that keeps a developer's `ARGUS_EGRESS_PROXY` out of
+  the suite. `config`, `fetch/static.py`, `fetch/fallback.py`, `security/ssrf.py` and
+  `security/egress.py` are all at 100% line and branch coverage.
+
+---
+
 ## [0.4.24] - 2026-10-04 - the browser tier uses WARP too
 
 ### Added

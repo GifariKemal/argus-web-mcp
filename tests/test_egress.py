@@ -272,3 +272,46 @@ async def test_hung_warp_falls_back_to_direct(_listed, monkeypatch):
     finally:
         srv.close()
         stuck.close()
+
+
+@pytest.mark.parametrize("exc,stage", [
+    (SSRFError("blocked IP"), "fetch.browser_ssrf_blocked"),
+    (__import__("argus.security.ssrf", fromlist=["DNSError"]).DNSError("nxdomain"),
+     "fetch.browser_dns_failed"),
+])
+async def test_refusals_are_counted_by_cause(monkeypatch, exc, stage):
+    """A dead tracker domain is a DNS failure, not an SSRF attempt, in /metrics."""
+    seen = []
+
+    async def refuse(host, p, timeout=None):
+        raise exc
+
+    monkeypatch.setattr(egress, "aresolve_and_validate", refuse)
+    monkeypatch.setattr(egress, "record_stage", seen.append)
+    assert (await _ask(b"CONNECT gone.test:443 HTTP/1.1\r\n\r\n")).startswith(b"HTTP/1.1 403")
+    assert seen == [stage]
+
+
+async def test_bad_proxy_value_falls_back_to_direct(_listed, monkeypatch):
+    """config validates at startup; even so, a bad value reaching _dial goes direct."""
+    from argus import config
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "socks5://warp:9091")
+    srv, port, _ = await _origin()
+    try:
+        out = await _ask(f"GET http://listed.test:{port}/ HTTP/1.1\r\n\r\n".encode())
+        assert out.endswith(b"ORIGIN-OK")
+    finally:
+        srv.close()
+
+
+async def test_refusal_log_has_no_query_string(monkeypatch, caplog):
+    import logging
+
+    async def refuse(host, p, timeout=None):
+        raise SSRFError("blocked IP")
+
+    monkeypatch.setattr(egress, "aresolve_and_validate", refuse)
+    with caplog.at_level(logging.INFO, logger="argus.egress"):
+        await _ask(b"GET http://internal.test/p?token=s3cret HTTP/1.1\r\n\r\n")
+    assert "internal.test/p" in caplog.text and "s3cret" not in caplog.text

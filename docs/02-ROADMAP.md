@@ -1,7 +1,7 @@
 # Argus - Step-by-Step Roadmap (no gaps)
 
 > [!NOTE]
-> Status (updated 2026-09-19; deployed 2026-06-25, re-provisioned 2026-09-15): P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. F1 (`ARGUS_S2_API_KEY`) closed on 2026-09-19. No owner item is open.
+> Status (updated 2026-10-04; deployed 2026-06-25, re-provisioned 2026-09-15): P0 / P1 / P2 / P3 all DONE; **deployed LIVE** at `https://argus.gifariksuryo.xyz/mcp`. P4 (operate) is live. F1 (`ARGUS_S2_API_KEY`) closed on 2026-09-19. No owner item is open.
 
 Build **locally first**, prove it via QA/QC + benchmark, then wrap as our MCP and deploy to the VPS. Each phase has an explicit **exit gate** - do not advance until it passes.
 
@@ -99,7 +99,8 @@ Only after P1+P2 gates pass. **Local productionization + artifacts + security ga
 - [x] The VPS stays in sync with `main` automatically (Easypanel push webhook; previously the ff-only, health-gated, auto-rollback timer).
 - [x] Benchmark is a re-runnable regression gate before any future change (`benchmark/run_4way.py`, n=25 recorded).
 - [x] **F1 closed (2026-09-19):** `ARGUS_S2_API_KEY` is set in the Easypanel service env. It lifts `scholar_search`'s S2 hit rate but does not remove 429s (roughly half even at 6 s spacing), so the retry budget went to 3 attempts at a 1 s backoff base and CrossRef stays the fallback.
-- Phase-future (YAGNI): proxy pool, owned search index, 24h soak on the live box.
+- [x] **WARP egress (2026-10-04, CHANGELOG 0.4.23 - 0.4.25):** measured from the VPS first: Wayback 429 -> 200, Reuters 401 -> 200, WSJ 401 -> 200, FXStreet 403 -> 200 through Cloudflare WARP; search engines and S2 did not improve. A `warp` compose service carries those hosts in the httpx and browser tiers (`CONNECT <validated-ip>`, SSRF unchanged, direct fallback), Wayback gained a CDX fallback, browser DNS failures are no longer counted as SSRF blocks. Validated three ways: suite in the production image, live end-to-end and attack runs, independent review.
+- Phase-future (YAGNI): owned search index, 24h soak on the live box. (A rotating proxy pool is not needed: extra WARP accounts share one IPv4 exit, measured 2026-10-04.)
 
 ---
 

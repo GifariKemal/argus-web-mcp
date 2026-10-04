@@ -6,8 +6,8 @@ every hop is re-guarded - closing the open-redirect-to-internal SSRF hole.
 
 from __future__ import annotations
 
+import asyncio
 import re
-from http.cookiejar import DefaultCookiePolicy
 from urllib.parse import urlsplit
 
 import httpx
@@ -66,21 +66,26 @@ async def _guard(url: str) -> None:
     await aresolve_and_validate(parts.hostname, port)
 
 
-_egress_client: httpx.AsyncClient | None = None
+# A pooled client belongs to the event loop that opened its connections, so the proxied
+# client is kept per loop (production runs one; tests and scripts run many).
+_proxied: dict[tuple[asyncio.AbstractEventLoop, str], httpx.AsyncClient] = {}
+# Bounds the CONNECT handshake so a hung proxy leaves time for the direct fallback.
+PROXY_CONNECT_TIMEOUT = 8.0
+
+
+def _proxied_client(via: str) -> httpx.AsyncClient:
+    key = (asyncio.get_running_loop(), via)
+    if key not in _proxied:
+        _proxied.clear()  # ponytail: drops stale clients unclosed; one loop + one proxy in prod
+        _proxied[key] = build_safe_async_client(via_proxy=via)
+    return _proxied[key]
 
 
 def _egress_client_for(host: str) -> httpx.AsyncClient | None:
     """The proxied client when ``host`` is listed in ARGUS_EGRESS_PROXY_HOSTS, else None.
     Same SSRF-pinned client, only tunnelled (see security.ssrf.connect_tunnel)."""
-    global _egress_client
     via = egress_proxy_for(host)
-    if via is None:
-        return None
-    if _egress_client is None:  # ponytail: process-lifetime client, never closed
-        _egress_client = build_safe_async_client(via_proxy=via)
-        # Shared across every caller: never keep a site's anti-bot/paywall cookies.
-        _egress_client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
-    return _egress_client
+    return None if via is None else _proxied_client(via)
 
 
 async def _stream_capped(resp: httpx.Response) -> bytes:
@@ -104,28 +109,40 @@ async def _get_guarded(
     """
     current = url
     headers = {"user-agent": _DEFAULT_UA}
+    # Cookies live for this one call: a set-cookie-then-302 wall (DataDome, consent pages)
+    # still completes, but nothing carries over to the next caller of a shared client.
+    jar = httpx.Cookies()
 
-    async def _hop(c: httpx.AsyncClient) -> tuple[httpx.Response, bytes | None]:
-        async with c.stream("GET", current, timeout=timeout, headers=headers) as resp:
+    async def _hop(c: httpx.AsyncClient, t) -> tuple[httpx.Response, bytes | None]:
+        req = c.build_request("GET", current, timeout=t, headers=headers)
+        jar.set_cookie_header(req)
+        resp = await c.send(req, stream=True)
+        try:
+            jar.extract_cookies(resp)
             if resp.is_redirect and "location" in resp.headers:
                 return resp, None  # Do NOT read the body on a redirect hop.
             _check_size(resp)  # header fast-path
             return resp, await _stream_capped(resp)  # streaming hard-cap
+        finally:
+            await resp.aclose()
 
     for _ in range(max_redirects + 1):
         await _guard(current)
         proxied = _egress_client_for(httpx.URL(current).host)
         try:
             if proxied is None:
-                resp, body = await _hop(client)
+                resp, body = await _hop(client, timeout)
             else:
                 record_stage("fetch.egress_proxy")
                 try:
-                    resp, body = await _hop(proxied)
-                except (httpx.ProxyError, httpx.ConnectError):
-                    # Proxy down or refused: the direct path is no worse than before.
+                    resp, body = await _hop(proxied, httpx.Timeout(
+                        timeout, connect=min(timeout, PROXY_CONNECT_TIMEOUT)))
+                except (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout):
+                    # Proxy down, refusing or hung (connect_tunnel turns every handshake
+                    # failure into ProxyError), or TLS through the tunnel failing: the
+                    # direct path is no worse than before, and it re-guards.
                     record_stage("fetch.egress_proxy_fail")
-                    resp, body = await _hop(client)
+                    resp, body = await _hop(client, timeout)
         except httpx.HTTPError as exc:
             raise FetchError("fetch_failed", f"{type(exc).__name__}: {exc}") from exc
         if body is None:

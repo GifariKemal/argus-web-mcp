@@ -92,3 +92,35 @@ def test_tool_specs_doc_timeouts_match_config():
         assert int(val) == config.TIMEOUTS[tool], (
             f"{tool}: doc timeout={val} != config {config.TIMEOUTS[tool]}"
         )
+
+
+def test_egress_proxy_invalid_is_disabled_without_echo(monkeypatch, caplog):
+    """A malformed or credential-bearing ARGUS_EGRESS_PROXY turns the feature off once at
+    startup (a warning), instead of a raw ValueError on every read of a listed host."""
+    for bad in ("socks5://warp:9091", "http://user:s3cret@warp:9091", "http://warp:notaport",
+                "http://:@warp:9091", "http://warp:0",
+                "warp:9091"):
+        monkeypatch.setenv("ARGUS_EGRESS_PROXY", bad)
+        try:
+            reloaded = importlib.reload(config)
+            assert reloaded.EGRESS_PROXY == ""
+            assert "s3cret" not in caplog.text
+        finally:
+            monkeypatch.delenv("ARGUS_EGRESS_PROXY", raising=False)
+            importlib.reload(config)
+
+
+def test_egress_proxy_hosts_empty_means_default(monkeypatch):
+    """Compose passes ARGUS_EGRESS_PROXY_HOSTS= when unset; that must keep the default."""
+    monkeypatch.setenv("ARGUS_EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setenv("ARGUS_EGRESS_PROXY_HOSTS", "")
+    try:
+        reloaded = importlib.reload(config)
+        assert reloaded.EGRESS_PROXY == "http://warp:9091"
+        assert "archive.org" in reloaded.EGRESS_PROXY_HOSTS
+        monkeypatch.setenv("ARGUS_EGRESS_PROXY_HOSTS", " .Example.COM. , ,")
+        assert importlib.reload(config).EGRESS_PROXY_HOSTS == ("example.com",)
+    finally:
+        monkeypatch.delenv("ARGUS_EGRESS_PROXY", raising=False)
+        monkeypatch.delenv("ARGUS_EGRESS_PROXY_HOSTS", raising=False)
+        importlib.reload(config)

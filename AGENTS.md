@@ -90,6 +90,7 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 
 - New tool -> add the async fn in `server.py`, wrap all failures in `err(...)`, register it in the `mcp.tool(_fn)` loop, add it to `INSTRUCTIONS` (keep **< 2 KB**), and update the tool-count test.
 - External APIs (GitHub, Semantic Scholar, ...) go through the SSRF-safe `s.client`; add a `User-Agent`.
+- A host that blocks the VPS IP but answers through WARP goes in `ARGUS_EGRESS_PROXY_HOSTS` (measure it through the `warp` container first). Never hand a proxy a hostname: `ssrf.connect_tunnel` sends the validated IP, and that is what keeps SSRF pinning intact.
 - Optional/heavy features are **lazy + default-off** (LLM via `ARGUS_ENABLE_LLM`, semantic via the `[semantic]` extra). Argus must stay fully functional with none of them.
 
 ## Secrets & deploy

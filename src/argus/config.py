@@ -7,7 +7,9 @@ No YAML file needed; 12-factor app style.
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import os
+from urllib.parse import urlsplit
 
 
 def _int(env: str, default: int) -> int:
@@ -75,12 +77,29 @@ PDF_MAX_PAGES = _int("ARGUS_PDF_MAX_PAGES", 300)
 # Cloudflare WARP container measured from the VPS on 2026-10-04: Wayback 429 -> 200,
 # Reuters 401 -> 200, WSJ 401 -> 200, FXStreet 403 -> 200. Empty = off. Only the listed
 # hosts and their subdomains use it; search engines and S2 did not improve, so not listed.
+def _valid_proxy(url: str) -> bool:
+    """http://host:port with no credentials - the only form security.ssrf.parse_proxy takes."""
+    try:
+        u = urlsplit(url)
+        port = u.port  # raises ValueError on a non-numeric/out-of-range port
+    except ValueError:
+        return False
+    # "@" catches empty userinfo too ("http://:@warp:9091"), which httpx still sees as one.
+    return (u.scheme == "http" and bool(u.hostname) and "@" not in u.netloc
+            and (port is None or port > 0))
+
+
 EGRESS_PROXY = os.environ.get("ARGUS_EGRESS_PROXY", "").strip()
+if EGRESS_PROXY and not _valid_proxy(EGRESS_PROXY):
+    # Off, loudly, once at startup - never a per-request crash, and never echo the value
+    # (it may carry a password).
+    logging.getLogger("argus.config").warning(
+        "ARGUS_EGRESS_PROXY ignored: must be http://host:port without credentials")
+    EGRESS_PROXY = ""
 EGRESS_PROXY_HOSTS = tuple(
     h.strip().strip(".").lower()  # ".archive.org" and "archive.org." mean archive.org
-    for h in os.environ.get(
-        "ARGUS_EGRESS_PROXY_HOSTS", "archive.org,reuters.com,wsj.com,fxstreet.com"
-    ).split(",")
+    for h in (os.environ.get("ARGUS_EGRESS_PROXY_HOSTS", "").strip()  # empty = default
+              or "archive.org,reuters.com,wsj.com,fxstreet.com").split(",")
     if h.strip().strip(".")
 )
 

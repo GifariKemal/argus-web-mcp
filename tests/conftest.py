@@ -117,3 +117,12 @@ def app_state(tmp_path, public_dns, monkeypatch):
 
 
 BASE = "http://fixtures.test"
+
+
+@pytest.fixture(autouse=True)
+def _no_egress_proxy(monkeypatch):
+    """An ARGUS_EGRESS_PROXY exported in a developer shell must not send archive.org test
+    traffic to a real proxy; tests that want the proxy set it themselves."""
+    from argus import config
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "")

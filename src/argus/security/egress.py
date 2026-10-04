@@ -12,6 +12,7 @@ also pins against rebinding.
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import urlsplit, urlunsplit
 
 import httpcore
@@ -19,6 +20,8 @@ import httpcore
 from .. import config
 from ..models import record_stage
 from .ssrf import SSRFError, aresolve_and_validate, connect_tunnel, parse_proxy
+
+logger = logging.getLogger("argus.egress")
 
 _FORBIDDEN = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _HOP_HEADERS = (b"proxy-connection:", b"connection:", b"keep-alive:", b"proxy-authorization:")
@@ -78,7 +81,7 @@ async def _dial(host: str, ips: list[str], port: int):
 
         try:  # 8 s leaves the direct fallback room inside _handle's 15 s budget
             r, w = await asyncio.wait_for(tunnel(), 8)
-        except (OSError, httpcore.ProxyError):  # TimeoutError is an OSError
+        except (OSError, ValueError, httpcore.ProxyError):  # TimeoutError is an OSError
             record_stage("fetch.browser_egress_proxy_fail")
         else:
             record_stage("fetch.browser_egress_proxy")
@@ -94,8 +97,12 @@ async def _handle(client_r: asyncio.StreamReader, client_w: asyncio.StreamWriter
         host, port = _target(method, target)
         ips = await aresolve_and_validate(host, port)
         up_r, up_w = await asyncio.wait_for(_dial(host, ips, port), 15)
-    except SSRFError:
-        record_stage("fetch.browser_ssrf_blocked")
+    except SSRFError as exc:
+        # DNSError is an SSRFError too; counting it as ssrf_blocked made dead tracker
+        # domains look like SSRF attempts. Stage is browser_ssrf_blocked or browser_dns_failed.
+        record_stage(f"fetch.browser_{exc.code}")
+        # Method and target without the query string, which can carry page tokens.
+        logger.info("egress: refused %s %s (%s)", method, target.split("?", 1)[0][:200], exc)
         client_w.write(_FORBIDDEN)
         client_w.close()
         return

@@ -1,3 +1,4 @@
+import asyncio
 import socket
 
 import httpx
@@ -13,7 +14,7 @@ from argus.fetch.core import (
 from argus.fetch.fallback import fetch_via_archive
 from argus.fetch.render import BrowserPool
 from argus.fetch.static import FetchError, fetch_static
-from argus.security.ssrf import SSRFError
+from argus.security.ssrf import SSRFError, build_safe_async_client
 
 ARTICLE = "<html><body><article>" + ("word " * 80) + "</article></body></html>"
 THIN = "<html><head><script>var x=1</script></head><body><div id=root></div></body></html>"
@@ -639,58 +640,251 @@ async def test_exhausted_fallback_records_stage(monkeypatch):
     assert models.STAGE_COUNTS.get("fetch.fallback_exhausted") == 1
 
 
-async def test_egress_proxy_routes_listed_hosts_only(monkeypatch):
-    """Hosts in ARGUS_EGRESS_PROXY_HOSTS (and their subdomains) go through the proxied
-    client on every hop; everything else keeps the caller's client."""
+async def _origin_server(body=b"VIA-PROXY"):
+    async def handle(r, w):
+        await r.readuntil(b"\r\n\r\n")
+        w.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+        await w.drain()
+        w.close()
+
+    srv = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return srv, srv.sockets[0].getsockname()[1]
+
+
+async def _connect_proxy(mode="tunnel"):
+    """A real CONNECT proxy. tunnel: dial loopback whatever IP it was asked for (the IP is
+    recorded, so the test sees what Argus sent); refuse: 403; hang: never answer."""
+    asked = []
+
+    async def handle(r, w):
+        head = await r.readuntil(b"\r\n\r\n")
+        asked.append(head.split(b"\r\n", 1)[0].decode())
+        if mode == "hang":
+            await asyncio.sleep(30)
+            return
+        if mode == "refuse":
+            w.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            await w.drain()
+            w.close()
+            return
+        port = int(head.split(b" ")[1].rsplit(b":", 1)[1])
+        up_r, up_w = await asyncio.open_connection("127.0.0.1", port)
+        w.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        await w.drain()
+
+        async def pipe(a, b):
+            while data := await a.read(65536):
+                b.write(data)
+                await b.drain()
+            b.close()
+
+        await asyncio.gather(pipe(r, up_w), pipe(up_r, w))
+
+    srv = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return srv, srv.sockets[0].getsockname()[1], asked
+
+
+@pytest.fixture
+def _egress(monkeypatch):
+    """listed.test is proxied; every name resolves to a public IP (the real resolver path)."""
     import argus.fetch.static as static
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("listed.test",))
+    monkeypatch.setattr(static, "_proxied", {})
+    stages = []
+    monkeypatch.setattr(static, "record_stage", stages.append)
+    return stages
+
+
+_DIRECT = _client(lambda req: httpx.Response(200, text="DIRECT"))
+
+
+async def test_egress_end_to_end_through_a_real_connect_proxy(_egress, monkeypatch):
+    """Real sockets, real build_safe_async_client(via_proxy=...): the proxy is asked for
+    the validated IP, never the hostname, and the body comes back through the tunnel."""
+    origin, oport = await _origin_server()
+    proxy, pport, asked = await _connect_proxy()
+    monkeypatch.setattr(config, "EGRESS_PROXY", f"http://127.0.0.1:{pport}")
+    try:
+        res = await fetch_static(f"http://listed.test:{oport}/a", client=_DIRECT, timeout=5)
+        assert res["html"] == "VIA-PROXY"
+        assert asked == [f"CONNECT 93.184.216.34:{oport} HTTP/1.1"]
+        assert _egress == ["fetch.egress_proxy"]
+    finally:
+        origin.close()
+        proxy.close()
+
+
+@pytest.mark.parametrize("mode", ["refuse", "hang", "dead"])
+async def test_egress_failing_proxy_falls_back_to_direct(_egress, monkeypatch, mode):
+    import argus.fetch.static as static
+
+    monkeypatch.setattr(static, "PROXY_CONNECT_TIMEOUT", 0.3)
+    proxy, pport, _ = await _connect_proxy(mode if mode != "dead" else "refuse")
+    if mode == "dead":
+        proxy.close()
+        await proxy.wait_closed()
+    monkeypatch.setattr(config, "EGRESS_PROXY", f"http://127.0.0.1:{pport}")
+    try:
+        res = await fetch_static("http://listed.test/a", client=_DIRECT, timeout=5)
+        assert res["html"] == "DIRECT"
+        assert _egress == ["fetch.egress_proxy", "fetch.egress_proxy_fail"]
+    finally:
+        proxy.close()
+
+
+async def test_egress_routes_per_hop(_egress, monkeypatch):
+    """Each redirect hop picks its own path: unlisted -> listed -> unlisted."""
+    import argus.fetch.static as static
+
     monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
-    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
     seen = []
 
     def direct(req):
         seen.append(("direct", req.url.host))
-        return httpx.Response(302, headers={"location": "https://web.archive.org/web/1/x"})
+        if req.url.host == "start.test":
+            return httpx.Response(302, headers={"location": "https://listed.test/x"})
+        return httpx.Response(200, text=ARTICLE)
 
     def proxied(req):
         seen.append(("proxy", req.url.host))
+        return httpx.Response(302, headers={"location": "https://end.test/"})
+
+    monkeypatch.setattr(static, "_proxied_client", lambda via: _client(proxied))
+    res = await fetch_static("https://start.test/", client=_client(direct))
+    assert res["status"] == 200
+    assert seen == [("direct", "start.test"), ("proxy", "listed.test"), ("direct", "end.test")]
+
+
+async def test_cookie_wall_completes_but_never_leaks_between_calls(_egress, monkeypatch):
+    """set-cookie + 302 back to itself (DataDome, consent) needs the cookie on the next
+    hop; the next CALL must start clean, because the clients are shared."""
+    import argus.fetch.static as static
+
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    cookies = []
+
+    def wall(req):
+        cookies.append(req.headers.get("cookie"))
+        if req.headers.get("cookie") != "pass=1":
+            return httpx.Response(302, headers={"location": str(req.url),
+                                                "set-cookie": "pass=1; Path=/"})
         return httpx.Response(200, text=ARTICLE)
 
-    monkeypatch.setattr(static, "_egress_client", _client(proxied))
-    res = await fetch_static("https://example.com/", client=_client(direct))
-    assert res["status"] == 200
-    assert seen == [("direct", "example.com"), ("proxy", "web.archive.org")]
+    shared = build_safe_async_client()  # the real policy: the client jar keeps nothing
+    shared._transport = httpx.MockTransport(wall)
+    monkeypatch.setattr(static, "_proxied_client", lambda via: shared)
+    for _ in range(2):
+        assert (await fetch_static("https://listed.test/", client=_DIRECT))["status"] == 200
+    assert cookies == [None, "pass=1", None, "pass=1"]
+    assert not shared.cookies
 
 
 async def test_egress_proxy_off_by_default(monkeypatch):
     import argus.fetch.static as static
 
+    monkeypatch.setattr(static, "_proxied", {})
     monkeypatch.setattr(config, "EGRESS_PROXY", "")
     assert static._egress_client_for("archive.org") is None
     monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
     monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
-    monkeypatch.setattr(static, "_egress_client", None)
     assert static._egress_client_for("notarchive.org") is None
-    assert static._egress_client_for("ARCHIVE.org.") is not None
-    # shared across callers, so it must never keep a site's cookies
-    assert not static._egress_client.cookies.jar._policy.set_ok_domain(
-        __import__("http.cookiejar").cookiejar.Cookie(
-            0, "a", "b", None, False, ".archive.org", True, True, "/", False, False,
-            None, False, None, None, {}), None)
+    assert static._egress_client_for("archive.org.evil.com") is None
+    c = static._egress_client_for("WEB.ARCHIVE.org.")
+    assert c is not None and static._egress_client_for("archive.org") is c  # cached per loop
 
 
-async def test_egress_proxy_down_falls_back_to_direct(monkeypatch):
-    import argus.fetch.static as static
+async def test_fetch_via_archive_falls_back_to_cdx_when_availability_is_empty(monkeypatch):
+    """/wayback/available often answers 'no snapshot' for pages that have one; the CDX
+    API is asked next, and its latest 200 capture is read in raw id_ form."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = []
+
+    def h(req):
+        seen.append(str(req.url))
+        if req.url.host == "archive.org":
+            return httpx.Response(200, text='{"archived_snapshots":{}}')
+        if req.url.path == "/cdx/search/cdx":
+            return httpx.Response(200, text='[["timestamp","original"],'
+                                            '["20261003215945","https://www.python.org/"]]')
+        return httpx.Response(200, text=SNAPSHOT_HTML)
+
+    async with _client(h) as c:
+        res = await fetch_via_archive("https://python.org/?a=1&b=2", client=c)
+    assert res is not None and res["render_path"] == "archive"
+    assert "url=https%3A%2F%2Fpython.org%2F%3Fa%3D1%26b%3D2" in seen[1]
+    assert seen[2] == "https://web.archive.org/web/20261003215945id_/https://www.python.org/"
+
+
+@pytest.mark.parametrize("cdx", [
+    lambda req: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=req)),
+    lambda req: httpx.Response(200, text='[["timestamp","original"]]'),  # no capture
+    lambda req: httpx.Response(200, text="<html>not json</html>"),
+])
+async def test_fetch_via_archive_cdx_miss_is_none_without_cooldown(monkeypatch, cdx):
+    """CDX times out often (3 of 7 measured); that must not count toward the archive
+    cool-down, which would switch the whole step off for 30 minutes."""
+    import argus.fetch.fallback as fallback
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        if req.url.host == "archive.org":
+            return httpx.Response(200, text='{"archived_snapshots":{}}')
+        return cdx(req)
+
+    async with _client(h) as c:
+        for _ in range(4):
+            assert await fetch_via_archive("http://blocked.example/", client=c) is None
+    assert fallback._off_until == 0.0 and fallback._transport_fails == 0
+
+
+async def test_egress_tls_failure_through_tunnel_falls_back_to_direct(_egress, monkeypatch):
+    """CONNECT worked but TLS through it failed (ConnectError): go direct, it re-guards."""
+    import argus.fetch.static as static
+
     monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
-    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
 
-    def proxied(req):
-        raise httpx.ConnectError("warp unreachable", request=req)
+    def tls_fails(req):
+        raise httpx.ConnectError("tls handshake failed", request=req)
 
-    monkeypatch.setattr(static, "_egress_client", _client(proxied))
-    res = await fetch_static("https://archive.org/x", client=_client(
-        lambda req: httpx.Response(200, text=ARTICLE)))
-    assert res["status"] == 200
+    monkeypatch.setattr(static, "_proxied_client", lambda via: _client(tls_fails))
+    res = await fetch_static("https://listed.test/", client=_DIRECT)
+    assert res["html"] == "DIRECT"
+    assert _egress == ["fetch.egress_proxy", "fetch.egress_proxy_fail"]
+
+
+async def test_cookie_never_crosses_to_another_host(_egress, monkeypatch):
+    """A cookie set by host A must not ride a 302 to host B."""
+    cookies = {}
+
+    def h(req):
+        cookies[req.url.host] = req.headers.get("cookie")
+        if req.url.host == "a.test":
+            return httpx.Response(302, headers={"location": "https://b.test/",
+                                                "set-cookie": "sid=secret; Path=/"})
+        return httpx.Response(200, text=ARTICLE)
+
+    shared = build_safe_async_client()
+    shared._transport = httpx.MockTransport(h)
+    assert (await fetch_static("https://a.test/", client=shared))["status"] == 200
+    assert cookies == {"a.test": None, "b.test": None}
+
+
+async def test_fetch_via_archive_whole_step_has_a_deadline(monkeypatch):
+    import argus.fetch.fallback as fallback
+
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    monkeypatch.setattr(fallback, "ARCHIVE_DEADLINE", 0.2)
+    stages = []
+    monkeypatch.setattr(fallback, "record_stage", stages.append)
+
+    async def slow(req):
+        await asyncio.sleep(5)
+        return httpx.Response(200, text="{}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as c:
+        assert await fetch_via_archive("http://blocked.example/", client=c) is None
+    assert stages == ["fetch.archive_fail_deadline"]
+    assert fallback._off_until == 0.0 and fallback._transport_fails == 0

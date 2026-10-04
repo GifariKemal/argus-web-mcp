@@ -491,7 +491,8 @@ async def test_backend_via_proxy_prefers_ipv4(monkeypatch):
     assert stream.sent.startswith(b"CONNECT 93.184.216.34:443 ")
 
 
-@pytest.mark.parametrize("bad", ["socks5://warp:9091", "http://", "https://warp:9091"])
+@pytest.mark.parametrize("bad", ["socks5://warp:9091", "http://", "https://warp:9091",
+                                 "http://:@warp:9091", "http://warp:0"])
 def test_client_via_proxy_rejects_non_http(bad):
     with pytest.raises(ValueError):
         build_safe_async_client(via_proxy=bad)
@@ -501,3 +502,56 @@ def test_client_via_proxy_rejects_non_http(bad):
 def test_is_blocked_ip_blocks_nat64(ip):
     """A NAT64 address can map to a private IPv4 on a proxy's far side."""
     assert is_blocked_ip(ip)
+
+
+async def test_backend_via_proxy_oversized_reply_over_several_reads(monkeypatch):
+    """The 8 KiB cap must fire on a reply that trickles in without ever ending."""
+    import httpcore
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34"))
+    stream = _FakeStream(*[b"x" * 3000] * 5)
+    with pytest.raises(httpcore.ProxyError, match="oversized"):
+        await _PinnedBackend(_ProxyBackend(stream), via=("warp", 9091)).connect_tcp("a.com", 443)
+    assert stream.closed and stream.replies  # stopped before draining the proxy
+
+
+async def test_backend_via_proxy_unreachable_is_proxy_error(monkeypatch):
+    """A down or unresolvable proxy must surface as ProxyError: callers fall back on it."""
+    import httpcore
+
+    class _Down(_RecordingBackend):
+        async def connect_tcp(self, host, port, **kw):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34"))
+    with pytest.raises(httpcore.ProxyError, match="unreachable"):
+        await _PinnedBackend(_Down(), via=("warp", 9091)).connect_tcp("a.com", 443)
+
+
+async def test_backend_via_proxy_hung_handshake_is_proxy_error(monkeypatch):
+    import httpcore
+
+    class _Hung(_FakeStream):
+        async def read(self, max_bytes, timeout=None):
+            raise httpcore.ReadTimeout("no reply")
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _gai_result("93.184.216.34"))
+    stream = _Hung()
+    with pytest.raises(httpcore.ProxyError, match="handshake failed"):
+        await _PinnedBackend(_ProxyBackend(stream), via=("warp", 9091)).connect_tcp("a.com", 443)
+    assert stream.closed
+
+
+def test_client_via_proxy_rejects_credentials_without_echoing_them():
+    with pytest.raises(ValueError) as ei:
+        build_safe_async_client(via_proxy="http://user:s3cret@warp:9091")
+    assert "s3cret" not in str(ei.value)
+
+
+def test_safe_client_keeps_no_cookies():
+    """Shared by every tool call, so one caller's site cookies never reach the next."""
+    client = build_safe_async_client()
+    client.cookies.extract_cookies(httpx.Response(
+        200, headers={"set-cookie": "sid=1; Path=/"},
+        request=httpx.Request("GET", "https://example.com/")))
+    assert not client.cookies

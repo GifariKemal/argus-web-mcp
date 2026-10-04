@@ -5,15 +5,11 @@ then hand the crawl to Crawl4AI's BFSDeepCrawlStrategy. With ``same_domain=True`
 a DomainFilter pins discovery to the seed host, which is what confines the crawl
 to a known-safe origin.
 
-SSRF ceiling (P2): unlike the httpx tier, discovered URLs are NOT individually
-resolve-then-validated/IP-pinned - Crawl4AI drives Chromium, which does its own
-DNS, and there is no per-URL re-pin hook. The seed-host validation plus the
-same-domain DomainFilter are the trust boundary: the crawl cannot wander to an
-arbitrary domain (and thus not to a metadata/private IP) because every followed
-link must match the validated seed host. Cross-domain crawls (same_domain=False)
-relax this and should only be used for hosts already trusted by the caller.
-ponytail: a per-URL re-pin would require a custom dispatcher/proxy in Crawl4AI;
-defer until a concrete need appears.
+SSRF: since 0.4.20 Chromium sends every connection (each discovered URL, redirect hop and
+subresource) through the loopback egress proxy (``security/egress.py``), which resolves,
+validates and pins it like the httpx tier, and since 0.4.24 sends ARGUS_EGRESS_PROXY_HOSTS
+on through WARP. The same-domain DomainFilter only scopes the crawl now; it is no longer
+the trust boundary.
 """
 
 from __future__ import annotations

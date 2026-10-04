@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from http.cookiejar import DefaultCookiePolicy
 from urllib.parse import urlsplit
 
 import httpcore
@@ -149,12 +150,19 @@ class _PinnedBackend(httpcore.AsyncNetworkBackend):
     async def connect_tcp(self, host, port, timeout=None, local_address=None,
                           socket_options=None):
         ips = await aresolve_and_validate(host, port)
-        stream = await self._inner.connect_tcp(
-            *(self._via or (ips[0], port)), timeout=timeout, local_address=local_address,
-            socket_options=socket_options,
-        )
-        if self._via is not None:
-            await connect_tunnel(stream, ips, port, timeout)
+        if self._via is None:
+            return await self._inner.connect_tcp(
+                ips[0], port, timeout=timeout, local_address=local_address,
+                socket_options=socket_options,
+            )
+        try:
+            stream = await self._inner.connect_tcp(
+                *self._via, timeout=timeout, local_address=local_address,
+                socket_options=socket_options,
+            )
+        except Exception as exc:  # proxy down or unresolvable: callers fall back on this
+            raise httpcore.ProxyError(f"egress proxy unreachable: {type(exc).__name__}") from exc
+        await connect_tunnel(stream, ips, port, timeout)
         return stream
 
     async def connect_unix_socket(self, *args, **kwargs):
@@ -165,10 +173,11 @@ class _PinnedBackend(httpcore.AsyncNetworkBackend):
 
 
 def parse_proxy(url: str) -> tuple[str, int]:
-    """``http://host:port`` -> (host, port). Only plain-HTTP CONNECT proxies are supported."""
+    """``http://host:port`` -> (host, port). Only plain-HTTP CONNECT proxies without
+    credentials are supported. The value is never echoed: it may hold a password."""
     u = httpx.URL(url)
-    if u.scheme != "http" or not u.host:
-        raise ValueError(f"egress proxy must be http://host:port, got {url!r}")
+    if u.scheme != "http" or not u.host or u.userinfo or u.port == 0:
+        raise ValueError("egress proxy must be http://host:port (no credentials)")
     return u.host, u.port or 80
 
 
@@ -191,8 +200,12 @@ async def connect_tunnel(stream, ips: list[str], port: int, timeout) -> None:
         # Bytes past the header block would belong to the TLS stream and be lost here.
         if len(status) < 2 or status[1] != b"200" or not reply.endswith(b"\r\n\r\n"):
             raise httpcore.ProxyError(f"egress proxy refused: {reply[:60]!r}")
-    except BaseException:
+    except BaseException as exc:
         await stream.aclose()
+        if isinstance(exc, Exception) and not isinstance(exc, httpcore.ProxyError):
+            # A hung or reset proxy (ReadTimeout, OSError) is still the proxy failing, and
+            # callers fall back to the direct path only on ProxyError.
+            raise httpcore.ProxyError(f"egress proxy handshake failed: {exc!r}") from exc
         raise
 
 
@@ -236,4 +249,8 @@ def build_safe_async_client(via_proxy: str | None = None, **kwargs: object) -> h
     kwargs.setdefault("follow_redirects", False)
     via = parse_proxy(via_proxy) if via_proxy else None
     transport = _SafeTransport(_pinned_http_transport(via))
-    return httpx.AsyncClient(transport=transport, **kwargs)  # type: ignore[arg-type]
+    client = httpx.AsyncClient(transport=transport, **kwargs)  # type: ignore[arg-type]
+    # These clients are shared by every tool call: one caller's site cookies (anti-bot,
+    # paywall, session) must never reach the next. fetch.static keeps a per-call jar.
+    client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return client
