@@ -14,6 +14,27 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [0.4.24] - 2026-10-04 - the browser tier uses WARP too
+
+### Added
+
+- Chromium's loopback egress proxy (`security/egress.py`) now dials listed hosts through
+  `ARGUS_EGRESS_PROXY` with the same `CONNECT <validated-ip>` tunnel as the httpx tier
+  (`ssrf.connect_tunnel`, shared). It still resolves and validates every connection
+  first; a down, refusing or hung (8 s) WARP falls back to the direct path. Stage counters
+  `fetch.browser_egress_proxy` and `fetch.browser_egress_proxy_fail`.
+- Host matching lives in one place, `config.egress_proxy_for`, used by both tiers.
+
+### Verified on the image built on the VPS
+
+- Rendered through WARP, no challenge page: Reuters (579 KB), WSJ (889 KB), FXStreet
+  (1 MB); Cloudflare trace from Chromium shows `warp=on`.
+- With `searxng`, `warp`, `localtest.me` and `httpbin.org` added to the proxied list,
+  direct navigation to internal names was refused by the pre-navigation guard and public
+  302s to `searxng:8080` / `warp:9091` were refused by the egress proxy.
+
+---
+
 ## [0.4.23] - 2026-10-04 - WARP egress for hosts that block the VPS IP
 
 Idea from a "free proxy pool" post (Cloudflare WARP wrapped as SOCKS, rotated on rate

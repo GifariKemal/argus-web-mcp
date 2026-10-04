@@ -3,6 +3,7 @@ import socket
 import httpx
 import pytest
 
+from argus import config
 from argus.fetch.core import (
     ESCALATE_BELOW_CHARS,
     STATIC_FALLBACK_TIMEOUT,
@@ -644,8 +645,8 @@ async def test_egress_proxy_routes_listed_hosts_only(monkeypatch):
     import argus.fetch.static as static
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
-    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
-    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
     seen = []
 
     def direct(req):
@@ -665,10 +666,10 @@ async def test_egress_proxy_routes_listed_hosts_only(monkeypatch):
 async def test_egress_proxy_off_by_default(monkeypatch):
     import argus.fetch.static as static
 
-    monkeypatch.setattr(static, "EGRESS_PROXY", "")
+    monkeypatch.setattr(config, "EGRESS_PROXY", "")
     assert static._egress_client_for("archive.org") is None
-    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
-    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
     monkeypatch.setattr(static, "_egress_client", None)
     assert static._egress_client_for("notarchive.org") is None
     assert static._egress_client_for("ARCHIVE.org.") is not None
@@ -683,8 +684,8 @@ async def test_egress_proxy_down_falls_back_to_direct(monkeypatch):
     import argus.fetch.static as static
 
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
-    monkeypatch.setattr(static, "EGRESS_PROXY", "http://warp:9091")
-    monkeypatch.setattr(static, "EGRESS_PROXY_HOSTS", ("archive.org",))
+    monkeypatch.setattr(config, "EGRESS_PROXY", "http://warp:9091")
+    monkeypatch.setattr(config, "EGRESS_PROXY_HOSTS", ("archive.org",))
 
     def proxied(req):
         raise httpx.ConnectError("warp unreachable", request=req)

@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ..config import EGRESS_PROXY, EGRESS_PROXY_HOSTS
+from ..config import egress_proxy_for
 from ..models import record_stage
 from ..security.ssrf import aresolve_and_validate, build_safe_async_client, validate_url
 
@@ -71,14 +71,13 @@ _egress_client: httpx.AsyncClient | None = None
 
 def _egress_client_for(host: str) -> httpx.AsyncClient | None:
     """The proxied client when ``host`` is listed in ARGUS_EGRESS_PROXY_HOSTS, else None.
-    Same SSRF-pinned client, only tunnelled (see security.ssrf._connect_tunnel)."""
+    Same SSRF-pinned client, only tunnelled (see security.ssrf.connect_tunnel)."""
     global _egress_client
-    host = host.lower().rstrip(".")
-    if not EGRESS_PROXY or not any(host == d or host.endswith("." + d)
-                                   for d in EGRESS_PROXY_HOSTS):
+    via = egress_proxy_for(host)
+    if via is None:
         return None
     if _egress_client is None:  # ponytail: process-lifetime client, never closed
-        _egress_client = build_safe_async_client(via_proxy=EGRESS_PROXY)
+        _egress_client = build_safe_async_client(via_proxy=via)
         # Shared across every caller: never keep a site's anti-bot/paywall cookies.
         _egress_client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
     return _egress_client

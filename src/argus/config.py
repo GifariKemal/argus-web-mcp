@@ -83,3 +83,11 @@ EGRESS_PROXY_HOSTS = tuple(
     ).split(",")
     if h.strip().strip(".")
 )
+
+
+def egress_proxy_for(host: str) -> str | None:
+    """ARGUS_EGRESS_PROXY when ``host`` (or a parent domain) is listed, else None."""
+    host = host.lower().rstrip(".")
+    if EGRESS_PROXY and any(host == d or host.endswith("." + d) for d in EGRESS_PROXY_HOSTS):
+        return EGRESS_PROXY
+    return None

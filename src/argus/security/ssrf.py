@@ -154,9 +154,7 @@ class _PinnedBackend(httpcore.AsyncNetworkBackend):
             socket_options=socket_options,
         )
         if self._via is not None:
-            # The WARP exit is IPv4 (measured), so prefer a validated IPv4 address.
-            ip = next((i for i in ips if ":" not in i), ips[0])
-            await _connect_tunnel(stream, ip, port, timeout)
+            await connect_tunnel(stream, ips, port, timeout)
         return stream
 
     async def connect_unix_socket(self, *args, **kwargs):
@@ -166,9 +164,19 @@ class _PinnedBackend(httpcore.AsyncNetworkBackend):
         await self._inner.sleep(seconds)
 
 
-async def _connect_tunnel(stream, ip: str, port: int, timeout) -> None:
-    """HTTP CONNECT through the egress proxy to the IP we already validated. The proxy is
-    handed an address, never a hostname, so it cannot resolve its way somewhere else."""
+def parse_proxy(url: str) -> tuple[str, int]:
+    """``http://host:port`` -> (host, port). Only plain-HTTP CONNECT proxies are supported."""
+    u = httpx.URL(url)
+    if u.scheme != "http" or not u.host:
+        raise ValueError(f"egress proxy must be http://host:port, got {url!r}")
+    return u.host, u.port or 80
+
+
+async def connect_tunnel(stream, ips: list[str], port: int, timeout) -> None:
+    """HTTP CONNECT through the egress proxy to an IP we already validated. The proxy is
+    handed an address, never a hostname, so it cannot resolve its way somewhere else.
+    ``stream`` has httpcore's async stream shape (write/read/aclose)."""
+    ip = next((i for i in ips if ":" not in i), ips[0])  # the WARP exit is IPv4 (measured)
     target = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
     try:
         await stream.write(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode(),
@@ -226,11 +234,6 @@ def build_safe_async_client(via_proxy: str | None = None, **kwargs: object) -> h
     connection through that CONNECT proxy. Extra **kwargs (timeout, etc.) pass through.
     """
     kwargs.setdefault("follow_redirects", False)
-    via = None
-    if via_proxy:
-        u = httpx.URL(via_proxy)
-        if u.scheme != "http" or not u.host:
-            raise ValueError(f"egress proxy must be http://host:port, got {via_proxy!r}")
-        via = (u.host, u.port or 80)
+    via = parse_proxy(via_proxy) if via_proxy else None
     transport = _SafeTransport(_pinned_http_transport(via))
     return httpx.AsyncClient(transport=transport, **kwargs)  # type: ignore[arg-type]

@@ -14,8 +14,11 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit, urlunsplit
 
+import httpcore
+
+from .. import config
 from ..models import record_stage
-from .ssrf import SSRFError, aresolve_and_validate
+from .ssrf import SSRFError, aresolve_and_validate, connect_tunnel, parse_proxy
 
 _FORBIDDEN = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _HOP_HEADERS = (b"proxy-connection:", b"connection:", b"keep-alive:", b"proxy-authorization:")
@@ -46,6 +49,43 @@ def _target(method: str, target: str) -> tuple[str, int]:
     return u.hostname, u.port or 80
 
 
+class _AioStream:
+    """asyncio (reader, writer) in the httpcore stream shape that connect_tunnel uses."""
+
+    def __init__(self, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        self.r, self.w = r, w
+
+    async def write(self, data: bytes, timeout=None) -> None:
+        self.w.write(data)
+        await self.w.drain()
+
+    async def read(self, max_bytes: int, timeout=None) -> bytes:
+        return await self.r.read(max_bytes)
+
+    async def aclose(self) -> None:
+        self.w.close()
+
+
+async def _dial(host: str, ips: list[str], port: int):
+    """Open the upstream for an already-validated target: through ARGUS_EGRESS_PROXY when
+    the host is listed (falling back to direct if that proxy is down), else direct."""
+    via = config.egress_proxy_for(host)
+    if via is not None:
+        async def tunnel():
+            r, w = await asyncio.open_connection(*parse_proxy(via))
+            await connect_tunnel(_AioStream(r, w), ips, port, None)
+            return r, w
+
+        try:  # 8 s leaves the direct fallback room inside _handle's 15 s budget
+            r, w = await asyncio.wait_for(tunnel(), 8)
+        except (OSError, httpcore.ProxyError):  # TimeoutError is an OSError
+            record_stage("fetch.browser_egress_proxy_fail")
+        else:
+            record_stage("fetch.browser_egress_proxy")
+            return r, w
+    return await asyncio.open_connection(ips[0], port)
+
+
 async def _handle(client_r: asyncio.StreamReader, client_w: asyncio.StreamWriter) -> None:
     try:
         head = await asyncio.wait_for(client_r.readuntil(b"\r\n\r\n"), 30)
@@ -53,7 +93,7 @@ async def _handle(client_r: asyncio.StreamReader, client_w: asyncio.StreamWriter
         method, target, version = line.decode("latin-1").split(" ", 2)
         host, port = _target(method, target)
         ips = await aresolve_and_validate(host, port)
-        up_r, up_w = await asyncio.wait_for(asyncio.open_connection(ips[0], port), 15)
+        up_r, up_w = await asyncio.wait_for(_dial(host, ips, port), 15)
     except SSRFError:
         record_stage("fetch.browser_ssrf_blocked")
         client_w.write(_FORBIDDEN)
