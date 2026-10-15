@@ -1,13 +1,16 @@
 """Official-API adapters for hosts that block our IP but publish an open API.
 
 StackExchange question pages 403 our server, while api.stackexchange.com answers
-(anonymous quota: 300 req/day/IP). Requests go through ``fetch_static`` with the
+(anonymous quota: 300 req/day/IP). npmjs.com package pages block the VPS directly and
+through WARP (reachability map, 2026-10-04), while registry.npmjs.org serves the same
+readme as JSON. Requests go through ``fetch_static`` with the
 injected client, so every hop keeps the SSRF guard and the size cap.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 import time
@@ -78,3 +81,40 @@ async def fetch_stackexchange(url: str, *, client, timeout: float = 30) -> dict 
         return None
     parts.append("</article></body></html>")
     return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api"}
+
+
+_NPM_PACKAGE = re.compile(r"/package/((?:@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*)(?:/|$)")
+
+
+def npm_target(url: str) -> str | None:
+    """The package name for an npmjs.com package page (scoped names included), else None."""
+    parts = urlsplit(url)
+    if (parts.hostname or "").removeprefix("www.") != "npmjs.com":
+        return None
+    m = _NPM_PACKAGE.match(parts.path)
+    return m.group(1) if m else None
+
+
+async def fetch_npm(url: str, *, client, timeout: float = 30) -> dict | None:
+    """Package readme + metadata from the registry as ``{final_url, status, html,
+    render_path: 'api'}``. Never raises: no match or any failure -> None."""
+    name = npm_target(url)
+    if name is None:
+        return None
+    try:
+        data = json.loads((await fetch_static(
+            f"https://registry.npmjs.org/{name}", client=client, timeout=timeout))["html"])
+        latest = (data.get("dist-tags") or {}).get("latest", "")
+        meta = f"<p>Latest version: {html.escape(str(latest))}</p>" if latest else ""
+        if data.get("homepage"):
+            home = html.escape(str(data["homepage"]))
+            meta += f'<p>Homepage: <a href="{home}">{home}</a></p>'
+        readme = html.escape(str(data.get("readme") or ""))
+        desc = html.escape(str(data.get("description") or ""))
+    except Exception:  # noqa: BLE001 - any failure must degrade to None, never raise
+        return None
+    # The readme is markdown; <pre> keeps it readable and verbatim through extraction.
+    # Registry text is untrusted markup (readmes embed HTML, code samples carry `<`).
+    page = (f"<html><head><title>{name}</title></head><body><article><h1>{name}</h1>"
+            f"<p>{desc}</p>{meta}<pre>{readme}</pre></article></body></html>")
+    return {"final_url": url, "status": 200, "html": page, "render_path": "api"}

@@ -120,3 +120,59 @@ async def test_backoff_from_the_api_pauses_the_adapter(monkeypatch):
     assert await adapters.fetch_stackexchange(url, client=None) is None  # empty items
     assert await adapters.fetch_stackexchange(url, client=None) is None
     assert len(calls) == 1  # second call skipped: the API asked for 30 s of quiet
+
+
+# --- npm registry adapter -----------------------------------------------------------
+from argus.fetch.adapters import fetch_npm, npm_target  # noqa: E402
+
+NPM_URL = "https://www.npmjs.com/package/@scope/pkg-name"
+NPM_API = "https://registry.npmjs.org/@scope/pkg-name"
+NPM_DOC = {"name": "@scope/pkg-name", "description": "A tiny package.",
+           "homepage": "https://example.com/pkg", "dist-tags": {"latest": "2.1.0"},
+           "readme": "# pkg-name\n\nInstall with `npm i @scope/pkg-name`.\n"}
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    (NPM_URL, "@scope/pkg-name"),
+    ("https://npmjs.com/package/react/v/18.3.1", "react"),
+    ("https://www.npmjs.com/search?q=react", None),
+    ("https://www.npmjs.com/~user", None),
+    ("https://npmjs.com.evil.example/package/react", None),
+])
+def test_npm_target(url, expected):
+    assert npm_target(url) == expected
+
+
+@respx.mock
+async def test_fetch_npm_builds_readme_page():
+    respx.get(NPM_API).mock(return_value=httpx.Response(200, json=NPM_DOC))
+    async with httpx.AsyncClient() as c:
+        res = await fetch_npm(NPM_URL, client=c)
+    assert res["render_path"] == "api" and res["final_url"] == NPM_URL
+    art = extract_article(res["html"], NPM_URL)
+    assert "npm i @scope/pkg-name" in art["content"] and "2.1.0" in art["content"]
+
+
+@respx.mock
+async def test_fetch_npm_degrades_to_none():
+    respx.get(NPM_API).mock(return_value=httpx.Response(503))
+    async with httpx.AsyncClient() as c:
+        assert await fetch_npm(NPM_URL, client=c) is None
+
+
+@respx.mock
+async def test_fetch_ladder_uses_npm_adapter_when_page_blocks():
+    respx.get(NPM_URL).mock(return_value=httpx.Response(403, text="blocked"))
+    respx.get(NPM_API).mock(return_value=httpx.Response(200, json=NPM_DOC))
+    async with httpx.AsyncClient() as c:
+        res = await fetch(NPM_URL, client=c, browser=None, timeout=10)
+    assert res["render_path"] == "api" and "A tiny package." in res["html"]
+
+
+@respx.mock
+async def test_fetch_npm_escapes_registry_markup():
+    doc = {**NPM_DOC, "readme": "x </pre><script>alert(1)</script> if a < b"}
+    respx.get(NPM_API).mock(return_value=httpx.Response(200, json=doc))
+    async with httpx.AsyncClient() as c:
+        res = await fetch_npm(NPM_URL, client=c)
+    assert "<script>" not in res["html"] and "&lt;/pre&gt;" in res["html"]

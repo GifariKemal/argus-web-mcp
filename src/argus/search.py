@@ -72,6 +72,26 @@ _TITLE_WEIGHT = 2.0  # title-token coverage counts double vs snippet coverage
 # single token in a long query, plus possible snippet, is gated by the overlap floor:
 # zero-overlap results are dropped first, so the boost only reorders RELEVANT results).
 _RECENCY_BOOST = 0.5
+# Authority prior (2026-10-15): a blind LLM judge preferred answers built on native
+# WebSearch 15:4 over Argus-sourced ones, on SOURCE QUALITY (3.9 vs 3.3) not accuracy, and
+# the probe showed why: authoritative pages sit at ranks 11-30 of Argus's pool (19-20%)
+# but only 15% of the top 10, because lexical+semantic scoring rewards keyword-dense SEO
+# copy. These are domain CLASSES (official docs, encyclopedic, academic, code hosts,
+# government/education, standards bodies), not a quality list; the bump is additive and
+# bounded like recency, so relevance still decides between two authoritative pages.
+_AUTHORITY_BOOST = 0.5  # lexical path, same scale as _RECENCY_BOOST
+_AUTHORITY_BOOST_SEM = 0.08  # hybrid path, on the 0..1 blended score (swept offline)
+_AUTHORITY_PREFIXES = ("docs.", "doc.", "developer.", "developers.", "learn.", "wiki.", "api.")
+_AUTHORITY_SUFFIXES = (
+    ".gov", ".edu", ".org", ".go.id", ".ac.id", ".ac.uk", ".edu.au", ".int",
+    "wikipedia.org", "arxiv.org", "doi.org", "github.com", "gitlab.com", "readthedocs.io",
+    "stackoverflow.com", "stackexchange.com", "python.org", "mozilla.org", "microsoft.com",
+    "google.com", "apple.com", "espressif.com", "react.dev", "nextjs.org", "pydata.org",
+    "redis.io", "openssl.org", "pydantic.dev", "nature.com", "science.org", "ieee.org",
+    "acm.org", "reuters.com", "bloomberg.com", "ft.com", "wsj.com", "nytimes.com",
+    "theguardian.com", "bbc.co.uk", "bbc.com", "iea.org", "nist.gov", "europa.eu",
+)
+_AUTHORITY_DOMAINS = tuple(s if s.startswith(".") else "." + s for s in _AUTHORITY_SUFFIXES)
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 # Hybrid semantic rerank (auto-enabled when argus.semantic.available()).
 # Blended score = _SEM_WEIGHT * cosine + (1 - _SEM_WEIGHT) * lexical_norm. Semantic-leaning
@@ -179,6 +199,14 @@ def _norm_url(url: str) -> str:
 def _norm_title(title: str) -> str:
     """Normalize for dedup: lowercase, collapse internal whitespace."""
     return " ".join(title.lower().split())
+
+
+def is_authoritative(url: str) -> bool:
+    """Domain-class prior for the rerank: official docs, encyclopedic, academic, code
+    hosts, government/education, standards bodies and major newsrooms."""
+    host = _host(url).removeprefix("www.")
+    # Match on a label boundary: "minecraft.com" must not pass as "ft.com".
+    return host.startswith(_AUTHORITY_PREFIXES) or ("." + host).endswith(_AUTHORITY_DOMAINS)
 
 
 def _host(url: str) -> str:
@@ -326,6 +354,9 @@ def rerank(
         # so an irrelevant fresh page (dropped below) never benefits - relevance wins.
         if recency and is_fresh and has_overlap:
             score += _RECENCY_BOOST
+        authoritative = has_overlap and is_authoritative(r.get("url", ""))
+        if authoritative:
+            score += _AUTHORITY_BOOST
         # Generic-token down-weight: if the result matches at least one query token but
         # EVERY matched token is generic/low-information, shrink the score so a lone
         # generic overlap can't inflate an off-topic result.  A result matching any
@@ -408,6 +439,8 @@ def _rerank_hybrid(
         blended = _SEM_WEIGHT * sem + (1 - _SEM_WEIGHT) * lex_norm
         sem_ok = sem >= _SEM_FLOOR
         keep = has_overlap or sem_ok
+        if keep and is_authoritative(r.get("url", "")):
+            blended += _AUTHORITY_BOOST_SEM
         # Transient flag: lets search()'s lexical relevance guard credit a semantically
         # rescued (zero-lexical-overlap) row as relevant. Stripped before search() returns.
         r["_sem_relevant"] = sem_ok

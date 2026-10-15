@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv venv --python 3.12
+      - run: uv venv --python 3.12.15
       - run: uv pip install --require-hashes -r requirements.lock
       - run: uv pip install --no-deps -e . && uv pip install pytest pytest-asyncio pytest-cov respx ruff
       - run: uv run --no-sync ruff check src tests
@@ -34,7 +34,7 @@ jobs:
         with:
           path: /home/runner/.cache/fastembed
           key: fastembed-${{ hashFiles('src/argus/semantic.py') }}
-      - run: uv venv --python 3.12
+      - run: uv venv --python 3.12.15
       - run: uv pip install --require-hashes -r requirements.lock
       - run: uv pip install --no-deps -e . && uv pip install pytest pytest-asyncio respx
       - run: uv run --no-sync playwright install --with-deps chromium

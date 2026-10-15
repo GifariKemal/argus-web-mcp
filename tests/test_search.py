@@ -1994,3 +1994,35 @@ def test_engine_fanout_env_override(monkeypatch):
 
     monkeypatch.delenv("ARGUS_SEARCH_ENGINES")
     assert "bing" in importlib.reload(search_mod)._DEFAULT_ENGINES
+
+
+# --- authority prior (0.4.33) ---------------------------------------------------------
+def test_authority_prior_lifts_official_docs_over_an_equal_seo_page():
+    from argus.search import is_authoritative, rerank
+
+    q = "esp32 mcpwm servo duty cycle"
+    seo = {"title": "ESP32 MCPWM servo duty cycle guide", "url": "https://zeonedge.example/esp32-mcpwm",
+           "snippet": "servo duty cycle with mcpwm on esp32", "engine": "yandex"}
+    docs = {"title": "ESP32 MCPWM servo duty cycle", "url": "https://docs.espressif.com/mcpwm",
+            "snippet": "servo duty cycle with mcpwm on esp32", "engine": "google cse"}
+    assert is_authoritative(docs["url"]) and not is_authoritative(seo["url"])
+    ranked = rerank(q, [seo, docs], semantic_rerank=False)
+    assert ranked[0]["url"] == docs["url"]
+    # a relevant SEO page still beats an irrelevant authoritative one: the prior is a
+    # bounded bump on relevance, never an override
+    off = {"title": "Campus parking rules", "url": "https://parking.stanford.edu/",
+           "snippet": "permits", "engine": "bing"}
+    ranked = rerank(q, [seo, off], semantic_rerank=False)
+    assert ranked[0]["url"] == seo["url"]
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://github.com/x/y", True), ("https://gist.github.com/x", True),
+    ("https://www.ft.com/a", True), ("https://example.org/", True),
+    ("https://minecraft.com/", False), ("https://lyft.com/", False),
+    ("https://evilgithub.com/", False), ("https://fakepython.org.example/", False),
+])
+def test_authority_prior_matches_on_a_label_boundary(url, expected):
+    from argus.search import is_authoritative
+
+    assert is_authoritative(url) is expected

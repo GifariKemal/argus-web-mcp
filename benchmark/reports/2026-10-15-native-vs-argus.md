@@ -116,6 +116,80 @@ Per category (latency p50 native/Argus, cost mean native/Argus):
 
 Reading it: with Argus the agent makes one `research` call and writes; with the native tools it searches, then fetches several pages, each fetch a model round trip, which is why the native run costs more tokens even though its answer is the same length. The native run is faster end to end because WebSearch's summary is already "pre-digested" and the agent writes from it, while Argus hands back ~8k words that the agent reads before writing. The cost figure is tokens only (CLI `total_cost_usd`); it does not include the $10 per 1,000 web search fee, which would widen the gap. `run_4way`'s `total_tokens` counts uncached input + output only and is not comparable across the two arms (the native result text is cached by Claude Code), so cost is the honest token proxy here.
 
+## 4b. Same measurement after deploying 0.4.29-0.4.31 (same day, same harness, cold cache)
+
+The sections above were measured against 0.4.27. After the extraction pool, the
+single-pass extractor and the first-done-wins bundle went live (plus 0.4.31's 30 s
+extraction ceiling), `argus_direct.py` was run again from the same workstation:
+
+| metric | 0.4.27 | 0.4.31 |
+|---|---|---|
+| search p50 / p95 / max (s) | 3.8 / 5.8 / 8.7 | 3.1 / 3.7 / 3.8 |
+| research(deep) p50 / p95 / max (s) | 7.2 / 34.4 / 36.4 | 7.1 / 9.8 / 9.9 |
+| research sources per query, failed candidates | 5.0, 17 | 5.0, 4 |
+| research words per query (mean) | 8,410 | 9,125 |
+| read p50 / p95 / max (s), cold | 2.5 / 17.0 / 17.0 | 1.3 / 6.6 / 6.6 |
+| read URLs with content, browser-tier reads | 16/16, 2 | 16/16, 0 |
+
+Same yield, same or more content, and the tails that the first run flagged are gone: the
+slowest research call is now under 10 s against 36 s, the slowest read 6.6 s against 17 s.
+
+The agent-level `claude-argus` arm was then re-run (same 24 scenarios, prompt and model;
+the native arm is the morning's run):
+
+| arm | answered | cost mean / median | latency p50 / p95 / max (s) | sources cited | words |
+|---|---|---|---|---|---|
+| claude-native (0.4.27 run) | 24/24 | $0.211 / $0.171 | 28.4 / 37.3 / 41.8 | 6.67 | 290 |
+| claude-argus on 0.4.27 | 24/24 | $0.136 / $0.128 | 39.9 / 76.2 / 96.0 | 5.08 | 289 |
+| claude-argus on 0.4.31 | 24/24 | $0.122 / $0.104 | **20.3 / 36.8 / 43.7** | 5.12 | 274 |
+
+With the research tail fixed, the Argus-equipped agent is now faster than the native one
+at p50 (20 s vs 28 s), equal at p95, and 42% cheaper per query; every one of the 24
+scenarios got faster (worst case 96 s -> 35 s).
+
+## 4c. Answer quality: a blind judge, and what it changed
+
+Both arms were re-run with the answer text kept (second repetition: native $0.214, p50
+27.3 s; Argus $0.121, p50 22.1 s; 24/24 each), then Claude Sonnet 5.5 graded each pair
+blind (A/B randomised; the whole pass repeated with A/B swapped).
+
+| | native arm | Argus arm |
+|---|---|---|
+| wins, consistent in both orders (24 pairs) | 15 | 4 (5 flipped with position) |
+| accuracy (1-5, pooled) | 4.21 | 4.06 |
+| source quality (1-5) | 3.94 | 3.27 |
+| specificity (1-5) | 4.50 | 3.90 |
+| authoritative-looking citations | 24% (arxiv 8x, docs.espressif 4x) | 12% (zeonedge, imraan.in, dataintelo) |
+
+The pool was not the problem: a 30-hit probe found authoritative pages at 19-20% of ranks
+11-30 but 15% of the top 10. The rerank preferred keyword-dense SEO pages. 0.4.33 adds a
+bounded authority prior; offline on these pools it lifts the authoritative share of the
+top 5 from 14% to 48% (native's list: 32%) with 4.75 of the old top 5 still in the top 10.
+The judge is re-run after deploy to confirm the answers improve, not just the ranks.
+
+## 4d. Multi-user load (live VPS)
+
+| concurrent agents (research deep + read each) | research p50 / max | read p50 / max | errors |
+|---|---|---|---|
+| 1 | 5.4 / 5.4 s | 2.0 / 2.0 s | 0 |
+| 3 | 12.9 / 16.8 s | 0.6 / 1.8 s | 0 |
+| 5 | 15.2 / 20.4 s | 1.3 / 1.9 s | 0 |
+| 8 | 26.2 / 45.9 s | 1.8 / 3.2 s | 0 |
+
+Reads stay fast; research scales with the two extraction workers on two vCPUs.
+
+## 4e. Indonesian queries (16, same harness)
+
+| metric | native WebSearch | Argus search |
+|---|---|---|
+| Indonesian-language hits (title/snippet proxy) | 63 of 147 | 106 of 160 |
+| `.id` domains | 31 | 35 |
+| tool latency p50 | 8.0 s | 4.0 s |
+
+Argus research: 5 sources, 5,960 words, p95 18.4 s. Reads: 4 of 6 Indonesian pages in
+full; `kemenperin.go.id` refuses the VPS (fine from a residential IP; a WARP candidate),
+`idx.co.id` is a Cloudflare wall from everywhere. WebFetch summarised all six.
+
 ## 5. Factors that are not numbers
 
 | factor | native WebSearch / WebFetch | Argus |

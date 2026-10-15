@@ -594,6 +594,7 @@ def _run_one(condition: str, scenario: dict, argus: dict | None, rep: int = 0) -
     rec["urls"] = count_urls(answer)
     rec["words"] = len(answer.split())
     rec["found"] = found(answer)
+    rec["answer"] = answer[:8000]  # kept so a judge can score the answers afterwards
     if timed_out:
         # Cut at the hard cap; keep any partial answer/tokens but flag the record.
         rec["error"] = "timeout"

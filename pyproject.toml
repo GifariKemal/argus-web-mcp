@@ -1,6 +1,6 @@
 [project]
 name = "argus"
-version = "0.4.31"
+version = "0.4.33"
 description = "Argus - SURIOTA self-hosted web fetch/scrape/search MCP server"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -54,7 +54,7 @@ ignore = ["S101", "ASYNC109"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B"]
-"benchmark/native/*" = ["E501", "ASYNC230", "S603", "S112"]  # measurement scripts: long table rows, sync file reads
+"benchmark/native/*" = ["E501", "E702", "ASYNC230", "S603", "S112", "S311"]  # measurement scripts: long table rows, sync file reads
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

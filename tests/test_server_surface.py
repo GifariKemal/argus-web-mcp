@@ -325,3 +325,47 @@ async def test_scrape_landing_on_internal_host_reports_ssrf_blocked(app_state):
     app_state.browser.render = render
     out = await server.scrape("https://example.com/redirect")
     assert out["code"] == "ssrf_blocked"
+
+
+async def test_research_brief_is_deep_trimmed(app_state, monkeypatch):
+    seen = {}
+
+    async def fake_research(query, **kw):
+        seen.update(kw)
+        return {"query": query, "sources": [], "count": 0}
+
+    monkeypatch.setattr(server, "_research", fake_research)
+    await server.research("q", mode="brief")
+    assert seen["mode"] == "deep" and seen["max_chars_per_source"] == server._BRIEF_CHARS
+    seen.clear()
+    await server.research("q", mode="brief", max_chars_per_source=900)  # explicit cap wins
+    assert seen["max_chars_per_source"] == 900
+
+
+async def test_read_max_chars_flags_the_cut_and_keeps_the_cache_full(app_state, monkeypatch):
+    page = "<html><body><article><h1>T</h1><p>" + "word " * 400 + "</p></article></body></html>"
+
+    async def fake_fetch(url, **kw):
+        return {"final_url": url, "status": 200, "html": page, "render_path": "static"}
+
+    monkeypatch.setattr(server, "fetch", fake_fetch)
+    out = await server.read("https://fixtures.test/long", max_chars=100)
+    assert out["truncated"] is True and len(out["content"]) == 100 and out["full_chars"] > 1500
+    full = await server.read("https://fixtures.test/long")  # same cache entry, uncut
+    assert full["from_cache"] is True and "truncated" not in full and len(full["content"]) > 1500
+    capped_again = await server.read("https://fixtures.test/long", max_chars=50)
+    assert capped_again["from_cache"] is True and len(capped_again["content"]) == 50
+
+
+def test_schema_violations_are_schema_invalid_not_internal():
+    from pydantic import BaseModel, ValidationError
+
+    class M(BaseModel):
+        n: int
+
+    try:
+        M(n="x")
+    except ValidationError as exc:
+        body = server._tool_failure(exc)
+    assert body["code"] == "schema_invalid" and body["error"] == "invalid arguments"
+    assert server._tool_failure(RuntimeError("db"))["code"] == "internal_error"

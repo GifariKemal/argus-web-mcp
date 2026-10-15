@@ -99,3 +99,29 @@ def test_confirmed_failing_needs_two_runs(two_sites):
     assert reachability.confirmed_failing(None, bad) == []
     assert reachability.confirmed_failing(good, bad) == []
     assert reachability.confirmed_failing(bad, bad) == ["reuters.com"]
+
+
+# --- engine liveness -------------------------------------------------------------------
+import respx  # noqa: E402
+
+from argus.reachability import confirmed_dead_engines, measure_engines  # noqa: E402
+
+
+@respx.mock
+async def test_measure_engines_counts_only_attributed_results():
+    def answer(request):
+        engine = request.url.params["engines"]
+        if engine == "dead":  # SearXNG answers from another engine instead
+            return httpx.Response(200, json={"results": [{"engine": "bing"}]})
+        if engine == "broken":
+            return httpx.Response(502)
+        hits = [{"engine": engine}, {"engine": engine}, {"engine": "other"}]
+        return httpx.Response(200, json={"results": hits})
+    respx.get("http://searxng:8080/search").mock(side_effect=answer)
+    counts = await measure_engines("http://searxng:8080", ["bing", "dead", "broken"])
+    assert counts == {"bing": 2, "dead": 0, "broken": 0}
+
+
+def test_confirmed_dead_engines_needs_two_runs():
+    assert confirmed_dead_engines(None, {"bing": 0}) == []
+    assert confirmed_dead_engines({"bing": 3, "brave": 0}, {"bing": 0, "brave": 0}) == ["brave"]

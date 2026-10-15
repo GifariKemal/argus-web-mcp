@@ -56,7 +56,13 @@ from .research import research as _research
 from .router import classify
 from .scholar import ScholarError
 from .scholar import scholar_search as _scholar_search
-from .search import _VALID_CATEGORIES, _VALID_TIME_RANGES, SearchError
+from .search import (
+    _DEFAULT_ENGINES,
+    _SEARXNG_URL,
+    _VALID_CATEGORIES,
+    _VALID_TIME_RANGES,
+    SearchError,
+)
 from .search import search as searxng_search
 from .security.ssrf import SSRFError, build_safe_async_client, validate_url
 from .trading.cot import CotError
@@ -142,6 +148,7 @@ def _ssrf_err(e: SSRFError, what: str = "URL") -> dict:
 _RETRYABLE_REASONS = frozenset({"timeout", "transport", "circuit_open"})
 # A plain read may legitimately outlive its `timeout`: the ladder adds one browser rung
 # (45 s floor + 15 s grace) after the static hop. Past that it is a hang, not a fetch.
+_BRIEF_CHARS = 2500  # research(mode='brief'): per-source cap, about a third of deep's tokens
 _READ_GRACE_S = 45
 
 
@@ -167,6 +174,16 @@ def _fetch_err(e: FetchError, message: str = "fetch failed",
     retryable = reason in _RETRYABLE_REASONS or (e.status or 0) >= 500 or e.status == 429
     return err(code, message, _safe_detail(e), http_status=e.status, reason=reason,
                retryable=retryable)
+
+
+def _tool_failure(exc: Exception) -> dict:
+    """The error body for an exception that escaped a tool. Arguments that fail the
+    tool's schema (a wrong parameter name, a bad enum) are the caller's to fix, so they
+    get `schema_invalid`, not `internal_error` (measured 2026-10-15: a harness with the
+    wrong argument names read four tools as broken)."""
+    if "ValidationError" in type(exc).__name__:
+        return err("schema_invalid", "invalid arguments", _safe_detail(exc))
+    return err("internal_error", "tool failed", _safe_detail(exc))
 
 
 def _timeout_err(what: str, seconds: float) -> dict:
@@ -328,11 +345,13 @@ REACH_EVERY_S = 24 * 3600
 REACH_RETRY_S = 3600  # re-measure sooner while a listed host is failing
 _REACH: dict | None = None  # last reachability.measure() report
 _REACH_PREV: dict | None = None  # the one before: alerts need two failing runs in a row
+_ENGINES: dict | None = None  # last reachability.measure_engines() counts
+_ENGINES_PREV: dict | None = None
 
 
 async def _reach_loop() -> None:
     """Measure the reachability map shortly after start, then daily. Never raises."""
-    global _REACH, _REACH_PREV
+    global _REACH, _REACH_PREV, _ENGINES, _ENGINES_PREV
     await asyncio.sleep(REACH_FIRST_S)
     while True:
         s = _S
@@ -341,6 +360,11 @@ async def _reach_loop() -> None:
                 proxied = (static_fetch._proxied_client(config.EGRESS_PROXY)
                            if config.EGRESS_PROXY else None)
                 _REACH_PREV, _REACH = _REACH, await reachability.measure(s.client, proxied)
+                _ENGINES_PREV, _ENGINES = _ENGINES, await reachability.measure_engines(
+                    _SEARXNG_URL, _DEFAULT_ENGINES)
+                dead = [e for e, n in _ENGINES.items() if n == 0]
+                if dead:
+                    logger.warning("engines answering nothing: %s", ",".join(dead))
                 failing = reachability.failing_listed(_REACH)
                 if failing:
                     logger.warning("reachability: %s no longer answer through the egress "
@@ -370,10 +394,13 @@ async def read(
     clean: bool = True,
     include_links: bool = False,
     extract_media: bool = False,
+    max_chars: Annotated[int | None, Field(description=(
+        "opt-in cap on content chars; a cut is FLAGGED (truncated=True, full_chars)"))] = None,
     timeout: int = TIMEOUTS["read"],
 ) -> dict:
-    """Fetch a URL -> clean main content (no truncation). `extract_media`=True also returns the
-    page's links + images lists."""
+    """Fetch a URL -> clean main content (no truncation by default). `extract_media`=True also
+    returns the page's links + images lists. `max_chars` caps the content for token-sensitive
+    callers (a 300-page PDF is 270k words): the cut is flagged, never silent."""
     s = _state()
     if format not in _VALID_FORMATS:
         return err("schema_invalid", f"unknown format {format!r} (markdown|text|html)")
@@ -387,7 +414,7 @@ async def read(
     ck = s.cache.key(url, opts)
     cached = s.cache.get(ck, ttl_for("general"))
     if cached is not None:
-        return {**cached, "from_cache": True}
+        return _cap_read({**cached, "from_cache": True}, max_chars)
 
     try:
         async with asyncio.timeout(timeout + _READ_GRACE_S):
@@ -428,7 +455,16 @@ async def read(
         out["images_truncated"] = media["images_truncated"]
     if res["render_path"] != "archive":  # a Wayback copy must not outlive the site's blip
         s.cache.put(ck, out, source="general")
-    return out
+    return _cap_read(out, max_chars)
+
+
+def _cap_read(out: dict, max_chars: int | None) -> dict:
+    """``read``'s opt-in cap: the cache keeps the full page, the caller gets the first
+    ``max_chars`` with ``truncated`` + ``full_chars`` (same contract as research)."""
+    content = out.get("content") or ""
+    if max_chars is None or max_chars < 1 or len(content) <= max_chars:
+        return out
+    return {**out, "content": content[:max_chars], "truncated": True, "full_chars": len(content)}
 
 
 async def search(
@@ -919,7 +955,7 @@ def _build_auth():
 
 
 async def research(
-    query: str, mode: Literal["deep", "quick", "answer"] = "deep",
+    query: str, mode: Literal["deep", "quick", "answer", "brief"] = "deep",
     max_sources: Annotated[int, Field(description=(
         "sources fully read in deep mode, 1-10 (clamped); each one costs a fetch"))] = 5,
     highlights: bool = False,
@@ -932,10 +968,14 @@ async def research(
     query-relevant sentences per source (local embeddings; deep mode). `max_chars_per_source`
     (opt-in) caps each source's content for token-sensitive callers; truncation is FLAGGED
     (truncated=True + full_chars), word_count preserved - default None returns FULL content.
-    Full content of 5 sources is ~8k words: for a short synthesis or a quick fact, pass
-    `max_chars_per_source=3000` or `highlights=True` (or mode='quick'); keep the default when
-    you will quote, follow or cite the pages."""
+    Full content of 5 sources is ~8k words. mode='brief' = deep trimmed for a short answer:
+    highlights on and 2,500 chars per source (about a third of the tokens); use it for a
+    short synthesis or a quick fact, keep 'deep' when you will quote, follow or cite the
+    pages."""
     s = _state()
+    if mode == "brief":
+        mode, highlights = "deep", True
+        max_chars_per_source = max_chars_per_source or _BRIEF_CHARS
     # Unbounded, max_sources=1000 meant ~3000 search hits and 1000 renders on a 2 vCPU box.
     max_sources = min(max(1, max_sources), 10)
     ck = s.cache.key("research:" + query,
@@ -1286,7 +1326,7 @@ class _MetricsMiddleware(Middleware):
             # A tool that raised past its own handlers (a sqlite error, a launch failure)
             # would reach the client as FastMCP's str(exc), unsanitized. Same shape as
             # every other error, logged in full here.
-            body = err("internal_error", "tool failed", _safe_detail(exc))
+            body = _tool_failure(exc)
             result = ToolResult(content=[mcp_types.TextContent(
                 type="text", text=json.dumps(body))], structured_content=body)
         finally:
@@ -1419,6 +1459,9 @@ async def health(request):
     failing = reachability.confirmed_failing(_REACH_PREV, _REACH)
     if failing:  # WARP is up but these listed sites stopped answering through it (2 runs)
         body["egress_hosts_failing"] = failing
+    dead = reachability.confirmed_dead_engines(_ENGINES_PREV, _ENGINES)
+    if dead:  # a configured search engine answered nothing two days running
+        body["engines_dead"] = dead
     if not _is_loopback(request):
         return JSONResponse(body, status_code=200 if ok else 503)
     body["version"] = __version__

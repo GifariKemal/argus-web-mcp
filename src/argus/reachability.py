@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import httpx
+
 from . import config
 from .fetch.render import _looks_blocked
 from .fetch.static import _DEFAULT_UA
@@ -91,3 +93,31 @@ def failing_listed(report: dict | None) -> list[str]:
         return []
     return sorted(site for site, row in report["sites"].items()
                   if config.egress_proxy_for(site) and "warp" in row and not ok(row["warp"]))
+
+
+# Search engines are measured too: a free engine that starts blocking the VPS IP fails
+# silently (SearXNG answers from the others), and only a per-engine probe notices.
+ENGINE_QUERY = "python asyncio tutorial"
+
+
+async def measure_engines(base_url: str, engines: list[str]) -> dict[str, int]:
+    """``{engine: results attributed to it}`` for one fixed query each, straight at the
+    SearXNG backend (trusted, compose network). 0 = answered nothing or errored."""
+    counts: dict[str, int] = {}
+    async with httpx.AsyncClient(timeout=20) as client:
+        for engine in engines:
+            try:
+                r = await client.get(f"{base_url}/search", params={
+                    "q": ENGINE_QUERY, "format": "json", "engines": engine})
+                counts[engine] = sum(1 for x in r.json().get("results", [])
+                                     if x.get("engine") == engine)
+            except Exception:  # noqa: BLE001 - a failed probe is a dead engine
+                counts[engine] = 0
+    return counts
+
+
+def confirmed_dead_engines(previous: dict | None, current: dict | None) -> list[str]:
+    """Engines that answered nothing in two runs in a row (same two-strike rule as hosts)."""
+    if not previous or not current:
+        return []
+    return sorted(e for e, n in current.items() if n == 0 and previous.get(e) == 0)
