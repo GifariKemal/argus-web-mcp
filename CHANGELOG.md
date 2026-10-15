@@ -28,6 +28,15 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
   Failures were 3-7 a day until the 2026-10-14/15 load test and benchmark bursts (25 and
   19). WARP does not help: brave 429 through it too, google 302 to `/sorry`. Re-run the
   judge once the three engines answer again; `engines_dead` alerts if they stay down.
+- **Docstring A/B, measured the same evening** (`a52cc80`): the brief run above had used
+  `mode='brief'` in 24/24 scenarios (cache keys match). With `research`'s docstring
+  steering back to deep (brief only for a single fact), the agent chose deep with a
+  6,000-char cap in 15/24, full deep in 1, brief in 7. Blind judge, both orders:
+  **deep beats brief 16:7:1 and 16:6:2** (specificity 4.42 vs 3.88, accuracy 4.3 vs 4.2),
+  cost per query $0.130 -> $0.175 (native $0.234). Against native it is still 19:5 and
+  16:7:1 (sources 3.2 vs 4.0): every remaining loss names source quality ("blogs,
+  LinkedIn, hobby repo", "admits no official sources"), which is the search pool with
+  brave/google/google cse out, plus the agent not following into official docs.
 - Harness fixes: `judge.py` sends the prompt on stdin (cmd.exe cut the multi-line argv
   at its first newline, so every verdict read only the rubric's first line);
   `run_4way.py` deletes its temp mcp-config, which held the Argus bearer token.
