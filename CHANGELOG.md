@@ -14,6 +14,24 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ---
 
+## [Unreleased]
+
+### Measured after the 0.4.33 deploy (2026-10-15, evening)
+
+- **Judge re-run against prod** (`run_4way.py` 24 scenarios, `judge.py` both orders,
+  20/24 agree across orders): native 19, Argus 4, tie 1; sources 4.04 vs 3.25,
+  accuracy 4.50 vs 4.00. Cited-domain authority share rose to 32% (native 27%) from 12%,
+  but the judge's complaints are depth, not domains: "more generic", "relies on blogs",
+  one answer waiting "once search is working again". The run is confounded: **brave,
+  google and google cse were rate-limited from the VPS IP the whole time** (brave 429 +
+  captcha, google `/sorry`), so `general` ran on bing, duckduckgo web and yandex only.
+  Failures were 3-7 a day until the 2026-10-14/15 load test and benchmark bursts (25 and
+  19). WARP does not help: brave 429 through it too, google 302 to `/sorry`. Re-run the
+  judge once the three engines answer again; `engines_dead` alerts if they stay down.
+- Harness fixes: `judge.py` sends the prompt on stdin (cmd.exe cut the multi-line argv
+  at its first newline, so every verdict read only the rubric's first line);
+  `run_4way.py` deletes its temp mcp-config, which held the Argus bearer token.
+
 ## [0.4.33] - 2026-10-15 - authority prior in the rerank, after a blind judge said the answers were worse-sourced
 
 ### Review fixes (before merge)

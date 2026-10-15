@@ -17,8 +17,8 @@ Two kinds of code live here:
       they capture stdout/stderr, time each run, parse, and never crash the sweep.
 
 Usage:
-  python benchmark/run_4way.py run --out out.json [--conditions A,B] [--limit N] \\
-      [--ids a,b] [--pace 2.0]
+  python benchmark/run_4way.py run --out out.json [--conditions claude-native,claude-argus] \\
+      [--limit N] [--ids a,b] [--pace 2.0]
   python benchmark/run_4way.py score --in out.json [--out report.md]
 """
 
@@ -576,6 +576,10 @@ def _run_one(condition: str, scenario: dict, argus: dict | None, rep: int = 0) -
         rec["latency_s"] = round(time.perf_counter() - t0, 3)
         rec["error"] = f"exec:{type(e).__name__}:{e}"
         return rec
+    finally:
+        # The temp mcp-config carries the Argus bearer token: never leave it on disk.
+        if "--mcp-config" in cmd:
+            Path(cmd[cmd.index("--mcp-config") + 1]).unlink(missing_ok=True)
     rec["latency_s"] = round(time.perf_counter() - t0, 3)
 
     family = CONDITIONS.get(condition, "")

@@ -21,10 +21,11 @@ Reply with ONLY a JSON object: {"A": {"accuracy": n, "sources": n, "specificity"
 
 
 def ask(prompt: str) -> dict:
-    cmd = [CLAUDE, "-p", prompt, "--setting-sources", "", "--disable-slash-commands", "--tools", "",
+    # prompt via stdin: on Windows `claude` is a .cmd shim and cmd.exe cuts argv at the first newline
+    cmd = [CLAUDE, "-p", "--setting-sources", "", "--disable-slash-commands", "--tools", "",
            "--model", "claude-sonnet-5-5", "--output-format", "json", "--max-turns", "1"]
-    p = subprocess.run(cmd, env=ENV, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", stdin=subprocess.DEVNULL, timeout=180)
+    p = subprocess.run(cmd, env=ENV, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=180)
     try:
         text = json.loads(p.stdout).get("result", "")
     except Exception:
@@ -43,8 +44,8 @@ for r in recs:
 rng = random.Random(42)
 out = []
 if os.path.exists(sys.argv[2]):
-    out = json.load(open(sys.argv[2], encoding="utf-8"))
-done = {r["id"] for r in out if "winner" in r}
+    out = [r for r in json.load(open(sys.argv[2], encoding="utf-8")) if "winner" in r]  # retry errors
+done = {r["id"] for r in out}
 for sid, arms in sorted(by.items()):
     if "claude-native" not in arms or "claude-argus" not in arms:
         continue
