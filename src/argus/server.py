@@ -968,10 +968,11 @@ async def research(
     query-relevant sentences per source (local embeddings; deep mode). `max_chars_per_source`
     (opt-in) caps each source's content for token-sensitive callers; truncation is FLAGGED
     (truncated=True + full_chars), word_count preserved - default None returns FULL content.
-    Full content of 5 sources is ~8k words. mode='brief' = deep trimmed for a short answer:
-    highlights on and 2,500 chars per source (about a third of the tokens); use it for a
-    short synthesis or a quick fact, keep 'deep' when you will quote, follow or cite the
-    pages."""
+    Full content of 5 sources is ~8k words. Keep 'deep' (the default) whenever the answer
+    will cite, quote, compare or synthesise sources, even a short one: it is what makes the
+    answer specific. mode='brief' = deep trimmed to highlights plus 2,500 chars per source
+    (a third of the tokens): only for a quick fact, a single number or a yes/no, where no
+    source will be quoted (measured 2026-10-15: brief answers graded generic, worse-sourced)."""
     s = _state()
     if mode == "brief":
         mode, highlights = "deep", True
