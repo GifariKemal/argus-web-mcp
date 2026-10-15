@@ -30,3 +30,10 @@ jobs:
             echo "::error::listed sites no longer answer through WARP"
             exit 1
           fi
+          # A configured search engine answered nothing on two daily probes in a row
+          # (SearXNG suspensions last 5-15 min, so a burst alone does not trip this):
+          # re-measure with scripts/check_engines.py, then trim ARGUS_SEARCH_ENGINES.
+          if echo "$body" | grep -q '"engines_dead"'; then
+            echo "::error::a search engine is dead from this IP (see /health engines_dead)"
+            exit 1
+          fi
