@@ -52,6 +52,10 @@ outgoing:
   networks:
     proxied:
       proxies: socks5h://proxy:1080
+    # The base compose `warp` service. Unlike `proxied` it always runs, so an engine
+    # here costs nothing extra; brave is the one that accepts WARP's exit (2026-10-20).
+    warp:
+      proxies: socks5h://warp:9091
   # SearXNG answers only when its slowest engine does, so this is the floor of every
   # search. Measured from the VPS (2026-10): healthy engines answer in 0.2-1 s, and at
   # 6.0 live search p50 was 5.5 s - one stalling engine set the pace. 3.0 leaves 3x the
@@ -97,6 +101,9 @@ engines:
     network: proxied
   - name: brave
     disabled: false
+    # 429 from the VPS IP since 2026-10-19; served through WARP by the brave_warp shim.
+    engine: brave_warp
+    network: warp
   - name: qwant
     disabled: true
     network: proxied

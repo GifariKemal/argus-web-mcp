@@ -17,6 +17,8 @@ services:
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
       - ./deploy/searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+      # brave through WARP (see the file's docstring); settings.yml names it `brave_warp`.
+      - ./deploy/searxng/engines/brave_warp.py:/usr/local/searxng/searx/engines/brave_warp.py:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
       # SEARXNG_SECRET overrides server.secret_key from settings.yml. The default

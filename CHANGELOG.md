@@ -16,6 +16,19 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+### Fixed (2026-10-20)
+
+- **brave answers again, through WARP.** The 2026-10-15 note "WARP does not help" was
+  two separate rejections, not the exit IP: Brave 429s any curl_cffi browser TLS
+  fingerprint (upstream brave inherits the `chrome` default) and the full cookie set
+  brave.py sends (with `ui_lang` 429 every time, without it 200 every time). New
+  `deploy/searxng/engines/brave_warp.py` runs brave.py unchanged minus those two, on a
+  `warp` outgoing network; `check_engines.py` 9/10 queries, ~20 results at 0.4 s.
+- **google dropped from `ARGUS_SEARCH_ENGINES`.** 403 / `/sorry` from every route since
+  2026-10-19, an upstream break (searxng/searxng#6835, home connections too); `google cse`
+  still carries Google results. Put it back when that issue closes and the probe passes.
+  The two dead engines had turned the uptime workflow red via `engines_dead`.
+
 ### Measured after the 0.4.33 deploy (2026-10-15, evening)
 
 - **Judge re-run against prod** (`run_4way.py` 24 scenarios, `judge.py` both orders,
