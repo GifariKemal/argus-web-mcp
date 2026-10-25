@@ -6,7 +6,7 @@
   <rect width="880" height="470" rx="12" fill="#0d1117"/>
   <rect x="0" y="0" width="880" height="3" fill="url(#top)"/>
   <text x="28" y="34" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="800" fill="#e6edf3">Argus - architecture</text>
-  <text x="28" y="52" font-family="Consolas,monospace" font-size="10.5" fill="#7d8590">remote HTTP MCP / zero client process / self-hosted on VPS 43.134.17.144</text>
+  <text x="28" y="52" font-family="Consolas,monospace" font-size="10.5" fill="#7d8590">remote HTTP MCP / zero client process / self-hosted on the SURIOTA VPS</text>
 
   <rect x="40" y="72" width="360" height="58" rx="9" fill="#0b2530" stroke="#1f6feb" stroke-width="1.4"/><text x="220.0" y="96" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="13.5" font-weight="700" fill="#e6edf3">Claude Code CLI (Opus 4.8)</text><text x="220.0" y="116" text-anchor="middle" font-family="Consolas,monospace" font-size="10.5" fill="#8b949e">claude mcp add --transport http</text>
   <rect x="480" y="72" width="360" height="58" rx="9" fill="#0b2530" stroke="#1f6feb" stroke-width="1.4"/><text x="660.0" y="96" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="13.5" font-weight="700" fill="#e6edf3">Codex CLI</text><text x="660.0" y="116" text-anchor="middle" font-family="Consolas,monospace" font-size="10.5" fill="#8b949e">~/.codex/config.toml [mcp_servers]</text>

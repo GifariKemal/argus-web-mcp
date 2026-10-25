@@ -72,7 +72,7 @@ crawl4ai-setup && crawl4ai-doctor   # one-time Chromium for the browser tier
 - **Ponytail (minimal code).** stdlib -> native -> installed dep -> one line -> minimal new code. No speculative abstractions. But never trim validation / SSRF / error handling.
 - **Per-component loop:** write -> syntax-check -> test -> validate, then move on. No one giant turn.
 - **Multi-agent for speed:** fan out independent modules (disjoint files) to parallel agents; the orchestrator integrates `server.py` and verifies.
-- **Commit + update status** (`README.md`, `CLAUDE.md`, `docs/02-ROADMAP.md`, `CHANGELOG.md`) after each milestone.
+- **Commit + update status** (`README.md`, `docs/STATUS.md`, `docs/02-ROADMAP.md`, `CHANGELOG.md`) after each milestone. Commit locally; **push only when the user asked** (a push to `main` deploys production, see below).
 
 ## Layout & conventions
 
@@ -98,12 +98,12 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 ## Secrets & deploy
 
 > [!IMPORTANT]
-> Manage VPS secrets via SSH/scp directly - **not** via Hermes tools (`redact_secrets` masks them). Never commit a real `secret_key`/token.
+> Manage VPS secrets via SSH/scp directly. Never commit a real `secret_key`/token, and keep VPS addresses / SSH details out of agent docs (local notes go in `CLAUDE.local.md`, gitignored).
 
 - `*.bak` and benchmark run-artifacts are gitignored.
 
 > [!WARNING]
-> **Already live** at `https://argus.gifariksuryo.xyz/mcp` on `43.134.17.144`, as an **Easypanel Compose service** built from this repo's `docker-compose.yml`. A GitHub push webhook redeploys `main` - the compose stack is rebuilt and restarted, so a merged change ships itself; keep `main` green, and remember a broken `docker-compose.yml` or `Dockerfile` now breaks the deploy the same way broken Python would. Runbook: [`deploy/README.md`](deploy/README.md).
+> **Already live** at `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS, as an **Easypanel Compose service** built from this repo's `docker-compose.yml`. A GitHub push webhook redeploys `main` - the compose stack is rebuilt and restarted, so a merged change ships itself; keep `main` green, and remember a broken `docker-compose.yml` or `Dockerfile` now breaks the deploy the same way broken Python would. Runbook: [`deploy/README.md`](deploy/README.md).
 
 ## Don't
 
@@ -111,3 +111,4 @@ tests/                 # mirror per module; conftest.py = offline MockTransport 
 > - Don't add a paid web API to "fix" search - Argus is self-hosted by design (SearXNG + proxy).
 > - Don't make Argus depend on an LLM - the consuming agent is the brain.
 > - Don't leave TODO/placeholder without a logged note. Don't weaken a hard gate "temporarily".
+> - Don't push to `main` unless the user asked: it ships to production.

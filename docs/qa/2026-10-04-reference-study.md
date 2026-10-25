@@ -47,7 +47,7 @@
 
 | # | Temuan | Bukti | Tindakan | Usaha |
 |---|---|---|---|---|
-| S1 | **IP publik VPS sendiri lolos gate SSRF.** `ssrf.py:62-76` hanya memblokir rentang privat. Diukur di produksi 2026-10-04: dari container Argus, `43.134.17.144:22` (sshd) TERSAMBUNG; 3000, 80, 443, 2377, 7946 tertahan firewall; 8080/8090/9091 ditolak. Jadi `read http://43.134.17.144:22/` membuka koneksi ke sshd host. | ide dari idefav `safety.ts:28,38-39` | daftar IP tolak milik operator (`ARGUS_DENY_IPS`) di `is_blocked_ip`, diisi IP VPS lewat env | S |
+| S1 | **IP publik VPS sendiri lolos gate SSRF.** `ssrf.py:62-76` hanya memblokir rentang privat. Diukur di produksi 2026-10-04: dari container Argus, `<VPS_IP>:22` (sshd) TERSAMBUNG; 3000, 80, 443, 2377, 7946 tertahan firewall; 8080/8090/9091 ditolak. Jadi `read http://<VPS_IP>:22/` membuka koneksi ke sshd host. | ide dari idefav `safety.ts:28,38-39` | daftar IP tolak milik operator (`ARGUS_DENY_IPS`) di `is_blocked_ip`, diisi IP VPS lewat env | S |
 | S2 | **WebRTC melewati proxy egress.** Chromium hanya diberi `--proxy-bypass-list=<-loopback>` (`egress.py:147`); UDP STUN dari JS halaman tidak lewat proxy, bisa menyentuh IP privat dan membocorkan IP VPS. | Scrapling `_browsers/_base.py:565-569` | tambah `--webrtc-ip-handling-policy=disable_non_proxied_udp` dan `--force-webrtc-ip-handling-policy`; verifikasi di image (tcpdump) | S |
 | S3 | **Bug `watch`: selector yang tidak cocok diam-diam meng-hash seluruh halaman** (`watch.py:188-189`), memicu webhook "berubah" palsu lalu alert setiap iklan/timestamp berganti. | ditemukan saat membandingkan dengan relokasi adaptif Scrapling | miss = `{changed: False, error: "selector_not_found"}`, `last_hash` dipertahankan | S |
 

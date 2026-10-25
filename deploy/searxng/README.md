@@ -3,7 +3,7 @@
 Self-hosted, unlimited search engine that Argus' `search` tool queries over its JSON API.
 It is an internal dependency and is never exposed to the public internet on any path.
 
-> **Status: LIVE.** SearXNG runs in production on the SURIOTA VPS (`43.134.17.144`) as the
+> **Status: LIVE.** SearXNG runs in production on the SURIOTA VPS (`<VPS_IP>`) as the
 > search backend for `https://argus.gifariksuryo.xyz/mcp`.
 
 ## Which compose file runs it

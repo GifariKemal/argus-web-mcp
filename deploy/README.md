@@ -5,10 +5,10 @@
 > Read [Easypanel deployment (current)](#easypanel-deployment-current) first. The
 > systemd + nginx + certbot + fail2ban recipe that follows it is still supported
 > and still the right answer for a box without a panel, but on
-> `43.134.17.144` those units are installed-and-disabled.
+> `<VPS_IP>` those units are installed-and-disabled.
 
 > **Status: DEPLOYED-LIVE.** Argus runs in production at
-> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `43.134.17.144`, as an
+> `https://argus.gifariksuryo.xyz/mcp` on the SURIOTA VPS `<VPS_IP>`, as an
 > Easypanel Compose service built from the repo's own `docker-compose.yml`.
 > `/health` returns 200; `/mcp` returns 401 without a bearer token.
 
@@ -27,7 +27,7 @@ support.
 | Source | git `https://github.com/GifariKemal/argus-web-mcp.git`, ref `main`, compose file `docker-compose.yml` |
 | Containers | `argus` (uvicorn `:8090`), `searxng` (reached at `http://searxng:8080` over the compose network) and `warp` (Cloudflare WARP CONNECT proxy at `http://warp:9091`, compose network only, since 0.4.23; `/health` reports `"egress"` and `uptime.yml` e-mails when it is false or when the daily reachability run lists `egress_hosts_failing`); Docker names them `argus_argus-argus-1`, `argus_argus-searxng-1` and `argus_argus-warp-1` |
 | Domain | `argus.gifariksuryo.xyz` -> service `argus`, port `8090`, HTTPS via Traefik |
-| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google cse,duckduckgo web,yandex` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently). Optional: `ARGUS_EGRESS_PROXY` (compose default `http://warp:9091`, empty = off) and `ARGUS_EGRESS_PROXY_HOSTS` (empty = `archive.org,reuters.com,wsj.com,fxstreet.com`). Since 0.4.28: `ARGUS_DENY_IPS` (SSRF deny-list, compose default `43.134.17.144` = this box; add any other IP the container must never dial) and `ARGUS_ALLOW_NOAUTH` (leave UNSET on the VPS: without `ARGUS_TOKEN`/`ARGUS_JWT_JWKS_URI` the HTTP app refuses to start instead of coming up open; a JWKS also needs `ARGUS_JWT_ISSUER` + `ARGUS_JWT_AUDIENCE`). Since 0.4.29: `ARGUS_EXTRACT_WORKERS` (extraction worker processes, default `min(2, CPUs)`, ~60 MB each; `0` = extract on a thread) |
+| Service env | `ARGUS_TOKEN` (bearer), `SEARXNG_SECRET` (overrides `server.secret_key`), `ARGUS_SEARCH_ENGINES` (`bing,brave,google cse,duckduckgo web,yandex` - engines this image HAS and this IP can reach; verify a name against `/config` before adding it, because SearXNG drops an unknown one silently). Optional: `ARGUS_EGRESS_PROXY` (compose default `http://warp:9091`, empty = off) and `ARGUS_EGRESS_PROXY_HOSTS` (empty = `archive.org,reuters.com,wsj.com,fxstreet.com`). Since 0.4.28: `ARGUS_DENY_IPS` (SSRF deny-list, compose default `<VPS_IP>` = this box; add any other IP the container must never dial) and `ARGUS_ALLOW_NOAUTH` (leave UNSET on the VPS: without `ARGUS_TOKEN`/`ARGUS_JWT_JWKS_URI` the HTTP app refuses to start instead of coming up open; a JWKS also needs `ARGUS_JWT_ISSUER` + `ARGUS_JWT_AUDIENCE`). Since 0.4.29: `ARGUS_EXTRACT_WORKERS` (extraction worker processes, default `min(2, CPUs)`, ~60 MB each; `0` = extract on a thread) |
 | Auto-deploy | GitHub push webhook -> Easypanel deploy URL -> rebuild + restart |
 | SearXNG config | `deploy/searxng/settings.yml` is a bind mount: a deploy that changes it does **not** reach the running SearXNG (git writes a new inode; the container keeps the old one). After such a deploy run `sudo docker restart argus_argus-searxng-1` and check `grep request_timeout /etc/searxng/settings.yml` inside it |
 | Data volume | `argus_argus_argus-data` at `/home/argus/.argus` (uid 10001) since 0.4.21; the old root-owned `argus_argus_argus-cache` is no longer mounted |
@@ -119,7 +119,7 @@ certificate; the origin keeps its Let's Encrypt one, so `Full (strict)` is safe.
 The origin was **not** firewalled to the Cloudflare ranges, even though that is the usual
 advice. Port 80 has to stay open to the world for the ACME challenges of
 `47vspn.easypanel.host`, `traefik.47vspn.easypanel.host` and
-`zonelab.43.134.17.144.sslip.io`, which resolve straight to the IP by design. Blocking at
+`zonelab.<VPS_IP>.sslip.io`, which resolve straight to the IP by design. Blocking at
 the host would have broken their renewals silently, three months later. The
 `argus-cloudflare-only` middleware achieves the same thing for the one router that needs
 it, with no collateral.
@@ -187,7 +187,7 @@ deploy and remain the re-provision recipe. The examples use
 
 ## Overview
 
-This directory contains the **configuration files** that provision Argus on the SURIOTA VPS (`43.134.17.144`, Ubuntu 24.04). Argus binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it. The repo lives at `/opt/argus/app`, its venv at `/opt/argus/app/.venv`, and the runtime caches at `/opt/argus/.argus`, `/opt/argus/.cache`, `/opt/argus/.crawl4ai` - `argus.service` and `argus-update.sh` hardcode those paths.
+This directory contains the **configuration files** that provision Argus on the SURIOTA VPS (`<VPS_IP>`, Ubuntu 24.04). Argus binds to `127.0.0.1:8090` locally, and nginx proxies the public HTTPS subdomain to it. The repo lives at `/opt/argus/app`, its venv at `/opt/argus/app/.venv`, and the runtime caches at `/opt/argus/.argus`, `/opt/argus/.cache`, `/opt/argus/.crawl4ai` - `argus.service` and `argus-update.sh` hardcode those paths.
 
 The P1+P2 exit gates passed and the service is live (see [Roadmap](../docs/02-ROADMAP.md)). Re-run the steps below to re-provision or to stand up a second instance; tests must be green locally first.
 
@@ -227,9 +227,9 @@ Request flow: **Claude Code CLI** hits nginx over HTTPS with a bearer token. ngi
 
 Before running deployment, ensure:
 
-1. **VPS Access**: SSH key-only to `43.134.17.144` as user `ubuntu`
+1. **VPS Access**: SSH key-only to `<VPS_IP>` as user `ubuntu`
    ```bash
-   ssh -i ~/.ssh/gifari_vps_ed25519 ubuntu@43.134.17.144
+   ssh -i ~/.ssh/gifari_vps_ed25519 ubuntu@<VPS_IP>
    ```
 
 2. **Root Privileges**: The provision script runs as root
@@ -255,7 +255,7 @@ Copy the `deploy/` directory to the VPS (as the `ai` user first, then provision.
 
 ```bash
 # From your local machine
-scp -r -i ~/.ssh/gifari_vps_ed25519 deploy/ ubuntu@43.134.17.144:/tmp/argus-deploy
+scp -r -i ~/.ssh/gifari_vps_ed25519 deploy/ ubuntu@<VPS_IP>:/tmp/argus-deploy
 
 # On the VPS, as root
 sudo cp -r /tmp/argus-deploy /opt/argus-deploy-staging

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SURIOTA: run the global secret scan (~/.githooks) first; a repo-level core.hooksPath otherwise bypasses it.
+[ -x "$HOME/.githooks/pre-commit" ] && { "$HOME/.githooks/pre-commit" || exit 1; }
 # SURIOTA Markdown house-style gate. Blocks commits that introduce banned
 # glyphs (em/en-dash, smart quotes, unicode arrows) in staged *.md files.
 # Enable once: git config core.hooksPath scripts/hooks

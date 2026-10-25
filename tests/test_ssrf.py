@@ -122,8 +122,8 @@ def test_is_blocked_ip_operator_deny_list(monkeypatch):
     reaches the host's sshd/panel. Compared in canonical form (compressed IPv6 too)."""
     from argus.security import ssrf
 
-    monkeypatch.setattr(ssrf, "DENY_IPS", frozenset({"43.134.17.144", "2606:4700::1111"}))
-    assert is_blocked_ip("43.134.17.144") is True
+    monkeypatch.setattr(ssrf, "DENY_IPS", frozenset({"203.0.113.10", "2606:4700::1111"}))
+    assert is_blocked_ip("203.0.113.10") is True
     assert is_blocked_ip("2606:4700:0000::1111") is True  # uncompressed spelling
     assert is_blocked_ip("43.134.17.145") is False
 
@@ -131,8 +131,8 @@ def test_is_blocked_ip_operator_deny_list(monkeypatch):
 def test_deny_ips_env_parsing(monkeypatch, caplog):
     from argus import config
 
-    out = config._parse_deny_ips(" 43.134.17.144 , not-an-ip,, 2606:4700:0000::1111 ")
-    assert out == frozenset({"43.134.17.144", "2606:4700::1111"})
+    out = config._parse_deny_ips(" 203.0.113.10 , not-an-ip,, 2606:4700:0000::1111 ")
+    assert out == frozenset({"203.0.113.10", "2606:4700::1111"})
     assert "not-an-ip" in caplog.text
 
 

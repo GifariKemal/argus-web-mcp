@@ -19,7 +19,7 @@
 
 ## 1. Goal & constraints
 
-Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape / pdf / extract** as MCP tools, deployed on the SURIOTA VPS (Ubuntu 24.04, `43.134.17.144`, 2 vCPU / 7 GB / 99 GB disk; the previous box `103.172.172.29`, shared with Hermes :80 + SUVA :8080, died on 2026-09-15). Every Claude Code CLI connects **remotely over HTTP** -> no local process on the client.
+Build a self-hosted MCP server (`Argus`) exposing web **search / read / scrape / pdf / extract** as MCP tools, deployed on the SURIOTA VPS (Ubuntu 24.04, `<VPS_IP>`, 2 vCPU / 7 GB / 99 GB disk; the previous box `103.172.172.29`, shared with Hermes :80 + SUVA :8080, died on 2026-09-15). Every Claude Code CLI connects **remotely over HTTP** -> no local process on the client.
 
 **Hard requirements:**
 1. Remote HTTP transport (zero client-side process).
@@ -87,7 +87,7 @@ Request path: **Claude Code / Codex CLI** connect over HTTPS (bearer/JWT) to **C
 
 ## 9. Deploy topology (VPS)
 
-Current, since the 2026-09-15 move to `43.134.17.144`:
+Current, since the 2026-09-15 move to `<VPS_IP>`:
 
 - **Easypanel Compose service** built from the repo's own `docker-compose.yml`: an `argus`
   container (uvicorn `:8090`, `--workers 1`) and a `searxng` one, talking over the compose

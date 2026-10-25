@@ -910,7 +910,7 @@ what that changed found one thing it does not fix and two things it quietly brok
 ### Fixed
 
 - **The edge could be skipped entirely.** With the record proxied but the origin still
-  answering on its own IP, `--resolve argus.gifariksuryo.xyz:443:43.134.17.144` reached
+  answering on its own IP, `--resolve argus.gifariksuryo.xyz:443:<VPS_IP>` reached
   Argus and returned 200, so Cloudflare was decoration. A new `argus-cloudflare-only`
   ipAllowList (the 22 published Cloudflare ranges) on the `/` router answers 403 to
   anything that did not come through the edge. It is scoped to that one router, so the
@@ -1111,7 +1111,7 @@ Let's Encrypt, and serves its panel on `:3000`.
 ## [0.4.9] - 2026-09-15 - Re-provision on a new VPS, provision.sh fixes
 
 The old SURIOTA VPS `103.172.172.29` (Hermes, SUVA, Argus) went down. Argus was
-re-provisioned from scratch on `43.134.17.144` (Tencent, Ubuntu 24.04, 2 vCPU / 7 GB),
+re-provisioned from scratch on `<VPS_IP>` (Tencent, Ubuntu 24.04, 2 vCPU / 7 GB),
 which was the first end-to-end run of `deploy/provision.sh` on a bare host since the
 original deploy. It surfaced six defects; each is fixed below, so the script now takes a
 fresh Ubuntu 24.04 box to a live Argus in one run.
@@ -1159,7 +1159,7 @@ fresh Ubuntu 24.04 box to a live Argus in one run.
   (SearXNG) and `read` calls. `argus-update.timer` is enabled and polling.
 - **Pending owner action:** the `argus.gifariksuryo.xyz` A record still points at the dead
   IP, so certbot cannot validate and nginx is serving a self-signed placeholder cert.
-  After repointing DNS to `43.134.17.144`:
+  After repointing DNS to `<VPS_IP>`:
   `sudo certbot certonly --webroot -w /var/www/letsencrypt -d argus.gifariksuryo.xyz && sudo systemctl reload nginx`
 
 ---
