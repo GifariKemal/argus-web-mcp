@@ -16,7 +16,7 @@ A FastMCP (Python) server, deployed remote-HTTP on the SURIOTA VPS, that every C
 5. `docs/01-RESEARCH.md` - research findings + sources. `benchmark/testset.yaml` - benchmark set.
 
 ## Status
-Live on the SURIOTA VPS as an Easypanel Compose service (`argus` + `searxng` + `warp`), public endpoint `https://argus.gifariksuryo.xyz/mcp` (bearer). Version 0.4.33 (`pyproject.toml`). Current snapshot, benchmarks, search-engine notes and open owner inputs: [`docs/STATUS.md`](docs/STATUS.md). History per version: [`CHANGELOG.md`](CHANGELOG.md). Plans in `docs/plans/`, QA reports in `docs/qa/`.
+Live on the SURIOTA primary server as a Coolify service (`argus` + `searxng` + `warp`), public endpoint `https://argus.gifariksuryo.xyz/mcp` (bearer). Version 0.4.34 (`pyproject.toml`). Easypanel on the old VPS hosted it until 2026-10-30 and no longer runs it. Current snapshot, benchmarks, search-engine notes and open owner inputs: [`docs/STATUS.md`](docs/STATUS.md). History per version: [`CHANGELOG.md`](CHANGELOG.md). Plans in `docs/plans/`, QA reports in `docs/qa/`.
 
 ## Quick start
 Full table in [`AGENTS.md`](AGENTS.md#commands). Windows: call the venv binaries explicitly.
@@ -32,7 +32,7 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d   # local
 Other entrypoints: `python -m argus.server` (stdio), `uvicorn argus.server:app` (HTTP). The host port lives in the local overlay only: the base compose file pins no `container_name` and publishes no port, because Easypanel flags both as conflict risks.
 
 ## Architecture
-**Stack (decided):** Crawl4AI (Apache-2.0, clone&improve core) / trafilatura (article extract) / **SearXNG** (self-host, unlimited search, JSON API) / Playwright / Docling(MIT)/pymupdf4llm (PDF) / playwright-stealth tier (anti-bot, lazy; Patchright measured in 0.4.21 and not adopted) / **FastMCP** Python, **Streamable-HTTP** transport / Cloudflare **WARP** container as egress proxy for `ARGUS_EGRESS_PROXY_HOSTS`. Deploy: **Easypanel** (Docker Swarm + Traefik) on the SURIOTA VPS runs the repo's `docker-compose.yml`; **Cloudflare proxies the DNS record** and Traefik accepts the `/` router only from Cloudflare ranges, terminates TLS, and Argus itself enforces the bearer/JWT. `deploy/provision.sh` (systemd + nginx + certbot + fail2ban) stays as the panel-less alternative.
+**Stack (decided):** Crawl4AI (Apache-2.0, clone&improve core) / trafilatura (article extract) / **SearXNG** (self-host, unlimited search, JSON API) / Playwright / Docling(MIT)/pymupdf4llm (PDF) / playwright-stealth tier (anti-bot, lazy; Patchright measured in 0.4.21 and not adopted) / **FastMCP** Python, **Streamable-HTTP** transport / Cloudflare **WARP** container as egress proxy for `ARGUS_EGRESS_PROXY_HOSTS`. Deploy: **Coolify** (Docker + Traefik) on the SURIOTA primary server runs host-built images of a pinned ref (Easypanel until 2026-10-30); **Cloudflare proxies the DNS record** and Traefik accepts the `/` router only from Cloudflare ranges, terminates TLS, and Argus itself enforces the bearer/JWT. `deploy/provision.sh` (systemd + nginx + certbot + fail2ban) stays as the panel-less alternative.
 
 **MCP tools (20 live):** `read / search / smart_search(auto-route) / read_pdf / scrape / batch_read / extract_structured(selector+LLM) / crawl / screenshot / research(deep/quick/answer) / map_urls / find_similar(local semantic) / github_search / scholar_search / watch / list_watches / unwatch / forexfactory_calendar / cot_report / news_sentiment_feed`. Domain routing: `search(category=science->Scholar/arXiv, it->GitHub/SO, news, general)`; `smart_search` auto-picks via a deterministic classifier (no LLM). `read(extract_media)`=links+images; `research(highlights)`=top sentences. Per-host courtesy/circuit-breaker throttle; `/metrics` per-tool counters; JWT or static bearer auth. Code layout: [`AGENTS.md`](AGENTS.md#layout--conventions).
 
@@ -40,7 +40,7 @@ Other entrypoints: `python -m argus.server` (stdio), `uvicorn argus.server:app` 
 
 ## Working rules
 - Work autonomously inside the repo: plans, TDD, multi-agent fan-out for independent modules. Brainstorming is done (see docs) -> writing-plans -> TDD/build.
-- A push to `main` is a production deploy (GitHub webhook -> Easypanel rebuild). Commit locally per milestone, but **push only when the user asked**. Ask before Easypanel changes and VPS commands too.
+- One branch: `main`. A push to `main` no longer deploys (no webhook since 2026-10-30); production is built and rolled out by hand on the primary server (Coolify). Commit locally per milestone, **push only when the user asked**, and ask before server or panel commands.
 - **Skills/plugins/tools first** - `superpowers` (writing-plans, test-driven-development, systematic-debugging, verification-before-completion), `python-development`, `backend-development`.
 - **Per component:** write -> syntax-check -> test -> validate, before moving on. No one giant turn.
 - After each milestone update `docs/STATUS.md`, `CHANGELOG.md` and `docs/02-ROADMAP.md`.

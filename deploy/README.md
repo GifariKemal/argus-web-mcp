@@ -1,7 +1,11 @@
 # Argus VPS Deployment Runbook
 
 > [!IMPORTANT]
-> **Since 2026-09-15 production runs on Easypanel, not on the systemd units below.**
+> **Since 2026-10-30 production runs on Coolify on the SURIOTA primary server.** The
+> Easypanel stack, its push webhook and the retired systemd units on the old VPS were removed that
+> day. The Easypanel section below is kept as history and as a working recipe for that panel.
+>
+> **2026-09-15 to 2026-10-30 production ran on Easypanel, not on the systemd units below.**
 > Read [Easypanel deployment (current)](#easypanel-deployment-current) first. The
 > systemd + nginx + certbot + fail2ban recipe that follows it is still supported
 > and still the right answer for a box without a panel, but on

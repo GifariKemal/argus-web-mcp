@@ -16,6 +16,33 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.34] - 2026-10-30 - CVE-clean images, COT official-API fallback, move to Coolify
+
+### Security
+
+- **trivy CRITICAL/HIGH (fixable) 8/32 -> 0/0 on the argus image.** Lockfile pins the minimum fixed
+  releases: pillow 13.0.0 (with fastembed 0.9.1, the first release that allows it), authlib 1.9.1,
+  brotli 1.2.1, certifi 2026.10.18, aiohttp 3.14.5, dnspython 2.9.0, filelock 4.2.1, nltk 3.10.4; no
+  other pin moved. The Dockerfile runs a noninteractive `apt-get upgrade` before the deps so Debian
+  security fixes ship between base-digest bumps.
+- **`cot_report` `date` is validated before it reaches the SoQL `$where`** (ASCII digits, a real
+  calendar day; same check on the API's own latest-date answer). Bad input returns `cot_bad_date`.
+
+### Fixed
+
+- **`cot_report` works again.** www.cftc.gov answers 403 to non-browser clients from datacenter IPs
+  (WARP too; the cause is the client, not the IP). On a legacy-file fetch failure it now reads the same
+  week from the official CFTC Socrata API (`publicreporting.cftc.gov`, dataset 6dca-aqww) with an honest
+  User-Agent; `source` says which one answered. Parity checked: 376 rows and identical drift counters
+  against the legacy file for 2026-10-20. A parse error of the legacy file is no longer hidden by the
+  fallback.
+
+### Changed
+
+- **Deploy:** production moved to Coolify on the SURIOTA primary server. The Easypanel stack, the GitHub
+  push webhook and the retired systemd/nginx units on the previous VPS were removed. `main` is the only
+  branch and a push no longer deploys by itself.
+
 ### Fixed (2026-10-20)
 
 - **brave answers again, through WARP.** The 2026-10-15 note "WARP does not help" was
