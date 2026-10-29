@@ -199,11 +199,12 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
     owns_client = client is None
     if owns_client:
         client = build_safe_async_client(timeout=_TIMEOUT)
+    rows, body = None, b""
     try:
         try:
             resp = await client.get(source)
             resp.raise_for_status()
-            rows = None
+            body = resp.content
         except Exception as exc:  # noqa: BLE001 - legacy file blocked/down: official API
             source = REPORT_APIS[report_type]
             try:
@@ -216,7 +217,7 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
             await client.aclose()
 
     if rows is None:  # parse outside the fallback: a layout change must surface, not hide
-        rows = parse_cot(resp.content, report_type=report_type)
+        rows = parse_cot(body, report_type=report_type)
     identity_failures, bad_dates = _drift_checks(rows)
     out = {
         "rows": rows, "count": len(rows), "report_type": report_type, "source": source,
