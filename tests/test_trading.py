@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -304,6 +305,55 @@ async def test_cot_report_fetch_failure_raises_coded():
         with pytest.raises(cot.CotError) as ei:
             await cot.cot_report(client=client)
     assert ei.value.code == "cot_fetch_failed"
+
+
+# Real record shape from publicreporting.cftc.gov 6dca-aqww (2026-10-20), incl. CFTC's own
+# "postions" typo. OI 10435 = 1735 + 1775 + 6925 + 0 (accounting identity holds).
+_API_ROW = {
+    "market_and_exchange_names": "GULF # 6 FUEL OIL CRACK - NEW YORK MERCANTILE EXCHANGE",
+    "report_date_as_yyyy_mm_dd": "2026-10-20T00:00:00.000",
+    "open_interest_all": "10435", "noncomm_positions_long_all": "1735",
+    "noncomm_positions_short_all": "1051", "noncomm_postions_spread_all": "1775",
+    "comm_positions_long_all": "6925", "comm_positions_short_all": "7599",
+    "nonrept_positions_long_all": "0", "nonrept_positions_short_all": "10",
+}
+
+
+def _cftc_blocked_api_ok(seen: list) -> httpx.AsyncClient:
+    """www.cftc.gov answers 403 (it blocks non-browser clients); the official API works."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(unquote(str(request.url)))
+        if request.url.host == "www.cftc.gov":
+            return httpx.Response(403, content=b"Access Denied")
+        if request.url.params.get("$select"):
+            return httpx.Response(200, json=[{"d": "2026-10-20T00:00:00.000"}])
+        return httpx.Response(200, json=[_API_ROW])
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_cot_report_falls_back_to_official_api_when_legacy_file_blocked():
+    seen: list = []
+    async with _cftc_blocked_api_ok(seen) as client:
+        out = await cot.cot_report(client=client)
+    assert out["source"] == cot.REPORT_APIS["legacy_futures"]
+    assert out["count"] == 1 and out["identity_failures"] == 0 and out["bad_dates"] == 0
+    assert out["rows"][0] == {
+        "market": "GULF # 6 FUEL OIL CRACK - NEW YORK MERCANTILE EXCHANGE",
+        "report_date": "2026-10-20", "open_interest": 10435,
+        "noncommercial_long": 1735, "noncommercial_short": 1051, "noncommercial_spreads": 1775,
+        "commercial_long": 6925, "commercial_short": 7599,
+        "nonreportable_long": 0, "nonreportable_short": 10,
+    }
+    assert any("$select" in u for u in seen)  # latest report date asked first
+
+
+async def test_cot_report_api_fallback_honors_requested_date():
+    seen: list = []
+    async with _cftc_blocked_api_ok(seen) as client:
+        out = await cot.cot_report(date="2026-10-20", client=client)
+    assert out["requested_date"] == "2026-10-20" and out["count"] == 1
+    assert not any("$select" in u for u in seen)  # explicit date: no latest-date lookup
+    assert any("2026-10-20T00:00:00.000" in u for u in seen)
 
 
 # --------------------------------------------------------------------------- #

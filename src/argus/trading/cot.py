@@ -21,6 +21,23 @@ from argus.security.ssrf import build_safe_async_client
 REPORT_URLS = {
     "legacy_futures": "https://www.cftc.gov/dea/newcot/deafut.txt",
 }
+# Official programmatic source (Socrata). www.cftc.gov answers 403 to non-browser clients
+# from datacenter IPs (measured 2026-10-29); the API serves the same report to ArgusBot.
+REPORT_APIS = {
+    "legacy_futures": "https://publicreporting.cftc.gov/resource/6dca-aqww.json",
+}
+_API_DATE = "report_date_as_yyyy_mm_dd"
+_API_FIELDS = {  # our field -> API column ("postions" is CFTC's own spelling)
+    "open_interest": "open_interest_all",
+    "noncommercial_long": "noncomm_positions_long_all",
+    "noncommercial_short": "noncomm_positions_short_all",
+    "noncommercial_spreads": "noncomm_postions_spread_all",
+    "commercial_long": "comm_positions_long_all",
+    "commercial_short": "comm_positions_short_all",
+    "nonreportable_long": "nonrept_positions_long_all",
+    "nonreportable_short": "nonrept_positions_short_all",
+}
+_API_HEADERS = {"user-agent": "ArgusBot/0.1 (+https://suriota.com; self-hosted research)"}
 _TIMEOUT = 30.0
 
 # Zero-based column indices in the headerless legacy futures-only CSV.
@@ -120,6 +137,34 @@ def _drift_checks(rows: list[dict]) -> tuple[int, int]:
     return identity_failures, bad_dates
 
 
+def parse_cot_api(records: list[dict]) -> list[dict]:
+    """Map official-API records to the same row shape as :func:`parse_cot`."""
+    rows = []
+    for rec in records:
+        row: dict[str, str | int | None] = {
+            "market": str(rec.get("market_and_exchange_names", "")).strip(),
+            "report_date": str(rec.get(_API_DATE, ""))[:10]}
+        for field, col in _API_FIELDS.items():
+            row[field] = _to_int(str(rec.get(col, "")))
+        rows.append(row)
+    return rows
+
+
+async def _fetch_api(client, url: str, date) -> list[dict]:
+    """One report week from the official API: ``date`` if given, else the latest week."""
+    if date:
+        day = str(date)[:10]
+    else:
+        resp = await client.get(url, params={"$select": f"max({_API_DATE}) as d"},
+                                headers=_API_HEADERS)
+        resp.raise_for_status()
+        day = str(resp.json()[0]["d"])[:10]
+    resp = await client.get(url, params={"$where": f"{_API_DATE}='{day}T00:00:00.000'",
+                                         "$limit": "5000"}, headers=_API_HEADERS)
+    resp.raise_for_status()
+    return parse_cot_api(resp.json())
+
+
 async def cot_report(report_type: str = "legacy_futures", date=None, *, client=None) -> dict:
     """Fetch + parse a CFTC COT report. Returns ``{rows, count, report_type, source,
     identity_failures, bad_dates}`` (+ ``requested_date`` when ``date`` is passed).
@@ -142,14 +187,18 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
         try:
             resp = await client.get(source)
             resp.raise_for_status()
-            body = resp.content
-        except Exception as exc:  # noqa: BLE001 - normalize to structured error
-            raise CotError("cot_fetch_failed", f"CFTC COT fetch failed: {exc}") from exc
+            rows = parse_cot(resp.content, report_type=report_type)
+        except Exception as exc:  # noqa: BLE001 - legacy file blocked/down: official API
+            source = REPORT_APIS[report_type]
+            try:
+                rows = await _fetch_api(client, source, date)
+            except Exception as exc2:  # noqa: BLE001 - normalize to structured error
+                raise CotError("cot_fetch_failed",
+                               f"CFTC COT fetch failed: {exc}; API fallback: {exc2}") from exc2
     finally:
         if owns_client:
             await client.aclose()
 
-    rows = parse_cot(body, report_type=report_type)
     identity_failures, bad_dates = _drift_checks(rows)
     out = {
         "rows": rows, "count": len(rows), "report_type": report_type, "source": source,
