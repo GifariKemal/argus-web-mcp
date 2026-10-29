@@ -1285,6 +1285,12 @@ async def test_cot_cached_and_error_code_passthrough(app_state, monkeypatch):
     r = await server.cot_report(report_type="nope")
     assert r["code"] == "cot_bad_report_type"  # no longer masked as fetch_failed
 
+    from argus.trading.cot import cot_report as real_cot
+
+    monkeypatch.setattr(server, "_cot_report", real_cot)  # non-ISO date refused before any fetch
+    r = await server.cot_report(date="'OR'1'='1'")
+    assert r["code"] == "cot_bad_date"
+
 
 async def test_ff_bad_date_range_code_passthrough(app_state, monkeypatch):
     from argus.trading.forexfactory import ForexFactoryError

@@ -26,6 +26,7 @@ ERROR_CODES = frozenset(
         # Trading-tool structured codes, surfaced verbatim (masking them as generic
         # fetch_failed hid actionable causes like a bad report_type or date range).
         "cot_bad_report_type",
+        "cot_bad_date",
         "cot_fetch_failed",
         "ff_bad_date_range",
         "ff_bad_feed",
