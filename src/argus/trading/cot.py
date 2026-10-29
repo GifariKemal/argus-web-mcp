@@ -154,7 +154,11 @@ def parse_cot_api(records: list[dict]) -> list[dict]:
 def _day(value) -> str:
     """``YYYY-MM-DD`` prefix of ``value``; anything else is refused (it lands in a SoQL filter)."""
     day = str(value)[:10]
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+    try:  # ASCII digits only (\d also matches other scripts) and a real calendar day
+        ok = re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day) and _date.fromisoformat(day)
+    except ValueError:
+        ok = False
+    if not ok:
         raise CotError("cot_bad_date", f"date must be YYYY-MM-DD, got {str(value)[:40]!r}")
     return day
 
@@ -181,9 +185,10 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
     ``date`` (YYYY-MM-DD, or any string whose first 10 chars are the date) filters rows
     to that exact report date - the this-week feed carries a single date, so a
     non-matching date returns an HONEST empty set instead of silently serving the
-    wrong week. ``identity_failures``/``bad_dates`` > 0 signal CFTC column-layout
-    drift (treat the data as degraded). Raises :class:`CotError` on fetch failure or
-    an unknown ``report_type``.
+    wrong week. When the legacy file is blocked the official API answers instead and
+    can serve past weeks too (``source`` tells which). ``identity_failures``/
+    ``bad_dates`` > 0 signal CFTC column-layout drift (treat the data as degraded).
+    Raises :class:`CotError` on fetch failure, a bad ``date`` or an unknown ``report_type``.
     """
     source = REPORT_URLS.get(report_type)
     if source is None:

@@ -356,7 +356,8 @@ async def test_cot_report_api_fallback_honors_requested_date():
     assert any("2026-10-20T00:00:00.000" in u for u in seen)
 
 
-@pytest.mark.parametrize("bad", ["'OR'1'='1'", "20/10/2026", "latest"])
+@pytest.mark.parametrize("bad", ["'OR'1'='1'", "20/10/2026", "latest", "2026-13-45",
+                                 "\uff12\uff10\uff12\uff16-\uff11\uff10-\uff12\uff10"])
 async def test_cot_report_rejects_non_iso_date_before_fetching(bad):
     seen: list = []
     async with _cftc_blocked_api_ok(seen) as client:
