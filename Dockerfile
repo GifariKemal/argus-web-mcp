@@ -15,7 +15,9 @@ WORKDIR /app
 #   uv pip compile pyproject.toml --extra semantic --extra serve --universal \
 #     --python-version 3.12 --generate-hashes -o requirements.lock
 COPY requirements.lock ./
-RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+# apt upgrade: Debian security fixes land before the next base-digest bump (trivy gate).
+RUN apt-get update && apt-get -y upgrade \
+    && pip install --no-cache-dir --require-hashes -r requirements.lock \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
