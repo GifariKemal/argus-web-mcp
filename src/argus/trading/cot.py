@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date as _date
 
 from argus.security.ssrf import build_safe_async_client
@@ -150,15 +151,23 @@ def parse_cot_api(records: list[dict]) -> list[dict]:
     return rows
 
 
+def _day(value) -> str:
+    """``YYYY-MM-DD`` prefix of ``value``; anything else is refused (it lands in a SoQL filter)."""
+    day = str(value)[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise CotError("cot_bad_date", f"date must be YYYY-MM-DD, got {str(value)[:40]!r}")
+    return day
+
+
 async def _fetch_api(client, url: str, date) -> list[dict]:
     """One report week from the official API: ``date`` if given, else the latest week."""
     if date:
-        day = str(date)[:10]
+        day = _day(date)
     else:
         resp = await client.get(url, params={"$select": f"max({_API_DATE}) as d"},
                                 headers=_API_HEADERS)
         resp.raise_for_status()
-        day = str(resp.json()[0]["d"])[:10]
+        day = _day(resp.json()[0]["d"])
     resp = await client.get(url, params={"$where": f"{_API_DATE}='{day}T00:00:00.000'",
                                          "$limit": "5000"}, headers=_API_HEADERS)
     resp.raise_for_status()
@@ -179,6 +188,8 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
     source = REPORT_URLS.get(report_type)
     if source is None:
         raise CotError("cot_bad_report_type", f"unknown report_type: {report_type!r}")
+    if date:
+        date = _day(date)
 
     owns_client = client is None
     if owns_client:
@@ -187,7 +198,7 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
         try:
             resp = await client.get(source)
             resp.raise_for_status()
-            rows = parse_cot(resp.content, report_type=report_type)
+            rows = None
         except Exception as exc:  # noqa: BLE001 - legacy file blocked/down: official API
             source = REPORT_APIS[report_type]
             try:
@@ -199,6 +210,8 @@ async def cot_report(report_type: str = "legacy_futures", date=None, *, client=N
         if owns_client:
             await client.aclose()
 
+    if rows is None:  # parse outside the fallback: a layout change must surface, not hide
+        rows = parse_cot(resp.content, report_type=report_type)
     identity_failures, bad_dates = _drift_checks(rows)
     out = {
         "rows": rows, "count": len(rows), "report_type": report_type, "source": source,

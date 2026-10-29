@@ -356,6 +356,42 @@ async def test_cot_report_api_fallback_honors_requested_date():
     assert any("2026-10-20T00:00:00.000" in u for u in seen)
 
 
+@pytest.mark.parametrize("bad", ["'OR'1'='1'", "20/10/2026", "latest"])
+async def test_cot_report_rejects_non_iso_date_before_fetching(bad):
+    seen: list = []
+    async with _cftc_blocked_api_ok(seen) as client:
+        with pytest.raises(cot.CotError) as ei:
+            await cot.cot_report(date=bad, client=client)
+    assert ei.value.code == "cot_bad_date" and seen == []  # never reaches the SoQL filter
+
+
+async def test_cot_report_api_rejects_malformed_latest_date():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.cftc.gov":
+            return httpx.Response(403)
+        return httpx.Response(200, json=[{"d": "x' OR '1'='1"}])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(cot.CotError) as ei:
+            await cot.cot_report(client=client)
+    assert ei.value.code == "cot_fetch_failed" and "cot_bad_date" not in ei.value.message
+    assert "YYYY-MM-DD" in ei.value.message
+
+
+async def test_cot_report_parse_error_is_not_masked_by_api_fallback(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("layout changed")
+    monkeypatch.setattr(cot, "parse_cot", boom)
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        return httpx.Response(200, content=COT_FIXTURE.read_bytes())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError, match="layout changed"):
+            await cot.cot_report(client=client)
+    assert seen == ["www.cftc.gov"]  # no silent switch to the API
+
+
 # --------------------------------------------------------------------------- #
 # News sentiment feed                                                         #
 # --------------------------------------------------------------------------- #
