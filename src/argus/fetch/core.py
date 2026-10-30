@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from ..models import record_stage
 from ..security.ssrf import SSRFError
+from ..x.fxtwitter import fetch_x, x_target
 from .adapters import fetch_npm, fetch_stackexchange, npm_target, stackexchange_target
 from .fallback import fetch_via_archive
 from .render import BrowserPool
@@ -123,6 +124,14 @@ async def _do_fetch(
             "render_tier": r.get("render_tier", "normal"),
         }
 
+    # X answers its post pages 200 with a login-walled, duplicated shell; FxTwitter has the
+    # post itself. Unlike the adapters below this runs before the static hop.
+    if x_target(url):
+        api = await fetch_x(url, client=client, timeout=timeout)
+        if api is not None:
+            record_stage("fetch.x_api_ok")
+            return api
+        record_stage("fetch.x_api_fail")
     static_timeout = min(timeout, STATIC_FALLBACK_TIMEOUT) if browser is not None else timeout
     try:
         res = await fetch_static(url, client=client, timeout=static_timeout)

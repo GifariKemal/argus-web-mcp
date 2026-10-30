@@ -7,8 +7,10 @@ import httpx
 import pytest
 import respx
 
-from argus import config
-from argus.x.fxtwitter import fx_post, fx_user, post_from_fx, x_target
+from argus import config, server
+from argus.fetch.core import fetch
+from argus.x.fxtwitter import fx_post, fx_user, post_from_fx, render_html, x_target
+from conftest import ARTICLE_HTML, FakeBrowser
 
 FIX = Path(__file__).parent / "fixtures" / "x"
 FX = config.X_FXTWITTER_URL
@@ -100,3 +102,60 @@ async def test_fx_post_non_json_is_none(response):
     async with httpx.AsyncClient() as c:
         assert await fx_post("20", client=c) is None
         assert await fx_user("jack", client=c) is None
+
+
+# --- Task 2: read routes x.com URLs through FxTwitter -------------------------------
+
+def _client(fx_status: httpx.Response, seen: list[str]) -> httpx.AsyncClient:
+    """FxTwitter answers ``fx_status``; x.com answers a rich article page."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(str(req.url))
+        if req.url.host == "api.fxtwitter.com":
+            if req.url.path == "/XDevelopers":
+                return httpx.Response(200, json=load("fx_user.json"))
+            return fx_status
+        return httpx.Response(200, text=ARTICLE_HTML, headers={"content-type": "text/html"})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_html_escapes_post_text():
+    p = post_from_fx(load("fx_status_plain.json")["tweet"]) | {
+        "text": "<script>x()</script></article>"}
+    h = render_html(post=p)
+    assert "<script>" not in h and "&lt;script&gt;" in h
+    assert h.count("</article>") == 1
+
+
+async def test_read_x_status_uses_fxtwitter(app_state):
+    seen: list[str] = []
+    app_state.client = _client(httpx.Response(200, json=load("fx_status_plain.json")), seen)
+    r = await server.read("https://x.com/jack/status/20")
+    assert r["render_path"] == "api" and "just setting up my twttr" in r["content"]
+    assert r["metadata"]["structured"]["id"] == "20"
+    assert seen == [f"{FX}/status/20"]  # the noisy x.com page is never fetched
+
+
+async def test_read_x_profile_uses_fxtwitter(app_state):
+    seen: list[str] = []
+    app_state.client = _client(httpx.Response(500), seen)
+    r = await server.read("https://x.com/XDevelopers")
+    assert r["render_path"] == "api" and "The voice of the X Dev team" in r["content"]
+    assert r["metadata"]["structured"]["handle"] == "XDevelopers"
+
+
+async def test_falls_back_to_static_when_fxtwitter_fails(public_dns):
+    seen: list[str] = []
+    async with _client(httpx.Response(200, text=load("fx_not_found.html")), seen) as c:
+        res = await fetch("https://x.com/jack/status/20", client=c)
+    assert res["render_path"] == "static"
+    assert seen == [f"{FX}/status/20", "https://x.com/jack/status/20"]
+
+
+async def test_forced_render_skips_x_adapter(public_dns):
+    seen: list[str] = []
+    browser = FakeBrowser()
+    async with _client(httpx.Response(200, json=load("fx_status_plain.json")), seen) as c:
+        res = await fetch("https://x.com/jack/status/20", client=c, browser=browser, render=True)
+    assert res["render_path"] == "browser" and browser.calls == 1 and seen == []

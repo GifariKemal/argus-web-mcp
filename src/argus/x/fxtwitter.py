@@ -7,6 +7,7 @@ the size cap. Everything it returns is untrusted third-party text.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from datetime import UTC, datetime
@@ -101,3 +102,54 @@ async def fx_user(handle: str, *, client, timeout: float = 30) -> dict | None:
         return None
     return {**_author(u), "following": u.get("following"), "posts": u.get("tweets"),
             "description": u.get("description", ""), "url": u.get("url", "")}
+
+
+def _post_block(p: dict) -> str:
+    e = html.escape
+    a = p["author"]
+    m = p["metrics"]
+    text = e(p["text"]).replace("\n", "<br>")
+    stats = ", ".join(f"{k} {v}" for k, v in m.items() if v is not None)
+    media = "".join(f'<li><a href="{e(x["url"] or "")}">{e(x["type"] or "media")}</a></li>'
+                    for x in p["media"])
+    quoted = f"<blockquote>{_post_block(p['quoted'])}</blockquote>" if p["quoted"] else ""
+    return (f"<p><strong>{e(a['name'])} (@{e(a['handle'])})</strong> {e(p['created_at'] or '')}</p>"
+            f"<p>{text}</p><p>{e(stats)}</p>"
+            + (f"<ul>{media}</ul>" if media else "") + quoted)
+
+
+def render_html(post: dict | None = None, user: dict | None = None) -> str:
+    """A minimal page for the extractor. Every field is HTML-escaped: post text is
+    untrusted and may carry markup."""
+    e = html.escape
+    if post is not None:
+        title = f"@{post['author']['handle']}: {post['text'][:80]}"
+        body = _post_block(post)
+    else:
+        u = user or {}
+        title = f"{u.get('name', '')} (@{u.get('handle', '')})"
+        body = (f"<h1>{e(title)}</h1><p>{e(u.get('description') or '')}</p>"
+                f"<p>followers {e(str(u.get('followers')))}, following "
+                f"{e(str(u.get('following')))}, posts {e(str(u.get('posts')))}</p>")
+    return (f"<html><head><title>{e(title)}</title></head><body><article>{body}"
+            f"</article></body></html>")
+
+
+async def fetch_x(url: str, *, client, timeout: float = 30) -> dict | None:
+    """An X post or profile URL as a fetch result (``render_path: 'api'``, plus
+    ``structured`` = post or user model), or None when ``url`` is not one or FxTwitter
+    failed (the caller then takes the normal fetch path)."""
+    target = x_target(url)
+    if target is None:
+        return None
+    kind, ident = target
+    if kind == "status":
+        obj = await fx_post(ident, client=client, timeout=timeout)
+        page = render_html(post=obj) if obj else None
+    else:
+        obj = await fx_user(ident, client=client, timeout=timeout)
+        page = render_html(user=obj) if obj else None
+    if page is None:
+        return None
+    return {"final_url": url, "status": 200, "html": page, "render_path": "api",
+            "structured": obj}

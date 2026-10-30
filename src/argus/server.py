@@ -435,6 +435,8 @@ async def read(
                               include_links=include_links)
     if not art["content"]:
         return err("empty_content", "no extractable content", res["final_url"])
+    if res.get("structured"):  # an API adapter's typed record (X post / profile)
+        art["metadata"]["structured"] = res["structured"]
 
     out = {
         "url": url,
