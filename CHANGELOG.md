@@ -63,6 +63,11 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
   off in production).
 - `research` over the 40 compare ids: 40/40 with 5 sources each, median 8.4k words per
   bundle, p50 6.6 s, p95 10.3 s, max 10.7 s.
+- `search` sweep over all 160 scenarios (run inside the production container): 100%
+  success, 0% degraded/throttled, 10 results each, p50 1.3 s, p95 3.3 s, mean top-1 title
+  overlap 0.70, no category under the improve thresholds. Top results came from duckduckgo
+  web (159 scenarios), yandex (147), google cse (63), bing (4); brave contributed none
+  (suspended at the time).
 
 ## [0.4.35] - 2026-10-30 - X posts without an account (X module Phase A)
 
