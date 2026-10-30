@@ -806,6 +806,19 @@ def _render(kind: str, obj: dict) -> str:
 
 _warm_task: asyncio.Task | None = None
 
+# Posts and profiles X answered as absent (deleted, suspended, protected): retried reads
+# skip the account for a while instead of spending a request each time.
+_MISSING_TTL_S = 600
+_MISSING_MAX = 512
+_missing: dict[tuple[str, str], float] = {}  # (kind, ident) -> expires
+
+
+def _remember_missing(key: tuple[str, str]) -> None:
+    _missing.pop(key, None)
+    if len(_missing) >= _MISSING_MAX:
+        del _missing[next(iter(_missing))]  # oldest insert first
+    _missing[key] = time.monotonic() + _MISSING_TTL_S
+
 
 async def _warm(client) -> None:
     with contextlib.suppress(Exception):
@@ -824,9 +837,15 @@ async def fetch_x_account(url: str, *, client, timeout: float = _READ_TIMEOUT_S)
     """An X post (with thread and replies) or profile (with latest posts) through the
     account, as a fetch result like ``fetch_x``; None when Layer 1 is off, the URL is not
     X, the manifest is not ready, the account is cooling or past the read share of its
-    budget, or anything failed (the caller then uses FxTwitter). Never raises."""
+    budget, X answered it as absent in the last 10 minutes, or anything failed (the caller
+    then uses FxTwitter). Never raises."""
     target = x_target(url)
     if target is None or not enabled():
+        return None
+    kind, ident = target
+    key = (kind, ident.lower())
+    if _missing.get(key, 0.0) > time.monotonic():
+        record_stage("x.read_missing_cached")
         return None
     if _boot is None or time.monotonic() - _boot["at"] > BOOT_TTL_S:
         _schedule_warm(client)
@@ -834,7 +853,6 @@ async def fetch_x_account(url: str, *, client, timeout: float = _READ_TIMEOUT_S)
     if not _get_limiter().has_room(_READ_SHARE):
         record_stage("x.read_budget")
         return None
-    kind, ident = target
     try:
         async with asyncio.timeout(min(timeout, _READ_TIMEOUT_S)):
             obj = await (read_status(ident, client) if kind == "status"
@@ -843,6 +861,7 @@ async def fetch_x_account(url: str, *, client, timeout: float = _READ_TIMEOUT_S)
     except Exception:  # noqa: BLE001 - XError, timeout or an odd shape: FxTwitter takes over
         return None
     if page is None:
+        _remember_missing(key)
         return None
     return {"final_url": url, "status": 200, "html": page, "render_path": "api",
             "structured": obj}

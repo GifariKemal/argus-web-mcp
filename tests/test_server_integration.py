@@ -17,6 +17,24 @@ async def test_read_happy_then_cache(app_state):
     assert r2["content"] == r1["content"]
 
 
+async def test_read_shares_one_cache_row_across_x_url_spellings(app_state, monkeypatch):
+    calls = []
+
+    async def account(url, **kw):
+        calls.append(url)
+        return {"final_url": url, "status": 200, "render_path": "api",
+                "html": "<html><body><article>" + "post " * 80 + "</article></body></html>"}
+
+    monkeypatch.setattr(server, "fetch", account)
+    r1 = await server.read("https://x.com/Espressif/status/123")
+    r2 = await server.read("https://twitter.com/espressif/status/123?s=20")
+    assert r1["from_cache"] is False and r2["from_cache"] is True and len(calls) == 1
+    assert r2["url"] == "https://twitter.com/espressif/status/123?s=20"
+    await server.read("https://x.com/ESPRESSIF")
+    await server.read("https://mobile.twitter.com/espressif/")
+    assert len(calls) == 2
+
+
 async def test_read_ssrf_blocked_returns_error_not_raise(app_state):
     r = await server.read("http://169.254.169.254/latest/meta-data/")
     assert r["code"] == "ssrf_blocked"

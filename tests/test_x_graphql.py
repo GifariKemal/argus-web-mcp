@@ -158,6 +158,7 @@ def layer1(monkeypatch, tmp_path):
     monkeypatch.setattr(graphql.asyncio, "sleep", _no_sleep)
     monkeypatch.setattr(graphql, "_limiter", None)
     monkeypatch.setattr(graphql, "_state", "unknown")
+    monkeypatch.setattr(graphql, "_missing", {})
     boots = []
 
     async def fake_boot(client):
@@ -456,6 +457,20 @@ async def test_read_status_renders_thread_and_replies(layer1, monkeypatch):
     assert "fieldToggles" in calls[0]["url"]
     assert res["structured"]["id"] == "1649191520250245121"
     assert "<h2>Replies</h2>" in res["html"] and "ashevat" in res["html"]
+
+
+async def test_absent_post_is_remembered_and_skips_the_account(layer1, monkeypatch):
+    await graphql._ensure_boot(None)
+    calls = _fake_fetch(monkeypatch, [(200, {"data": _fixture_data("gql_tweet_detail")})])
+    # X answers, but not with post 1: absent; the retry (any spelling) spends nothing
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+    assert await graphql.fetch_x_account("https://twitter.com/B/status/1?s=20",
+                                         client=None) is None
+    assert len(calls) == 1
+    graphql._missing[("status", "1")] = graphql.time.monotonic() - 1  # expired: asks again
+    _fake_fetch(monkeypatch, [(200, {"data": _fixture_data("gql_tweet_detail")})])
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+    assert graphql._missing[("status", "1")] > graphql.time.monotonic()
 
 
 async def test_fetch_x_account_degrades_to_none(layer1, monkeypatch):

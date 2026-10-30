@@ -2,7 +2,9 @@
 
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
-## Snapshot (updated 2026-10-30)
+## Snapshot (updated 2026-10-31)
+**0.4.39 (2026-10-31):** `read` caches an X post or profile once across URL spellings (x.com/twitter.com, `?s=20`, handle case); posts X answers as absent skip the account for 10 min. 1221 offline tests.
+
 **0.4.38 (2026-10-30):** `read` on x.com through the account (post + thread + replies, profile + 20 latest posts), ct0 rotation kept on the data volume, read budget share 60%, protected accounts never returned. 1219 offline tests.
 
 **0.4.37 (2026-10-30):** X Layer 1 live with @srtargus after two live fixes (page load with cookie + browser UA only; signing script matched past the bundle cap); live manifest from main.js, the pinned fallback queryId is already stale. 1208 offline tests.

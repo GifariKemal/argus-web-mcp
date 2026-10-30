@@ -16,6 +16,18 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.39] - 2026-10-31 - one cache row per X post, absent posts skip the account
+
+### Changed
+
+- **`read` caches an X post or profile once, whatever the URL spelling.** `x.com` vs
+  `twitter.com` / `mobile.twitter.com`, `?s=20`, a trailing slash or the handle's case
+  used to be separate cache rows, each spending an account request. The key is now
+  `x:status:<id>` or `x:user:<handle>`; a hit reports the URL the caller asked for.
+- **A post or profile X answers as absent is remembered for 10 minutes** (deleted,
+  suspended, protected; at most 512 entries). Retries skip the account and go straight
+  to FxTwitter instead of spending a request each time.
+
 ## [0.4.38] - 2026-10-30 - read x.com through the account: threads, replies, profiles; ct0 rotation
 
 ### Added

@@ -73,6 +73,7 @@ from .trading.forexfactory import forexfactory_calendar as _ff_calendar
 from .trading.news import news_sentiment_feed as _news_feed
 from .watch import WatchStore, _select_value, poll_due
 from .x import graphql as _x_gql
+from .x.fxtwitter import x_target
 from .x.index import search_posts as _x_search_posts
 
 # Injected into every client session, even when the tools themselves are deferred, so it
@@ -414,10 +415,13 @@ async def read(
 
     opts = {"format": format, "clean": clean, "include_links": include_links,
             "media": extract_media}
-    ck = s.cache.key(url, opts)
+    # One post or profile behind many URL spellings (twitter.com, ?s=20, handle case) is one
+    # cache row, so each spelling does not spend an account request.
+    xt = x_target(url)
+    ck = s.cache.key(f"x:{xt[0]}:{xt[1].lower()}" if xt else url, opts)
     cached = s.cache.get(ck, ttl_for("general"))
     if cached is not None:
-        return _cap_read({**cached, "from_cache": True}, max_chars)
+        return _cap_read({**cached, "url": url, "from_cache": True}, max_chars)
 
     try:
         async with asyncio.timeout(timeout + _READ_GRACE_S):
@@ -429,7 +433,7 @@ async def read(
         stale = s.cache.get_stale(ck)
         if stale is not None:
             # Flagged: an expired copy served because the live fetch failed, never silently.
-            return {**stale, "from_cache": True, "stale": True}
+            return {**stale, "url": url, "from_cache": True, "stale": True}
         if isinstance(e, TimeoutError):
             return _timeout_err("read", timeout + _READ_GRACE_S)
         return _fetch_err(e)
