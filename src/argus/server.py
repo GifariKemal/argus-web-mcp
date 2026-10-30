@@ -1178,16 +1178,16 @@ def _x_date(value: str | None) -> date | None:
 
 async def x_search(
     query: Annotated[str, Field(description=(
-        "X search syntax, e.g. 'esp32 modbus' or 'from:espressif lang:en'"))],
+        "keywords, e.g. 'esp32 modbus gateway'; X search operators are not applied "
+        "without an account"))],
     mode: Literal["top", "latest"] = "top",
     limit: Annotated[int, Field(description="posts wanted, 1-50 (clamped)")] = 10,
     since: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
     until: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
 ) -> dict:
-    """Search X/Twitter posts by keyword (X search syntax). No account: finds indexed posts
-    via web search and returns full text, author, date and metrics; not real-time
-    (mode='latest' is flagged degraded). Read one post or profile with `read` on its
-    x.com URL."""
+    """Search X/Twitter posts by keyword. No account: finds indexed posts via web search and
+    returns full text, author, date and metrics; not real-time (mode='latest' is flagged
+    degraded). Read one post or profile with `read` on its x.com URL."""
     s = _state()
     if mode not in ("top", "latest"):
         return err("schema_invalid", f"unknown mode {mode!r} (top|latest)")
@@ -1219,7 +1219,10 @@ async def x_search(
 
     res = {"query": query, "mode": mode, **found, "count": len(found["results"]),
            "from_cache": False}
-    s.cache.put(ck, res, source="search")
+    # index_only is permanent for Layer 0; any other reason is transient (engine failover,
+    # FxTwitter timeouts or misses) and must not be re-served for the whole TTL.
+    if found["degraded_reason"] in (None, "index_only"):
+        s.cache.put(ck, res, source="search")
     return res
 
 

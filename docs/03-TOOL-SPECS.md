@@ -130,9 +130,9 @@ Structured academic-paper search (Semantic Scholar -> OpenAlex -> CrossRef). Fre
 
 ## `x_search(query, mode="top", limit=10, since=null, until=null)`
 X/Twitter posts by keyword, no X account (Layer 0 of `docs/plans/2026-10-30-argus-x-module-design.md`).
-- **in:** `query` (X search syntax), `mode` in {top, latest}, `limit` 1-50 (clamped), `since`/`until` `YYYY-MM-DD` (ASCII digits, real dates, inclusive, `since <= until`).
+- **in:** `query` (keywords; X operators such as `from:`/`lang:` are not applied without an account), `mode` in {top, latest}, `limit` 1-50 (clamped), `since`/`until` `YYYY-MM-DD` (ASCII digits, real dates, inclusive, `since <= until`).
 - **out:** `{query, mode, source:"index", results:[{id,url,created_at,text,lang,author:{handle,name,verified,followers},metrics:{replies,reposts,likes,quotes,views,bookmarks},media:[{type,url}],quoted,in_reply_to,source}], count, degraded, degraded_reason, from_cache}`.
-- **backing:** SearXNG `site:x.com`/`site:twitter.com` -> status URLs deduped by id -> FxTwitter (`ARGUS_X_FXTWITTER_URL`, concurrency 4). Not real-time: `mode="latest"` sorts what the index holds and reports `degraded: true, degraded_reason: "index_only"`. Cache 300 s (latest) / 1800 s (top).
+- **backing:** SearXNG `site:x.com`/`site:twitter.com` -> status URLs deduped by id -> FxTwitter (`ARGUS_X_FXTWITTER_URL`, concurrency 4). Not real-time: `mode="latest"` sorts what the index holds and reports `degraded: true, degraded_reason: "index_only"`. Cache 300 s (latest) / 1800 s (top). Ids outside `since`/`until` are dropped by their snowflake timestamp before any FxTwitter call; missing posts are topped up from the remaining candidates; FxTwitter calls get 10 s each and 30 s in total. `degraded_reason`: `index_only` (permanent, cached) or `backend_failover`/`low_relevance`/`enrich_timeout`/`partial_enrichment` (transient, not cached).
 - **errors:** schema_invalid, no_results, search_backend_down.
 
 ## `watch(url, webhook, interval_minutes=60, selector=null)`

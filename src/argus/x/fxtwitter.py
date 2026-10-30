@@ -17,6 +17,10 @@ from urllib.parse import urlsplit
 from .. import config
 from ..fetch.static import fetch_static
 
+# Per FxTwitter call: a hung public service must not eat a read's whole budget, which
+# would leave no time for the normal-ladder fallback.
+FX_TIMEOUT_S = 10
+
 _HOSTS = frozenset({"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"})
 _HANDLE = r"[A-Za-z0-9_]{1,15}"
 _STATUS = re.compile(rf"/(?:{_HANDLE}|i/web)/status(?:es)?/(\d{{1,20}})(?:/.*)?")
@@ -91,7 +95,10 @@ async def _get(path: str, key: str, *, client, timeout: float) -> dict | None:
 async def fx_post(post_id: str, *, client, timeout: float = 30) -> dict | None:
     """One post by id as the Argus post model, or None."""
     t = await _get(f"status/{post_id}", "tweet", client=client, timeout=timeout)
-    return post_from_fx(t) if t else None
+    try:
+        return post_from_fx(t) if t else None
+    except Exception:  # noqa: BLE001 - an unexpected upstream shape degrades to None
+        return None
 
 
 async def fx_user(handle: str, *, client, timeout: float = 30) -> dict | None:
@@ -100,8 +107,11 @@ async def fx_user(handle: str, *, client, timeout: float = 30) -> dict | None:
     u = await _get(handle, "user", client=client, timeout=timeout)
     if not u:
         return None
-    return {**_author(u), "following": u.get("following"), "posts": u.get("tweets"),
-            "description": u.get("description", ""), "url": u.get("url", "")}
+    try:
+        return {**_author(u), "following": u.get("following"), "posts": u.get("tweets"),
+                "description": u.get("description", ""), "url": u.get("url", "")}
+    except Exception:  # noqa: BLE001 - an unexpected upstream shape degrades to None
+        return None
 
 
 def _post_block(p: dict) -> str:
@@ -145,10 +155,13 @@ async def fetch_x(url: str, *, client, timeout: float = 30) -> dict | None:
     kind, ident = target
     if kind == "status":
         obj = await fx_post(ident, client=client, timeout=timeout)
-        page = render_html(post=obj) if obj else None
     else:
         obj = await fx_user(ident, client=client, timeout=timeout)
-        page = render_html(user=obj) if obj else None
+    try:
+        page = None if not obj else (
+            render_html(post=obj) if kind == "status" else render_html(user=obj))
+    except Exception:  # noqa: BLE001 - odd field types: take the normal fetch path instead
+        page = None
     if page is None:
         return None
     return {"final_url": url, "status": 200, "html": page, "render_path": "api",

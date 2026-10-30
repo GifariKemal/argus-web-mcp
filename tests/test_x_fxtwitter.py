@@ -159,3 +159,42 @@ async def test_forced_render_skips_x_adapter(public_dns):
     async with _client(httpx.Response(200, json=load("fx_status_plain.json")), seen) as c:
         res = await fetch("https://x.com/jack/status/20", client=c, browser=browser, render=True)
     assert res["render_path"] == "browser" and browser.calls == 1 and seen == []
+
+
+# --- final-review fixes ----------------------------------------------------------
+
+MALFORMED = [
+    {"text": None},
+    {"author": {"name": None}},
+    {"media": [None]},
+    {"media": {"all": [None]}},
+    {"created_timestamp": 10 ** 20},
+]
+
+
+@pytest.mark.parametrize("patch", MALFORMED)
+async def test_malformed_fx_post_falls_back_to_static(public_dns, patch):
+    tweet = {**load("fx_status_plain.json")["tweet"], **patch}
+    seen: list[str] = []
+    async with _client(httpx.Response(200, json={"code": 200, "tweet": tweet}), seen) as c:
+        res = await fetch("https://x.com/jack/status/20", client=c)
+    assert res["render_path"] in ("api", "static")  # never an exception
+    if res["render_path"] == "static":
+        assert seen[-1] == "https://x.com/jack/status/20"
+
+
+async def test_fetch_x_gets_a_short_timeout(public_dns, monkeypatch):
+    from argus.fetch import core
+    from argus.x.fxtwitter import FX_TIMEOUT_S
+
+    got = {}
+
+    async def rec(url, *, client, timeout=30):
+        got["timeout"] = timeout
+        return None
+
+    monkeypatch.setattr(core, "fetch_x", rec)
+    seen: list[str] = []
+    async with _client(httpx.Response(500), seen) as c:
+        await fetch("https://x.com/jack/status/20", client=c, timeout=60)
+    assert got["timeout"] == FX_TIMEOUT_S <= 10
