@@ -35,6 +35,7 @@ SITES: dict[str, str] = {
     "forexfactory.com": "https://www.forexfactory.com/calendar",
     "npmjs.com": "https://www.npmjs.com/package/react",
     "stackoverflow.com": "https://stackoverflow.com/questions/11227809",
+    "api.fxtwitter.com": "https://api.fxtwitter.com/status/20",  # x_search / x.com read
     "example.com": "https://example.com/",  # control: if this fails, the box is offline
 }
 

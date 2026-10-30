@@ -2,7 +2,7 @@
 
 Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-validate before any fetch), cache-aware (content-addressed, per-source TTL), partial-failure tolerant where batched. Errors return a structured `{error, code, detail}` with MCP `isError: true` - never raise to the client. A DNS failure is `dns_failed` (retry-worthy); only a blocked address is `ssrf_blocked`. URLs that recently ended `blocked_by_antibot` fail fast for 10 minutes (negative cache). Parameters with fixed values (`format`, `category`, `time_range`, `mode`, `safesearch`, `report_type`) are JSON-schema enums. Every tool carries annotations (`readOnlyHint`/`openWorldHint`; `watch`/`unwatch` are the only non-read-only ones), and all fetched fields are untrusted third-party data. Since 0.4.20 every browser connection (redirect hops, subresources, page JS, WebSockets) goes through a loopback egress proxy that applies the same SSRF gate, not just the seed URL. Return shapes are JSON; the content tools (`read`, `scrape`, `batch_read`, `read_pdf`, `research`, `crawl`) declare `anthropic/maxResultSizeChars` = 500000 in their tool `_meta` so clients do not truncate.
 
-20 live tools (source of truth: `src/argus/server.py` `TOOLS` tuple): read, search, smart_search, read_pdf, scrape, batch_read, extract_structured, crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search, watch, list_watches, unwatch, forexfactory_calendar, cot_report, news_sentiment_feed.
+21 live tools (source of truth: `src/argus/server.py` `TOOLS` tuple): read, search, smart_search, read_pdf, scrape, batch_read, extract_structured, crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search, x_search, watch, list_watches, unwatch, forexfactory_calendar, cot_report, news_sentiment_feed.
 
 > [!NOTE]
 > Every tool is SSRF-guarded and returns full content (no silent truncation). Errors come back as `{error, code, detail}` - tools never raise to the client.
@@ -23,6 +23,7 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 - [`find_similar`](#find_similarurl_or_text-count10)
 - [`github_search`](#github_searchquery-moderepositories-languagenull-sortnull-orderdesc-limit10)
 - [`scholar_search`](#scholar_searchquery-limit10-year_fromnull-open_accessfalse)
+- [`x_search`](#x_searchquery-modetop-limit10-sincenull-untilnull)
 - [`watch`](#watchurl-webhook-interval_minutes60-selectornull)
 - [`list_watches`](#list_watches)
 - [`unwatch`](#unwatchwatch_id)
@@ -34,7 +35,7 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 ## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=60)`
 URL -> clean main content.
 - **in:** `url` (str, http/https only), `format`  in  {markdown,text,html}, `clean` (strip boilerplate), `include_links` (keep hyperlinks), `extract_media` (also return the page's links + images lists), `timeout` (s).
-- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP) (+ `links`, `images` when `extract_media`).
+- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP, or an x.com/twitter.com post or profile read through FxTwitter, which also sets `metadata.structured` to the post/profile model) (+ `links`, `images` when `extract_media`).
 - **backing:** httpx static -> trafilatura -> readability fallback -> Crawl4AI/Playwright if thin/JS. **No truncation.**
 - **errors:** ssrf_blocked, fetch_failed, empty_content.
 
@@ -126,6 +127,13 @@ Structured academic-paper search (Semantic Scholar -> OpenAlex -> CrossRef). Fre
 - **out:** `{results:[{title,authors,year,venue,citations,doi,abstract,open_access_pdf?}], ...}` (+ `from_cache`).
 - **backing:** Semantic Scholar (one retry on 429) -> OpenAlex -> CrossRef; `source` reports which answered.
 - **errors:** search_backend_down, no_results.
+
+## `x_search(query, mode="top", limit=10, since=null, until=null)`
+X/Twitter posts by keyword, no X account (Layer 0 of `docs/plans/2026-10-30-argus-x-module-design.md`).
+- **in:** `query` (X search syntax), `mode` in {top, latest}, `limit` 1-50 (clamped), `since`/`until` `YYYY-MM-DD` (ASCII digits, real dates, inclusive, `since <= until`).
+- **out:** `{query, mode, source:"index", results:[{id,url,created_at,text,lang,author:{handle,name,verified,followers},metrics:{replies,reposts,likes,quotes,views,bookmarks},media:[{type,url}],quoted,in_reply_to,source}], count, degraded, degraded_reason, from_cache}`.
+- **backing:** SearXNG `site:x.com`/`site:twitter.com` -> status URLs deduped by id -> FxTwitter (`ARGUS_X_FXTWITTER_URL`, concurrency 4). Not real-time: `mode="latest"` sorts what the index holds and reports `degraded: true, degraded_reason: "index_only"`. Cache 300 s (latest) / 1800 s (top).
+- **errors:** schema_invalid, no_results, search_backend_down.
 
 ## `watch(url, webhook, interval_minutes=60, selector=null)`
 Register a watch: poll `url` (optionally a CSS/XPath `selector`) and POST a change event to `webhook` (e.g. Telegram). Webhook is SSRF-guarded at delivery. No paid equivalent.

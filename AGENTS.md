@@ -78,7 +78,7 @@ crawl4ai-setup && crawl4ai-doctor   # one-time Chromium for the browser tier
 
 ```
 src/argus/
-  server.py            # FastMCP app + the 20 tools + lifespan + /health + /metrics + auth
+  server.py            # FastMCP app + the 21 tools + lifespan + /health + /metrics + auth
   models.py            # err() structured-error helper + ERROR_CODES
   security/ssrf.py     # the trust boundary (100% covered)
   security/egress.py   # Chromium's loopback egress proxy (SSRF per connection, WARP routing)

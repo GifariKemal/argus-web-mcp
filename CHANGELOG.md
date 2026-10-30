@@ -3,7 +3,7 @@
 # CHANGELOG - Argus
 
 <img src="https://img.shields.io/badge/format-Keep_a_Changelog-2dd4bf?style=flat-square" alt="Keep a Changelog"/>
-<img src="https://img.shields.io/badge/tools-20-22c55e?style=flat-square" alt="20 tools"/>
+<img src="https://img.shields.io/badge/tools-21-22c55e?style=flat-square" alt="21 tools"/>
 <img src="https://img.shields.io/badge/tests-700+-3fb950?style=flat-square" alt="700+ tests"/>
 <img src="https://img.shields.io/badge/status-LIVE-16a34a?style=flat-square" alt="live"/>
 <img src="https://img.shields.io/badge/created-2026--06--24-0ea5e9?style=flat-square" alt="created"/>
@@ -15,6 +15,23 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 ---
 
 ## [Unreleased]
+
+## [0.4.35] - 2026-10-30 - X posts without an account (X module Phase A)
+
+### Added
+
+- **`x_search` (tool 21).** Finds X/Twitter posts by keyword with no X account: SearXNG
+  `site:x.com` / `site:twitter.com`, status URLs deduped by id, each post enriched through
+  FxTwitter (full text with t.co links expanded, author, date, metrics, media). Not real-time:
+  `mode="latest"` is flagged `degraded` (`index_only`). Dates validated as ASCII `YYYY-MM-DD`.
+- **`read` on x.com / twitter.com posts and profiles** goes to FxTwitter before the static hop
+  (`render_path: "api"`, `metadata.structured` = post/profile model); the x.com page itself is a
+  login-walled, duplicated shell. FxTwitter failure falls back to the normal ladder.
+- `ARGUS_X_FXTWITTER_URL` (default `https://api.fxtwitter.com`), reachability probe for it,
+  stages `fetch.x_api_ok|fail`, `x.index`, `x.fxtwitter`.
+- Design and research for the full X module (Layer 1 with one cookie account is a later phase):
+  `docs/plans/2026-10-30-argus-x-module-design.md`. FxTwitter/FxEmbed is MIT; Layer 1 credits
+  twscrape, Scweet and Tweety (all MIT).
 
 ## [0.4.34] - 2026-10-30 - CVE-clean images, COT official-API fallback, move to Coolify
 

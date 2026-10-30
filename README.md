@@ -5,7 +5,7 @@
 <br/>
 
 <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/MCP-Streamable_HTTP-2dd4bf?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP"/></a>
-<img src="https://img.shields.io/badge/tools-20-22c55e?style=for-the-badge" alt="20 tools"/>
+<img src="https://img.shields.io/badge/tools-21-22c55e?style=for-the-badge" alt="21 tools"/>
 <img src="https://img.shields.io/badge/tests-1026_passing-3fb950?style=for-the-badge&logo=pytest&logoColor=white" alt="tests"/>
 <img src="https://img.shields.io/badge/SSRF_coverage-100%25-16a34a?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="SSRF 100%"/>
 <img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
@@ -41,7 +41,7 @@
 
 - [Why Argus](#why-argus)
 - [Architecture](#architecture)
-- [The 20 tools](#the-20-tools)
+- [The 21 tools](#the-21-tools)
 - [Hard guarantees](#hard-guarantees)
 - [Quickstart (all-in-Docker)](#quickstart-all-in-docker)
 - [Quickstart (local)](#quickstart-local-no-docker-for-argus-itself)
@@ -71,7 +71,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 
 **Fetch strategy (cheap -> expensive):** httpx static -> trafilatura -> escalate to Crawl4AI/Playwright only when JS/thin -> Patchright stealth on anti-bot -> **Wayback archive** if the host is unreachable. Every hop is SSRF-guarded.
 
-## The 20 tools
+## The 21 tools
 
 <details open>
 <summary><b>Search &amp; discovery</b></summary>
@@ -83,6 +83,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 | `search` | Web search via SearXNG - categories (general/news/science/it), domain filters, safesearch, **hybrid lexical+semantic rerank**, recency boost, per-engine cooldown on throttle. The live fan-out is measured per host, not assumed: `bing`, `brave`, `google`, `google cse`, `duckduckgo web`, `yandex` |
 | `smart_search` | Auto-routes a query (deterministic, **no LLM**) -> github / scholar / news / it / general |
 | `scholar_search` | Structured academic search (Semantic Scholar -> CrossRef): citations, DOI, abstract, OA-PDF |
+| `x_search` | X/Twitter posts by keyword without an account (web index + FxTwitter): full text, author, date, metrics |
 | `github_search` | Structured GitHub `repositories`/`code`/`issues` + stars/language/sort |
 | `map_urls` | Discover a site's URLs (sitemap.xml / robots.txt / 1-hop links) |
 | `find_similar` | Semantically-related pages via **local embeddings** (Exa-style, no API) |
@@ -197,7 +198,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 
 | Path | What |
 |---|---|
-| `src/argus/` | the package - `server.py` (20 tools), `fetch/`, `extract/`, `security/ssrf.py`, `trading/`, `semantic.py`, `cache.py`, `watch.py` |
+| `src/argus/` | the package - `server.py` (21 tools), `fetch/`, `extract/`, `security/ssrf.py`, `trading/`, `semantic.py`, `cache.py`, `watch.py` |
 | `docs/` | [DESIGN](docs/00-DESIGN.md) / [RESEARCH](docs/01-RESEARCH.md) / [ROADMAP](docs/02-ROADMAP.md) / [TOOL-SPECS](docs/03-TOOL-SPECS.md) / [REFERENCES](docs/04-REFERENCES.md) / [COMPETITIVE-GAP](docs/05-COMPETITIVE-GAP.md) |
 | `benchmark/` | [harness](benchmark/README.md) + [RESULTS](benchmark/reports/RESULTS.md) + head-to-head |
 | `deploy/` | Cloudflare + compose runbook (Easypanel section historical; production on Coolify since 2026-10-30) ([README](deploy/README.md)) / [SECURITY-AUDIT](deploy/SECURITY-AUDIT.md) / `searxng/` settings / systemd + nginx + provision.sh + fail2ban (retired, kept as the panel-less path) |
@@ -207,7 +208,7 @@ Head-to-head vs Claude Code & Codex **native** web tools (4-way, n=25, identical
 
 **DEPLOYED LIVE.** Public HTTPS at **https://argus.gifariksuryo.xyz/mcp** (bearer auth) on the SURIOTA primary server, running as a **Coolify service** (since 2026-10-30; Easypanel on the previous VPS before that): the `argus` container serves uvicorn on `:8090`, the `searxng` one answers it over the compose network, and the `warp` one (Cloudflare WARP, compose network only) carries fetches of hosts that block the VPS IP (`ARGUS_EGRESS_PROXY_HOSTS`: Wayback, Reuters, WSJ, FXStreet), with the panel's Traefik terminating Let's Encrypt TLS on `:80`/`:443`. The domain is **Cloudflare-proxied** and Traefik answers the public router only for Cloudflare ranges, so the origin cannot be reached around the edge. `/health` is public, `/metrics` host-only. No push webhook: rollouts are built from `main` by hand.
 
-20 tools / **1026 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). No owner input is open: the Semantic Scholar key (`ARGUS_S2_API_KEY`) has been set since 2026-09-19. See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
+21 tools / **1152 offline tests** (+ browser, slow, and network extras) green / **SSRF 100%** (line + branch) / ruff clean / security-audited (no Critical/High). Optional and off by default: the LLM tier (`ARGUS_ENABLE_LLM`) and local-path PDF (`ARGUS_ALLOW_LOCAL_PDF`). No owner input is open: the Semantic Scholar key (`ARGUS_S2_API_KEY`) has been set since 2026-09-19. See [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md).
 
 <div align="center">
 <sub>Built for <b>PT Surya Inovasi Prioritas (SURIOTA)</b> / self-hosted / unlimited / owned</sub>
