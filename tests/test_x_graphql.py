@@ -346,3 +346,47 @@ def test_bad_cookie_values_turn_layer1_off(caplog):
 async def test_x_search_rejects_huge_queries(app_state):
     r = await server.x_search("a" * 501)
     assert r["code"] == "schema_invalid"
+
+
+# --- live findings 2026-10-30 ---------------------------------------------------------
+
+def test_page_load_sends_cookie_and_browser_ua_but_no_api_headers(monkeypatch):
+    monkeypatch.setattr(config, "X_AUTH_TOKEN", SECRET_AUTH)
+    monkeypatch.setattr(config, "X_CT0", SECRET_CT0)
+    page = graphql._page_headers()
+    assert set(page) == {"user-agent", "cookie"}  # API headers on the page answer 401
+    assert "Chrome/" in page["user-agent"] and SECRET_AUTH in page["cookie"]
+    assert "Chrome/" in graphql._cookie_headers()["user-agent"]
+
+
+async def test_bootstrap_finds_signing_script_past_the_bundle_cap(monkeypatch):
+    """The logged-in build lists ~900 chunks; the signing script sat at position 540."""
+    chunks = "".join(f'{i}:"chunk{i}",' for i in range(900)) + '900:"ondemand.s",'
+    hashes = "".join(f'{i}:"{i:016x}",' for i in range(901))
+    page = ('<script src="https://abs.twimg.com/responsive-web/client-web/main.abc1234a.js">'
+            f"</script><script>{{{chunks}}}{{{hashes}}}</script>")
+    fetched = []
+
+    async def fake_page(url, client):
+        return page
+
+    async def fake_fetch(url, *, client, timeout=30, **kw):
+        fetched.append(url)
+        body = BUNDLE if "/main." in url else "var x=1;" if "ondemand" not in url else "(a[1], 16)"
+        return {"final_url": url, "status": 200, "html": body, "render_path": "static"}
+
+    monkeypatch.setattr(graphql, "_page", fake_page)
+    monkeypatch.setattr(graphql, "fetch_static", fake_fetch)
+    monkeypatch.setattr(graphql.XClIdGen, "from_page",
+                        classmethod(lambda cls, p, js: cls([1] * 48, "k")))
+    boot = await graphql._bootstrap(None)
+    assert boot["qid"] == "AbCdEfGhIjKlMnOpQrStUv"
+    assert "/main." in fetched[0]
+    assert any("ondemand.s" in u for u in fetched)  # matched by URL, beyond _MAX_BUNDLES
+    assert len(fetched) < 50  # stopped scanning once everything was found
+
+
+def test_post_text_is_unescaped():
+    t = {"rest_id": "1", "legacy": {"full_text": "HRV &amp; cycling &lt;3",
+                                    "created_at": "Wed Oct 10 20:19:24 +0000 2018"}}
+    assert graphql.post_from_gql(t)["text"] == "HRV & cycling <3"

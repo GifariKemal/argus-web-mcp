@@ -13,6 +13,7 @@ Fallback queryId and features come from twscrape (MIT, (c) 2023 vladkens), commi
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import random
 import re
@@ -184,8 +185,20 @@ def status() -> dict:
     return {"x_account": _state, "x_manifest_age_s": age}
 
 
+# X serves its web app (and accepts the session) only for a browser; measured 2026-10-30:
+# the page with API headers answers 401, cookie + browser UA answers the logged-in app.
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/141.0.0.0 Safari/537.36")
+
+
+def _page_headers() -> dict:
+    """What a browser sends for the x.com page: the session cookie, no API headers."""
+    return {"user-agent": _UA, "cookie": f"auth_token={config.X_AUTH_TOKEN}; ct0={config.X_CT0}"}
+
+
 def _cookie_headers() -> dict:
     return {
+        "user-agent": _UA,
         "authorization": _BEARER,
         "cookie": f"auth_token={config.X_AUTH_TOKEN}; ct0={config.X_CT0}",
         "x-csrf-token": config.X_CT0,
@@ -243,12 +256,16 @@ async def _bootstrap(client) -> dict:
     record_stage("x.manifest_refresh")
     page = await _page("https://x.com/tesla", client)
     try:
-        scripts = get_scripts_list(page)[:_MAX_BUNDLES]
+        every = get_scripts_list(page)
     except XClIdError as e:
         raise _classify_page(e) from e
-    sem = asyncio.Semaphore(_BUNDLE_CONCURRENCY)
+    # The logged-in build lists ~900 chunks (measured 2026-10-30): the signing script is
+    # matched by URL over all of them; bodies are fetched main.js first, so the scan
+    # usually stops after the first concurrent batch.
     found: dict = {"qid": None, "features": None, "indices": next(
-        (s for s in scripts if INDICES_FILE_RE.search(s)), None)}
+        (s for s in every if INDICES_FILE_RE.search(s)), None)}
+    scripts = sorted(every, key=lambda u: "/main." not in u)[:_MAX_BUNDLES]
+    sem = asyncio.Semaphore(_BUNDLE_CONCURRENCY)
 
     async def scan(url: str) -> None:
         async with sem:
@@ -288,7 +305,7 @@ async def _page(url: str, client) -> str:
     await _get_limiter().acquire()  # an authenticated page load counts against the account
     try:
         res = await fetch_static(url, client=client, timeout=_REQ_TIMEOUT_S, max_redirects=0,
-                                 headers=_cookie_headers())
+                                 headers=_page_headers())
     except FetchError as e:
         raise _from_status(e.status, "X page") from e
     if res["status"] != 200:
@@ -437,7 +454,7 @@ def post_from_gql(t: dict, *, depth: int = 0) -> dict:
         "id": pid,
         "url": f"https://x.com/{handle}/status/{pid}",
         "created_at": _x_time(lg.get("created_at")),
-        "text": text.strip(),
+        "text": html.unescape(text).strip(),  # X escapes & < > in full_text
         "lang": lg.get("lang"),
         "author": {
             "handle": handle,

@@ -16,6 +16,26 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.37] - 2026-10-30 - X Layer 1 live with @srtargus
+
+### Fixed
+
+- **The x.com page load sent API headers and X answered 401** (`x_account_expired` on the
+  first live call). The page now carries only the session cookie and a browser UA, like a
+  browser; GraphQL calls send the browser UA too. Measured: cookie + browser UA -> 200 with
+  the logged-in app.
+- **The signing script sat past the 300-bundle cap.** The logged-in build lists ~900 chunks
+  (`ondemand.s` at position 540); it is now matched by URL over all of them and bundle bodies
+  are fetched `main.js` first, so a bootstrap is a handful of requests (13 s measured).
+- Post text is HTML-unescaped (X's `full_text` escapes `& < >`).
+
+### Measured
+
+- First live run: manifest from `main.js` (queryId `3fEctOs2-FvTB7_mvm1hrQ`, 42 feature
+  switches); twscrape's pinned fallback `BYppgupFFS2yqVmmRNjlsw` is already stale, so the
+  live manifest is what keeps Layer 1 working. SearchTimeline `latest` returned current
+  posts, `/health` `x_account: ok`.
+
 ## [0.4.36] - 2026-10-30 - X Layer 1 (live search with one account), reddit threads with comments
 
 ### Added
