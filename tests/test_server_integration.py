@@ -1016,12 +1016,12 @@ async def test_list_watches_oserror_returns_err_not_raise(app_state, monkeypatch
     assert r["code"] == "fetch_failed"
 
 
-def test_registered_tool_set_is_twenty():
-    """Offline guard (no `browser` marker): the registration tuple holds exactly 20 tools,
+def test_registered_tool_set_is_twenty_one():
+    """Offline guard (no `browser` marker): the registration tuple holds exactly 21 tools,
     so the offline suite enforces the count even though the in-memory MCP listing is
     browser-marked."""
-    assert len(server.TOOLS) == 20
-    assert len({fn.__name__ for fn in server.TOOLS}) == 20
+    assert len(server.TOOLS) == 21
+    assert len({fn.__name__ for fn in server.TOOLS}) == 21
 
 
 async def test_scholar_search_delegates(app_state, monkeypatch):
