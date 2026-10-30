@@ -21,6 +21,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -71,6 +72,7 @@ from .trading.forexfactory import ForexFactoryError
 from .trading.forexfactory import forexfactory_calendar as _ff_calendar
 from .trading.news import news_sentiment_feed as _news_feed
 from .watch import WatchStore, _select_value, poll_due
+from .x.index import search_posts as _x_search_posts
 
 # Injected into every client session, even when the tools themselves are deferred, so it
 # carries routing and the contract only; each tool's own description has the details.
@@ -1162,6 +1164,65 @@ async def github_search(
     return res
 
 
+_X_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _x_date(value: str | None) -> date | None:
+    """``YYYY-MM-DD`` (ASCII digits, a real calendar date) -> date; ValueError otherwise."""
+    if value is None:
+        return None
+    if not _X_DATE.fullmatch(value):
+        raise ValueError(f"{value!r} is not YYYY-MM-DD")
+    return date.fromisoformat(value)
+
+
+async def x_search(
+    query: Annotated[str, Field(description=(
+        "X search syntax, e.g. 'esp32 modbus' or 'from:espressif lang:en'"))],
+    mode: Literal["top", "latest"] = "top",
+    limit: Annotated[int, Field(description="posts wanted, 1-50 (clamped)")] = 10,
+    since: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
+    until: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
+) -> dict:
+    """Search X/Twitter posts by keyword (X search syntax). No account: finds indexed posts
+    via web search and returns full text, author, date and metrics; not real-time
+    (mode='latest' is flagged degraded). Read one post or profile with `read` on its
+    x.com URL."""
+    s = _state()
+    if mode not in ("top", "latest"):
+        return err("schema_invalid", f"unknown mode {mode!r} (top|latest)")
+    try:
+        d_since, d_until = _x_date(since), _x_date(until)
+    except ValueError as e:
+        return err("schema_invalid", "bad date", str(e))
+    if d_since and d_until and d_since > d_until:
+        return err("schema_invalid", "since is after until", f"{since} > {until}")
+    limit = max(1, min(limit, 50))
+    ck = s.cache.key("x_search:" + query,
+                     {"mode": mode, "limit": limit, "since": since, "until": until})
+    cached = s.cache.get(ck, 300 if mode == "latest" else 1800)
+    if cached is not None:
+        return {**cached, "from_cache": True}
+
+    try:
+        found = await _x_search_posts(query, mode=mode, limit=limit, since=d_since,
+                                      until=d_until, search_fn=searxng_search,
+                                      client=s.client)
+    except SearchError as e:
+        if e.code == "no_results":
+            return err("no_results", "no X posts found", query)
+        return err("search_backend_down", "search backend unavailable", _safe_detail(e))
+    except Exception as e:  # noqa: BLE001 - every tool boundary must return structured errors
+        return err("search_backend_down", "x_search failed", _safe_detail(e))
+    if not found["results"]:
+        return err("no_results", "no X posts found", query)
+
+    res = {"query": query, "mode": mode, **found, "count": len(found["results"]),
+           "from_cache": False}
+    s.cache.put(ck, res, source="search")
+    return res
+
+
 async def scholar_search(
     query: str, limit: int = 10, year_from: int | None = None, open_access: bool = False
 ) -> dict:
@@ -1359,6 +1420,7 @@ class _MetricsMiddleware(Middleware):
 TOOLS = (
     read, search, smart_search, read_pdf, scrape, batch_read, extract_structured,
     crawl, screenshot, research, map_urls, find_similar, github_search, scholar_search,
+    x_search,
     watch, list_watches, unwatch,
     forexfactory_calendar, cot_report, news_sentiment_feed,
 )

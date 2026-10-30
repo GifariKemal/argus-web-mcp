@@ -18,7 +18,7 @@ async def _tools() -> dict:
 
 async def test_every_tool_carries_annotations():
     tools = await _tools()
-    assert len(tools) == 20
+    assert len(tools) == 21
     for name, t in tools.items():
         ann = t.annotations
         assert ann is not None, name
