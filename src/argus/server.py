@@ -1189,7 +1189,8 @@ async def x_search(
     """Search X/Twitter posts by keyword: full text, author, date and metrics. With the
     server's X account (source='graphql') results are live X search; without it, or when
     the account is paced or failing, indexed posts via web search (source='index', not
-    real-time, flagged degraded). Read one post or profile with `read` on its x.com URL."""
+    real-time, flagged degraded). `read` on an x.com post URL gives the post with its thread and
+    replies (with the account) and on a profile URL the profile with its latest posts."""
     s = _state()
     if mode not in ("top", "latest"):
         return err("schema_invalid", f"unknown mode {mode!r} (top|latest)")

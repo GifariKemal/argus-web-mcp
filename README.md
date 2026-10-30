@@ -83,7 +83,7 @@ We surveyed the 12 leading paid/free web tools. **All** meter requests, truncate
 | `search` | Web search via SearXNG - categories (general/news/science/it), domain filters, safesearch, **hybrid lexical+semantic rerank**, recency boost, per-engine cooldown on throttle. The live fan-out is measured per host, not assumed: `bing`, `brave`, `google`, `google cse`, `duckduckgo web`, `yandex` |
 | `smart_search` | Auto-routes a query (deterministic, **no LLM**) -> github / scholar / news / it / general |
 | `scholar_search` | Structured academic search (Semantic Scholar -> CrossRef): citations, DOI, abstract, OA-PDF |
-| `x_search` | X/Twitter posts by keyword without an account (web index + FxTwitter): full text, author, date, metrics |
+| `x_search` | X/Twitter posts by keyword: live X search with the server's X account, else web index + FxTwitter; full text, author, date, metrics |
 | `github_search` | Structured GitHub `repositories`/`code`/`issues` + stars/language/sort |
 | `map_urls` | Discover a site's URLs (sitemap.xml / robots.txt / 1-hop links) |
 | `find_similar` | Semantically-related pages via **local embeddings** (Exa-style, no API) |

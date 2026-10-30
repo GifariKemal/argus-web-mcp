@@ -16,6 +16,41 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.38] - 2026-10-30 - read x.com through the account: threads, replies, profiles; ct0 rotation
+
+### Added
+
+- **`read` on x.com through the X account (Layer 1).** A post URL returns the post with the
+  thread above it and the first page of replies (TweetDetail); a profile URL returns the
+  profile with its 20 latest posts (UserByScreenName + UserTweets, two paced calls).
+  `metadata.structured` = the post model plus `thread`/`replies`, or the profile model plus
+  `posts_latest`. Any account failure (or Layer 1 off) falls back to FxTwitter as before.
+  Measured live: an Espressif post with 33 replies, @EspressifSystem with 20 latest posts.
+- **Multi-operation manifest.** queryId + feature switches for SearchTimeline, TweetDetail,
+  UserByScreenName and UserTweets read live from the bundles (all four found in `main.js`
+  on 2026-10-30), pinned fallbacks per operation.
+- **ct0 rotation kept.** When X rotates `ct0` with Set-Cookie, the new value is used at
+  once and saved to `~/.argus/x_session.json` (mode 600, on the `argus-data` volume) bound
+  to hashes of the env cookies, so a restart keeps it and freshly copied cookies replace it.
+  `fetch_static` returns `set_cookie` only to callers that sent headers.
+- Fixtures `gql_tweet_detail.json`, `gql_user.json`, `gql_user_tweets.json` trimmed from
+  twscrape's MIT test data.
+
+### Safety (independent review before release)
+
+- The read path never bootstraps or force-refreshes the manifest: with no fresh manifest a
+  read uses FxTwitter and the manifest builds in a background task, so a read timeout can
+  no longer cancel a bootstrap halfway or turn a healthy FxTwitter read into an error.
+  Reads through the account get 15 s, then FxTwitter.
+- Reads use at most 60% of the account's window and daily budget, so `x_search` keeps room;
+  X errors for a locked or expired account now cool it 15 min instead of re-sending its
+  cookies on every read; Argus's own pacing no longer overwrites `x_account` on /health.
+- Posts and profiles of protected accounts are never returned (the bot account may follow
+  one; its posts are not ours to hand to every client of the shared read cache).
+- Reposts come back as the original post plus `reposted_by`, not the 140-char `RT @...`.
+- Bundle sweep stops 30 bundles after the search and thread operations are found
+  (bootstrap 13 s -> 1.4 s measured); a failed session-file write leaves no temp file.
+
 ## [0.4.37] - 2026-10-30 - X Layer 1 live with @srtargus
 
 ### Fixed

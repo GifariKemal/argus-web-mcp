@@ -35,7 +35,7 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 ## `read(url, format="markdown", clean=true, include_links=false, extract_media=false, timeout=60)`
 URL -> clean main content.
 - **in:** `url` (str, http/https only), `format`  in  {markdown,text,html}, `clean` (strip boilerplate), `include_links` (keep hyperlinks), `extract_media` (also return the page's links + images lists), `timeout` (s).
-- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP, or an x.com/twitter.com post or profile read through FxTwitter, which also sets `metadata.structured` to the post/profile model) (+ `links`, `images` when `extract_media`).
+- **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP, or an x.com/twitter.com post or profile, which also sets `metadata.structured` to the post/profile model: with the X account (Layer 1) a post comes with `thread` and `replies` and a profile with `posts_latest`, else FxTwitter gives the post or profile alone) (+ `links`, `images` when `extract_media`).
 - **backing:** httpx static -> trafilatura -> readability fallback -> Crawl4AI/Playwright if thin/JS. **No truncation.**
 - **errors:** ssrf_blocked, fetch_failed, empty_content.
 

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from ..models import record_stage
 from ..security.ssrf import SSRFError
+from ..x import graphql as x_graphql
 from ..x.fxtwitter import FX_TIMEOUT_S, fetch_x, x_target
 from .adapters import (
     fetch_npm,
@@ -134,6 +135,11 @@ async def _do_fetch(
     # X answers its post pages 200 with a login-walled, duplicated shell; FxTwitter has the
     # post itself. Unlike the adapters below this runs before the static hop.
     if x_target(url):
+        # With the X account: post + thread + replies, or profile + latest posts.
+        api = await x_graphql.fetch_x_account(url, client=client, timeout=timeout)
+        if api is not None:
+            record_stage("fetch.x_account_ok")
+            return api
         api = await fetch_x(url, client=client, timeout=min(timeout, FX_TIMEOUT_S))
         if api is not None:
             record_stage("fetch.x_api_ok")

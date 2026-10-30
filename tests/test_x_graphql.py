@@ -8,6 +8,7 @@ transaction id the original twscrape code computed for it (seeded salt, fixed cl
 import json
 import random
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -49,6 +50,14 @@ def test_xclid_rejects_logged_out_and_odd_pages():
 BUNDLE = ('e.exports={queryId:"AbCdEfGhIjKlMnOpQrStUv",operationName:"SearchTimeline",'
           'operationType:"query",metadata:{featureSwitches:["rweb_video_screen_enabled",'
           '"brand_new_flag"],fieldToggles:[]}}')
+
+
+ALL_OPS = BUNDLE + "".join(
+    f'e.exports={{queryId:"{q}",operationName:"{op}",operationType:"query",'
+    'metadata:{featureSwitches:["rweb_video_screen_enabled"],fieldToggles:[]}}'
+    for op, q in (("TweetDetail", "TwEeTdEtAiLqUeRyId1234"),
+                  ("UserByScreenName", "UsErByScReEnNaMeId1234"),
+                  ("UserTweets", "UsErTwEeTsQuErYiD12345")))
 
 
 def test_manifest_reads_query_id_and_features_from_bundle():
@@ -133,9 +142,17 @@ def test_raw_query_until_is_inclusive():
 
 # --- calls, errors, secrets ---------------------------------------------------------
 
+def _ops(qid: str = "Q" * 22) -> dict:
+    return {op: (qid, {"f": True}) for op in graphql.OPS}
+
+
 @pytest.fixture
-def layer1(monkeypatch):
-    """Layer 1 on with fake cookies, a ready manifest and no pacing sleeps."""
+def layer1(monkeypatch, tmp_path):
+    """Layer 1 on with fake cookies, a ready manifest, no pacing sleeps, and a session
+    file in tmp (never the real ~/.argus)."""
+    monkeypatch.setattr(graphql, "SESSION_PATH", tmp_path / "x_session.json")
+    monkeypatch.setattr(graphql, "_ct0_live", None)
+    monkeypatch.setattr(graphql, "_session_loaded", False)
     monkeypatch.setattr(config, "X_AUTH_TOKEN", SECRET_AUTH)
     monkeypatch.setattr(config, "X_CT0", SECRET_CT0)
     monkeypatch.setattr(graphql.asyncio, "sleep", _no_sleep)
@@ -146,8 +163,8 @@ def layer1(monkeypatch):
     async def fake_boot(client):
         boots.append(1)
         # 700 s old: past the forced-refresh floor, well inside the 6 h TTL
-        return {"gen": xclid.XClIdGen([1] * 48, "k"), "qid": "Q" * 22,
-                "features": {"f": True}, "at": graphql.time.monotonic() - 700}
+        return {"gen": xclid.XClIdGen([1] * 48, "k"), "ops": _ops(),
+                "at": graphql.time.monotonic() - 700}
 
     monkeypatch.setattr(graphql, "_boot", None)
     monkeypatch.setattr(graphql, "_boot_fail", None)
@@ -164,9 +181,9 @@ def _fake_fetch(monkeypatch, answers):
         a = answers.pop(0)
         if isinstance(a, Exception):
             raise a
-        status, body = a
+        status, body, *cookies = a
         return {"final_url": url, "status": status, "html": json.dumps(body),
-                "render_path": "static"}
+                "render_path": "static", "set_cookie": cookies[0] if cookies else []}
 
     monkeypatch.setattr(graphql, "fetch_static", fake)
     return calls
@@ -265,7 +282,9 @@ async def test_x_search_tool_falls_back_to_index_on_account_errors(app_state, mo
     assert r["source"] == "index" and r["degraded"] is True
     assert r["degraded_reason"] == "x_account_locked"
     assert SECRET_AUTH not in json.dumps(r) and SECRET_CT0 not in json.dumps(r)
-    # a transient fallback is not cached
+    assert graphql._get_limiter().wait_needed() > 800  # a locked account cools
+    # a transient fallback is not cached (cooldown over, e.g. fresh cookies + restart)
+    monkeypatch.setattr(graphql, "_limiter", None)
     _fake_fetch(monkeypatch, [(200, {"data": _search_data()})])
     assert (await server.x_search("esp32", limit=3))["source"] == "graphql"
 
@@ -274,8 +293,7 @@ async def test_x_search_tool_falls_back_to_index_on_account_errors(app_state, mo
 
 async def test_forced_refresh_of_a_young_manifest_is_refused(layer1, monkeypatch):
     monkeypatch.setattr(graphql, "_boot", {"gen": xclid.XClIdGen([1] * 48, "k"),
-                                           "qid": "Q" * 22, "features": {},
-                                           "at": graphql.time.monotonic()})
+                                           "ops": _ops(), "at": graphql.time.monotonic()})
     _fake_fetch(monkeypatch, [(400, {})])
     with pytest.raises(XError) as e:
         await graphql.search_posts("x" * 400, mode="top", limit=2, since=None, until=None,
@@ -289,7 +307,7 @@ async def test_bootstrap_is_single_flight(layer1, monkeypatch):
     async def slow_boot(client):
         calls.append(1)
         await graphql.asyncio.sleep(0)
-        return {"gen": None, "qid": "Q" * 22, "features": {}, "at": graphql.time.monotonic()}
+        return {"gen": None, "ops": _ops(), "at": graphql.time.monotonic()}
 
     monkeypatch.setattr(graphql, "_bootstrap", slow_boot)
     import asyncio
@@ -313,7 +331,7 @@ async def test_failed_bootstrap_backs_off_and_cools_the_account(layer1, monkeypa
 
 
 async def test_stale_manifest_survives_an_x_side_failure(layer1, monkeypatch):
-    old = {"gen": None, "qid": "OLD" * 5, "features": {},
+    old = {"gen": None, "ops": _ops("OLD" * 5),
            "at": graphql.time.monotonic() - graphql.BOOT_TTL_S - 1}
     monkeypatch.setattr(graphql, "_boot", old)
 
@@ -372,7 +390,7 @@ async def test_bootstrap_finds_signing_script_past_the_bundle_cap(monkeypatch):
 
     async def fake_fetch(url, *, client, timeout=30, **kw):
         fetched.append(url)
-        body = BUNDLE if "/main." in url else "var x=1;" if "ondemand" not in url else "(a[1], 16)"
+        body = ALL_OPS if "/main." in url else "var x=1;" if "ondemand" not in url else "(a[1], 16)"
         return {"final_url": url, "status": 200, "html": body, "render_path": "static"}
 
     monkeypatch.setattr(graphql, "_page", fake_page)
@@ -380,7 +398,9 @@ async def test_bootstrap_finds_signing_script_past_the_bundle_cap(monkeypatch):
     monkeypatch.setattr(graphql.XClIdGen, "from_page",
                         classmethod(lambda cls, p, js: cls([1] * 48, "k")))
     boot = await graphql._bootstrap(None)
-    assert boot["qid"] == "AbCdEfGhIjKlMnOpQrStUv"
+    assert boot["ops"]["SearchTimeline"] == ("AbCdEfGhIjKlMnOpQrStUv", {
+        "rweb_video_screen_enabled": True, "brand_new_flag": False})
+    assert boot["ops"]["UserTweets"][0] == "UsErTwEeTsQuErYiD12345"
     assert "/main." in fetched[0]
     assert any("ondemand.s" in u for u in fetched)  # matched by URL, beyond _MAX_BUNDLES
     assert len(fetched) < 50  # stopped scanning once everything was found
@@ -390,3 +410,148 @@ def test_post_text_is_unescaped():
     t = {"rest_id": "1", "legacy": {"full_text": "HRV &amp; cycling &lt;3",
                                     "created_at": "Wed Oct 10 20:19:24 +0000 2018"}}
     assert graphql.post_from_gql(t)["text"] == "HRV & cycling <3"
+
+
+# --- read through the account: thread, profile, ct0 rotation ----------------------------
+
+def _fixture_data(name: str) -> dict:
+    return json.loads((FIX / f"{name}.json").read_text(encoding="utf-8"))["data"]
+
+
+def test_parse_thread_profile_and_user_posts():
+    th = graphql.parse_thread(_fixture_data("gql_tweet_detail"), "1649191520250245121")
+    assert th["author"]["handle"] == "XDevelopers" and th["thread"] == []
+    assert [p["in_reply_to"] for p in th["replies"]][:1] == ["1649191520250245121"]
+    assert len(th["replies"]) == 4
+    assert graphql.parse_thread(_fixture_data("gql_tweet_detail"), "1") is None
+    user = graphql.parse_user(_fixture_data("gql_user"))
+    assert user["handle"] == "XDevelopers" and user["followers"] == 697884
+    assert user["id"] == "2244994945" and user["url"] == "https://x.com/XDevelopers"
+    assert graphql.parse_user({"user": {"result": {"__typename": "UserUnavailable"}}}) is None
+    posts = graphql.parse_user_tweets(_fixture_data("gql_user_tweets"))
+    assert len(posts) == 3
+    rt = [p for p in posts if p.get("reposted_by")]
+    assert len(rt) == 1 and rt[0]["reposted_by"] == "XDevelopers"
+    assert rt[0]["author"]["handle"] != "XDevelopers" and not rt[0]["text"].startswith("RT @")
+
+
+async def test_read_profile_makes_two_calls_and_fetch_renders_it(layer1, monkeypatch):
+    await graphql._ensure_boot(None)
+    calls = _fake_fetch(monkeypatch, [(200, {"data": _fixture_data("gql_user")}),
+                                      (200, {"data": _fixture_data("gql_user_tweets")})])
+    res = await graphql.fetch_x_account("https://x.com/XDevelopers", client=None)
+    assert ["UserByScreenName" in calls[0]["url"], "UserTweets" in calls[1]["url"]] == [True,
+                                                                                        True]
+    assert "%222244994945%22" in calls[1]["url"]  # userId from the first answer
+    assert res["render_path"] == "api" and res["structured"]["posts"] == 4379
+    assert len(res["structured"]["posts_latest"]) == 3 and "<h2>Posts</h2>" in res["html"]
+
+
+async def test_read_status_renders_thread_and_replies(layer1, monkeypatch):
+    await graphql._ensure_boot(None)
+    calls = _fake_fetch(monkeypatch, [(200, {"data": _fixture_data("gql_tweet_detail")})])
+    res = await graphql.fetch_x_account(
+        "https://x.com/XDevelopers/status/1649191520250245121", client=None)
+    assert "focalTweetId" in unquote(calls[0]["url"])
+    assert "fieldToggles" in calls[0]["url"]
+    assert res["structured"]["id"] == "1649191520250245121"
+    assert "<h2>Replies</h2>" in res["html"] and "ashevat" in res["html"]
+
+
+async def test_fetch_x_account_degrades_to_none(layer1, monkeypatch):
+    await graphql._ensure_boot(None)
+    _fake_fetch(monkeypatch, [(200, {"errors": [{"code": 326}]})])
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+    assert graphql.status()["x_account"] == "locked"
+    assert await graphql.fetch_x_account("https://example.com/a", client=None) is None
+    monkeypatch.setattr(config, "X_AUTH_TOKEN", "")
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+
+
+async def test_fetch_ladder_prefers_the_account_for_x_urls(layer1, monkeypatch):
+    from argus.fetch import core
+
+    async def account(url, *, client, timeout=15):
+        return {"final_url": url, "status": 200, "html": "<p>t</p>", "render_path": "api",
+                "structured": {"id": "1"}}
+
+    async def no_fx(*a, **k):
+        raise AssertionError("FxTwitter must not run when the account answered")
+
+    monkeypatch.setattr(core.x_graphql, "fetch_x_account", account)
+    monkeypatch.setattr(core, "fetch_x", no_fx)
+    res = await core.fetch("https://x.com/a/status/1", client=None)
+    assert res["structured"] == {"id": "1"}
+
+
+ROTATED = "f" * 160
+
+
+async def test_rotated_ct0_is_used_persisted_and_bound_to_env(layer1, monkeypatch):
+    _fake_fetch(monkeypatch, [(200, {"data": _search_data()},
+                               [f"ct0={ROTATED}; Max-Age=21600; Path=/; Domain=.x.com"])])
+    await graphql.search_posts("a", mode="top", limit=1, since=None, until=None, client=None)
+    assert graphql._ct0() == ROTATED and graphql._cookie_headers()["x-csrf-token"] == ROTATED
+    saved = graphql.SESSION_PATH.read_text(encoding="utf-8")
+    assert ROTATED in saved and SECRET_AUTH not in saved and SECRET_CT0 not in saved
+    # a restart picks it up ...
+    monkeypatch.setattr(graphql, "_ct0_live", None)
+    monkeypatch.setattr(graphql, "_session_loaded", False)
+    assert graphql._ct0() == ROTATED
+    # ... but freshly copied env cookies win over the old rotation
+    monkeypatch.setattr(graphql, "_ct0_live", None)
+    monkeypatch.setattr(graphql, "_session_loaded", False)
+    monkeypatch.setattr(config, "X_CT0", "NEWENVCT0" + "1" * 20)
+    assert graphql._ct0() == "NEWENVCT0" + "1" * 20
+
+
+async def test_odd_set_cookie_values_are_ignored(layer1, monkeypatch):
+    _fake_fetch(monkeypatch, [(200, {"data": _search_data()},
+                               ["ct0=short", "other=1", "ct0=bad\r\nvalue" + "x" * 20, 7])])
+    await graphql.search_posts("a", mode="top", limit=1, since=None, until=None, client=None)
+    assert graphql._ct0() == SECRET_CT0 and not graphql.SESSION_PATH.exists()
+
+
+# --- second review: read never bootstraps, keeps a budget share, skips protected -------
+
+async def test_read_without_manifest_uses_fxtwitter_and_warms_in_background(layer1,
+                                                                            monkeypatch):
+    calls = _fake_fetch(monkeypatch, [])
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+    assert calls == []  # no account request on the read path
+    await graphql._warm_task
+    assert graphql._boot is not None and len(layer1) == 1
+
+
+async def test_read_stops_at_its_share_of_the_budget(layer1, monkeypatch):
+    await graphql._ensure_boot(None)
+    lim = graphql._get_limiter()
+    now = lim.clock()
+    lim.calls.extend([now] * int(lim.per_window * graphql._READ_SHARE))
+    calls = _fake_fetch(monkeypatch, [])
+    assert await graphql.fetch_x_account("https://x.com/a/status/1", client=None) is None
+    assert calls == [] and lim.has_room(0.99)  # x_search still has room
+
+
+async def test_internal_pacing_does_not_overwrite_account_state(layer1, monkeypatch):
+    graphql._get_limiter().cool(60)
+    monkeypatch.setattr(graphql, "_state", "ok")
+    with pytest.raises(XError) as e:
+        await graphql.search_posts("a", mode="top", limit=1, since=None, until=None,
+                                   client=None)
+    assert e.value.code == "x_rate_limited" and e.value.internal
+    assert graphql.status()["x_account"] == "ok"
+
+
+def test_protected_authors_are_never_returned():
+    data = _search_data()
+    entries = data["search_by_raw_query"]["search_timeline"]["timeline"]["instructions"][0][
+        "entries"]
+    user = entries[0]["content"]["itemContent"]["tweet_results"]["result"]["core"][
+        "user_results"]["result"]
+    user["privacy"] = {"protected": True}
+    posts, _ = graphql.parse_search(data)
+    assert "Tesla" not in [p["author"]["handle"] for p in posts] and len(posts) == 2
+    u = _fixture_data("gql_user")
+    u["user"]["result"]["privacy"] = {"protected": True}
+    assert graphql.parse_user(u) is None

@@ -114,7 +114,7 @@ async def fx_user(handle: str, *, client, timeout: float = 30) -> dict | None:
         return None
 
 
-def _post_block(p: dict) -> str:
+def post_block(p: dict) -> str:
     e = html.escape
     a = p["author"]
     m = p["metrics"]
@@ -122,7 +122,7 @@ def _post_block(p: dict) -> str:
     stats = ", ".join(f"{k} {v}" for k, v in m.items() if v is not None)
     media = "".join(f'<li><a href="{e(x["url"] or "")}">{e(x["type"] or "media")}</a></li>'
                     for x in p["media"])
-    quoted = f"<blockquote>{_post_block(p['quoted'])}</blockquote>" if p["quoted"] else ""
+    quoted = f"<blockquote>{post_block(p['quoted'])}</blockquote>" if p["quoted"] else ""
     return (f"<p><strong>{e(a['name'])} (@{e(a['handle'])})</strong> {e(p['created_at'] or '')}</p>"
             f"<p>{text}</p><p>{e(stats)}</p>"
             + (f"<ul>{media}</ul>" if media else "") + quoted)
@@ -134,7 +134,7 @@ def render_html(post: dict | None = None, user: dict | None = None) -> str:
     e = html.escape
     if post is not None:
         title = f"@{post['author']['handle']}: {post['text'][:80]}"
-        body = _post_block(post)
+        body = post_block(post)
     else:
         u = user or {}
         title = f"{u.get('name', '')} (@{u.get('handle', '')})"

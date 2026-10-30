@@ -298,12 +298,15 @@ async def fetch_static(
             "blocked_by_antibot", f"status {resp.status_code} (challenge page)",
             status=resp.status_code,
         )
-    return {
+    res = {
         "final_url": str(resp.url),
         "status": resp.status_code,
         "html": html,
         "render_path": "static",
     }
+    if headers:  # a credentialed caller may need its session cookies rotated (X ct0)
+        res["set_cookie"] = resp.headers.get_list("set-cookie")
+    return res
 
 
 async def fetch_bytes(
