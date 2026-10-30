@@ -3,7 +3,7 @@
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
 ## Snapshot (updated 2026-10-30)
-**0.4.35 (2026-10-30):** X module Phase A: `x_search` (tool 21) and `read` on x.com via FxTwitter, no X account. Layer 1 (one cookie account, real-time search) waits for the bot account to age; plan in `docs/plans/2026-10-30-argus-x-module-design.md`. 1152 offline tests.
+**0.4.35 (2026-10-30):** X module Phase A: `x_search` (tool 21) and `read` on x.com via FxTwitter, no X account. Layer 1 (one cookie account, real-time search) waits for the bot account to age; plan in `docs/plans/2026-10-30-argus-x-module-design.md`. 1167 offline tests, SSRF 100%, ruff clean.
 
 **0.4.34 (2026-10-30):** moved to Coolify on the SURIOTA primary server (Easypanel stack, webhook and old systemd units on the previous VPS removed; `main` is the only branch and a push no longer deploys). trivy CRITICAL/HIGH fixable: argus 8/32 -> 0/0, searxng 1/0 -> 0/0. `cot_report` falls back to the official CFTC API. 1108 offline tests, SSRF 100%, ruff clean; live 20/20 tools. Details: [`CHANGELOG.md`](../CHANGELOG.md).
 
