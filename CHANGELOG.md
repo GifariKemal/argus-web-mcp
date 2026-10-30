@@ -16,6 +16,54 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.36] - 2026-10-30 - X Layer 1 (live search with one account), reddit threads with comments
+
+### Added
+
+- **`x_search` Layer 1 (opt-in).** With `ARGUS_X_AUTH_TOKEN` + `ARGUS_X_CT0` (one account's
+  browser cookies, set in the panel env) `x_search` calls X web GraphQL SearchTimeline:
+  real-time `latest`, X operators (`from:`, `lang:`, `since:`), `source: "graphql"`. The
+  queryId and feature switches are read live from X's bundles (pinned fallback), the
+  `x-client-transaction-id` comes from `x/xclid.py` (vendored from twscrape, MIT; verified
+  identical to the original on a fixed vector and 3000 fuzz inputs). Pacing per account:
+  50 calls / 15 min, 300 / day (`ARGUS_X_MAX_PER_WINDOW`, `ARGUS_X_DAILY_REQUESTS`), 1-3 s
+  jittered gap, 15-min cooldown on X error 88 or HTTP 429/403; the authenticated page load
+  of a manifest refresh is paced too. Bootstrap is single-flight, a failed one backs off
+  15 min (a stale manifest keeps serving when X changed, not the account), and a forced
+  refresh of a manifest under 10 min old is refused, so a request X rejects cannot turn
+  each call into a page load plus bundle sweep; queries over 500 chars are `schema_invalid`.
+  Any account failure (paced, expired, locked, rejected, schema changed) falls back to the
+  index tier with `degraded_reason` = the X code; loopback `/health` shows `x_account` and
+  `x_manifest_age_s`. Cookies go out only to x.com with `max_redirects=0`, are validated at
+  startup (malformed = Layer 1 off, value never echoed) and never appear in errors (tested).
+  `read` on x.com stays on FxTwitter (no account use). Not yet: TweetDetail/profile
+  timelines, persisting a rotated `ct0` (a stale one surfaces as `x_account_rejected`).
+- **Reddit threads read with their comments.** `read` on `/r/<sub>/comments/<id>` takes the
+  thread's Atom feed before the page (post + top comments as HTML); the page itself came
+  back as a JS shell whose comments the extractor lost. A feed 429 pauses the adapter 60 s
+  and reads take the normal path meanwhile.
+- `fetch_static(headers=..., api=...)`: extra headers for callers that must send them
+  (credentials only with `max_redirects=0`), and `api=True` for known JSON/feed endpoints
+  (X GraphQL, the reddit feed) to skip the challenge-page body heuristic, which read a short
+  answer quoting "access denied" in user text as a wall. Other callers are unchanged.
+
+### Changed
+
+- `benchmark/run_compare.py` preflights the configured `ARGUS_SEARXNG_URL` instead of a
+  hard-coded `127.0.0.1:8888`, so the sweep runs inside the production container.
+
+### Measured from the primary server (2026-10-30)
+
+- medium and quora articles read fine through the browser tier from the new IP; npmjs via the
+  registry adapter. investing.com articles read through Wayback when archived; fresh ones are
+  blocked for every free route tried (Chromium direct and via WARP: 403 with a 154-byte body
+  on all subdomains; Wayback Save Page Now 520; Google AMP cache has no copy).
+- Engines: bing, google cse, duckduckgo web, yandex answer; brave was suspended by SearXNG
+  for "too many requests" at the time of the check; google answers "access denied" (already
+  off in production).
+- `research` over the 40 compare ids: 40/40 with 5 sources each, median 8.4k words per
+  bundle, p50 6.6 s, p95 10.3 s, max 10.7 s.
+
 ## [0.4.35] - 2026-10-30 - X posts without an account (X module Phase A)
 
 ### Added

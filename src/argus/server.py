@@ -72,6 +72,7 @@ from .trading.forexfactory import ForexFactoryError
 from .trading.forexfactory import forexfactory_calendar as _ff_calendar
 from .trading.news import news_sentiment_feed as _news_feed
 from .watch import WatchStore, _select_value, poll_due
+from .x import graphql as _x_gql
 from .x.index import search_posts as _x_search_posts
 
 # Injected into every client session, even when the tools themselves are deferred, so it
@@ -1178,16 +1179,17 @@ def _x_date(value: str | None) -> date | None:
 
 async def x_search(
     query: Annotated[str, Field(description=(
-        "keywords, e.g. 'esp32 modbus gateway'; X search operators are not applied "
-        "without an account"))],
+        "keywords, e.g. 'esp32 modbus gateway'; X search operators (from:, lang:) "
+        "work only when the server has an X account (source='graphql')"))],
     mode: Literal["top", "latest"] = "top",
     limit: Annotated[int, Field(description="posts wanted, 1-50 (clamped)")] = 10,
     since: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
     until: Annotated[str | None, Field(description="YYYY-MM-DD, inclusive")] = None,
 ) -> dict:
-    """Search X/Twitter posts by keyword. No account: finds indexed posts via web search and
-    returns full text, author, date and metrics; not real-time (mode='latest' is flagged
-    degraded). Read one post or profile with `read` on its x.com URL."""
+    """Search X/Twitter posts by keyword: full text, author, date and metrics. With the
+    server's X account (source='graphql') results are live X search; without it, or when
+    the account is paced or failing, indexed posts via web search (source='index', not
+    real-time, flagged degraded). Read one post or profile with `read` on its x.com URL."""
     s = _state()
     if mode not in ("top", "latest"):
         return err("schema_invalid", f"unknown mode {mode!r} (top|latest)")
@@ -1197,6 +1199,8 @@ async def x_search(
         return err("schema_invalid", "bad date", str(e))
     if d_since and d_until and d_since > d_until:
         return err("schema_invalid", "since is after until", f"{since} > {until}")
+    if len(query) > 500:  # X caps queries far lower; a huge one only buys a 400 per call
+        return err("schema_invalid", "query too long", f"{len(query)} > 500 characters")
     limit = max(1, min(limit, 50))
     ck = s.cache.key("x_search:" + query,
                      {"mode": mode, "limit": limit, "since": since, "until": until})
@@ -1204,10 +1208,25 @@ async def x_search(
     if cached is not None:
         return {**cached, "from_cache": True}
 
+    found = None
+    x_reason = None
+    if _x_gql.enabled():
+        try:
+            found = await _x_gql.search_posts(query, mode=mode, limit=limit, since=d_since,
+                                              until=d_until, client=s.client)
+        except _x_gql.XError as e:  # account paced, expired or locked: fall back to the index
+            x_reason = e.code
+        except Exception:  # noqa: BLE001 - Layer 1 must never break the tool
+            x_reason = "x_backend_error"
+        if found is not None and not found["results"]:
+            found = None  # live search found nothing; the index may still have posts
     try:
-        found = await _x_search_posts(query, mode=mode, limit=limit, since=d_since,
-                                      until=d_until, search_fn=searxng_search,
-                                      client=s.client)
+        if found is None:
+            found = await _x_search_posts(query, mode=mode, limit=limit, since=d_since,
+                                          until=d_until, search_fn=searxng_search,
+                                          client=s.client)
+            if x_reason:
+                found = {**found, "degraded": True, "degraded_reason": x_reason}
     except SearchError as e:
         if e.code == "no_results":
             return err("no_results", "no X posts found", query)
@@ -1533,6 +1552,8 @@ async def health(request):
     if not _is_loopback(request):
         return JSONResponse(body, status_code=200 if ok else 503)
     body["version"] = __version__
+    if _x_gql.enabled():  # loopback only: the account's state is nobody else's business
+        body.update(_x_gql.status())
     body["reachability"] = _REACH
     body["uptime_seconds"] = (
         round(time.monotonic() - _STARTUP_TIME, 1) if _STARTUP_TIME else None

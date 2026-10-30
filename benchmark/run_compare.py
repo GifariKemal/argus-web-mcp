@@ -231,6 +231,7 @@ def _select_scenarios(args) -> list[dict]:
 async def run_argus(args) -> None:
     import httpx
 
+    from argus.search import _SEARXNG_URL as searxng_url
     from argus.search import SearchError
     from argus.search import search as argus_search
 
@@ -245,14 +246,14 @@ async def run_argus(args) -> None:
     try:
         try:
             preflight = await client.get(
-                "http://127.0.0.1:8888/search",
+                f"{searxng_url}/search",
                 params={"q": "argus preflight", "format": "json", "engines": "bing"},
                 timeout=httpx.Timeout(10, connect=2),
             )
             preflight.raise_for_status()
         except Exception as exc:  # noqa: BLE001 - benchmark infra gate, not app logic
             raise SystemExit(
-                "SearXNG preflight failed at http://127.0.0.1:8888. "
+                f"SearXNG preflight failed at {searxng_url}. "
                 "Start deploy/searxng first (`docker compose up -d`) before running "
                 f"the live Argus search benchmark. Cause: {type(exc).__name__}: {exc}"
             ) from exc

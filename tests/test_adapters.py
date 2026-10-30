@@ -176,3 +176,86 @@ async def test_fetch_npm_escapes_registry_markup():
     async with httpx.AsyncClient() as c:
         res = await fetch_npm(NPM_URL, client=c)
     assert "<script>" not in res["html"] and "&lt;/pre&gt;" in res["html"]
+
+
+# --- reddit thread feed ------------------------------------------------------------
+
+from argus.fetch import adapters as _adapters  # noqa: E402
+from argus.fetch.adapters import fetch_reddit, reddit_target  # noqa: E402
+
+RD_URL = "https://www.reddit.com/r/esp32/comments/141sy2s/modbus_on_arduino_ide/"
+RD_FEED = "https://www.reddit.com/r/esp32/comments/141sy2s/.rss"
+_SC = ("&lt;!-- SC_OFF --&gt;&lt;div class=&quot;md&quot;&gt;&lt;p&gt;{}"
+       "&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt;")
+_EVIL = "Use esp-modbus &amp;lt;script&amp;gt; from Espressif."
+RD_ATOM = f"""<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">
+<title>Modbus on Arduino IDE : esp32</title>
+<entry><author><name>/u/kojotera</name></author><title>Modbus on Arduino IDE</title>
+<updated>2023-06-05T19:03:00+00:00</updated>
+<content type="html">{_SC.format("Which Modbus RS485 library is reliable?")} submitted by
+&lt;a href="x"&gt;/u/kojotera&lt;/a&gt; [link] [comments]</content></entry>
+<entry><author><name>/u/helper</name></author><title>/u/helper on Modbus</title>
+<updated>2023-06-06T08:00:00+00:00</updated>
+<content type="html">{_SC.format(_EVIL)}</content></entry>
+</feed>"""
+
+
+@pytest.fixture
+def _reddit_fresh(monkeypatch):
+    monkeypatch.setattr(_adapters, "_reddit_backoff_until", 0.0)
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    (RD_URL, RD_FEED),
+    ("https://old.reddit.com/r/esp32/comments/141sy2s", RD_FEED),
+    ("https://reddit.com/r/esp32/comments/141sy2s/x/jn1abcd/", RD_FEED),
+    ("https://www.reddit.com/r/esp32/", None),
+    ("https://www.reddit.com/user/someone/comments/abc/", None),
+    ("https://reddit.com.evil.example/r/esp32/comments/141sy2s/", None),
+    ("ftp://www.reddit.com/r/esp32/comments/141sy2s/", None),
+])
+def test_reddit_target(url, expected):
+    assert reddit_target(url) == expected
+
+
+@respx.mock
+async def test_fetch_reddit_builds_post_and_comments(_reddit_fresh):
+    respx.get(RD_FEED).mock(return_value=httpx.Response(
+        200, text=RD_ATOM, headers={"content-type": "application/atom+xml"}))
+    async with httpx.AsyncClient() as c:
+        res = await fetch_reddit(RD_URL, client=c)
+    page = res["html"]
+    assert res["render_path"] == "api" and res["final_url"] == RD_URL
+    assert "Which Modbus RS485 library is reliable?" in page and "/u/helper" in page
+    assert "submitted by" not in page and "<script>" not in page
+    text = extract_article(page, url=RD_URL)["content"]
+    assert "Use esp-modbus" in text and "Comments" in text
+
+
+@respx.mock
+async def test_fetch_reddit_429_pauses_the_adapter(_reddit_fresh):
+    route = respx.get(RD_FEED).mock(return_value=httpx.Response(429))
+    async with httpx.AsyncClient() as c:
+        assert await fetch_reddit(RD_URL, client=c) is None
+        assert await fetch_reddit(RD_URL, client=c) is None
+    assert route.call_count == 1  # second read skipped the feed during the cool-down
+
+
+@respx.mock
+async def test_ladder_reads_reddit_from_feed_before_the_page(_reddit_fresh):
+    page = respx.get(RD_URL).mock(return_value=httpx.Response(200, text="<html>shell</html>"))
+    respx.get(RD_FEED).mock(return_value=httpx.Response(
+        200, text=RD_ATOM, headers={"content-type": "application/atom+xml"}))
+    async with httpx.AsyncClient() as c:
+        res = await fetch(RD_URL, client=c, browser=None, timeout=10)
+    assert res["render_path"] == "api" and page.call_count == 0
+
+
+@respx.mock
+async def test_ladder_falls_back_to_page_when_feed_fails(_reddit_fresh):
+    respx.get(RD_FEED).mock(return_value=httpx.Response(500))
+    respx.get(RD_URL).mock(return_value=httpx.Response(
+        200, text="<html><body><article>" + "thread text " * 400 + "</article></body></html>"))
+    async with httpx.AsyncClient() as c:
+        res = await fetch(RD_URL, client=c, browser=None, timeout=10)
+    assert res["render_path"] == "static"

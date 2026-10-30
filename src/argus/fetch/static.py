@@ -183,7 +183,8 @@ async def _stream_capped(resp: httpx.Response) -> bytes:
 
 
 async def _get_guarded(
-    url: str, *, client: httpx.AsyncClient, timeout: float, max_redirects: int
+    url: str, *, client: httpx.AsyncClient, timeout: float, max_redirects: int,
+    headers: dict | None = None,
 ) -> tuple[httpx.Response, bytes]:
     """GET ``url`` following redirects manually, re-guarding each hop.
 
@@ -197,7 +198,8 @@ async def _get_guarded(
     jar = httpx.Cookies()
 
     async def _hop(c: httpx.AsyncClient, t) -> tuple[httpx.Response, bytes | None]:
-        req = c.build_request("GET", current, timeout=t, headers=_DEFAULT_HEADERS)
+        req = c.build_request("GET", current, timeout=t, headers={**_DEFAULT_HEADERS,
+                                                                    **(headers or {})})
         jar.set_cookie_header(req)
         resp = await c.send(req, stream=True)
         try:
@@ -242,15 +244,21 @@ async def _get_guarded(
                 raise FetchError("fetch_failed", "unparseable redirect location") from exc
             continue
         return resp, body
-    raise FetchError("fetch_failed", f"exceeded {max_redirects} redirects")
+    raise FetchError("fetch_failed", f"exceeded {max_redirects} redirects",
+                     status=resp.status_code)
 
 
 async def fetch_static(
-    url: str, *, client: httpx.AsyncClient, timeout: float = 30, max_redirects: int = 5
+    url: str, *, client: httpx.AsyncClient, timeout: float = 30, max_redirects: int = 5,
+    headers: dict | None = None, api: bool = False,
 ) -> dict:
-    """GET ``url`` (guarded redirects). Returns ``{final_url, status, html, render_path}``."""
+    """GET ``url`` (guarded redirects). Returns ``{final_url, status, html, render_path}``.
+    ``headers`` are added to every hop, so a caller sending credentials passes
+    ``max_redirects=0``: a redirect then fails instead of carrying them to another host.
+    ``api=True`` (a known JSON/feed endpoint) skips the challenge-page body heuristic, which
+    would read a short answer quoting "access denied" in user text as a wall."""
     resp, body = await _get_guarded(
-        url, client=client, timeout=timeout, max_redirects=max_redirects
+        url, client=client, timeout=timeout, max_redirects=max_redirects, headers=headers
     )
     # Anti-bot status blocks (Cloudflare/DataDome/WAF: 403/429/503) return a challenge page,
     # not content. Raise FetchError so fetch.core escalates to the stealth-browser + Wayback
@@ -285,7 +293,7 @@ async def fetch_static(
         html = body.decode(enc, errors="replace")
     except LookupError:  # bogus/unknown meta-declared encoding name
         html = body.decode("utf-8", errors="replace")
-    if resp.status_code < 300 and _looks_blocked(html, resp.status_code):
+    if resp.status_code < 300 and not api and _looks_blocked(html, resp.status_code):
         raise FetchError(
             "blocked_by_antibot", f"status {resp.status_code} (challenge page)",
             status=resp.status_code,

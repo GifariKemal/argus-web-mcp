@@ -70,6 +70,11 @@ services:
       - ARGUS_GITHUB_TOKEN=${ARGUS_GITHUB_TOKEN:-}
       # Optional free OpenAlex key: keyless is ~100 searches/day, a key ~1000.
       - ARGUS_OPENALEX_API_KEY=${ARGUS_OPENALEX_API_KEY:-}
+      # Optional X Layer 1 (live x_search): one account's auth_token + ct0 browser cookies.
+      # Both empty = off. Never list x.com in ARGUS_EGRESS_PROXY_HOSTS: the account should
+      # keep one stable exit IP, not the shared WARP one.
+      - ARGUS_X_AUTH_TOKEN=${ARGUS_X_AUTH_TOKEN:-}
+      - ARGUS_X_CT0=${ARGUS_X_CT0:-}
       # Hosts that block this box's IP but answer through WARP (Wayback, Reuters, ...).
       # Empty ARGUS_EGRESS_PROXY turns it off; empty HOSTS = the default list in config.py.
       - ARGUS_EGRESS_PROXY=${ARGUS_EGRESS_PROXY-http://warp:9091}

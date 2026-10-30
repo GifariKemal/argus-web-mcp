@@ -3,6 +3,8 @@
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
 ## Snapshot (updated 2026-10-30)
+**0.4.36 (2026-10-30):** X Layer 1 code: `x_search` with one cookie account calls X GraphQL SearchTimeline (live, X operators), falls back to the index on any account failure; off until `ARGUS_X_AUTH_TOKEN`/`ARGUS_X_CT0` are set. Reddit threads read with comments via the thread feed. Ops the same day: Traefik rate limit back on Coolify (`argus-ratelimit` 300/60 s burst 100 per CF-Connecting-IP; burst 400 -> 151 OK / 249 x 429), WARP image on upstream 2026-10-25 (trivy 32 HIGH -> 10 HIGH + 1 CRITICAL in grpc-go server code that sing-box does not run here). 1205 offline tests, SSRF 100%, ruff clean.
+
 **0.4.35 (2026-10-30):** X module Phase A: `x_search` (tool 21) and `read` on x.com via FxTwitter, no X account. Layer 1 (one cookie account, real-time search) waits for the bot account to age; plan in `docs/plans/2026-10-30-argus-x-module-design.md`. 1167 offline tests, SSRF 100%, ruff clean.
 
 **0.4.34 (2026-10-30):** moved to Coolify on the SURIOTA primary server (Easypanel stack, webhook and old systemd units on the previous VPS removed; `main` is the only branch and a push no longer deploys). trivy CRITICAL/HIGH fixable: argus 8/32 -> 0/0, searxng 1/0 -> 0/0. `cot_report` falls back to the official CFTC API. 1108 offline tests, SSRF 100%, ruff clean; live 20/20 tools. Details: [`CHANGELOG.md`](../CHANGELOG.md).

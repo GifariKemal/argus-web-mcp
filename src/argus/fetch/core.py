@@ -14,7 +14,14 @@ from urllib.parse import urlsplit
 from ..models import record_stage
 from ..security.ssrf import SSRFError
 from ..x.fxtwitter import FX_TIMEOUT_S, fetch_x, x_target
-from .adapters import fetch_npm, fetch_stackexchange, npm_target, stackexchange_target
+from .adapters import (
+    fetch_npm,
+    fetch_reddit,
+    fetch_stackexchange,
+    npm_target,
+    reddit_target,
+    stackexchange_target,
+)
 from .fallback import fetch_via_archive
 from .render import BrowserPool
 from .static import FetchError, _guard, fetch_static, visible_text_len
@@ -132,6 +139,13 @@ async def _do_fetch(
             record_stage("fetch.x_api_ok")
             return api
         record_stage("fetch.x_api_fail")
+    # Reddit threads answer with a JS shell that loses the comments; the feed has them.
+    if reddit_target(url):
+        api = await fetch_reddit(url, client=client, timeout=min(timeout, 15))
+        if api is not None:
+            record_stage("fetch.adapter_ok")
+            return api
+        record_stage("fetch.adapter_fail")
     static_timeout = min(timeout, STATIC_FALLBACK_TIMEOUT) if browser is not None else timeout
     try:
         res = await fetch_static(url, client=client, timeout=static_timeout)

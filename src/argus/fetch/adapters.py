@@ -118,3 +118,68 @@ async def fetch_npm(url: str, *, client, timeout: float = 30) -> dict | None:
     page = (f"<html><head><title>{name}</title></head><body><article><h1>{name}</h1>"
             f"<p>{desc}</p>{meta}<pre>{readme}</pre></article></body></html>")
     return {"final_url": url, "status": 200, "html": page, "render_path": "api"}
+
+
+# Reddit thread pages come back as a JS shell whose comments the extractor loses, and its
+# JSON API 403s this server, while the thread's Atom feed answers 200 with the post and
+# its top comments as rendered HTML (measured 2026-10-30). The feed 429s a burst, so a 429
+# (or a 403) pauses the adapter and reads take the normal (browser) path meanwhile. A
+# comment permalink reads as its whole thread.
+_REDDIT_HOSTS = frozenset({"reddit.com", "old.reddit.com", "new.reddit.com", "np.reddit.com"})
+_REDDIT_THREAD = re.compile(r"/r/([A-Za-z0-9_]{2,21})/comments/([a-z0-9]{1,12})(?:/|$)")
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_REDDIT_COOLDOWN_S = 60
+_reddit_backoff_until = 0.0
+
+
+def reddit_target(url: str) -> str | None:
+    """The thread's Atom feed URL for a reddit post/comments URL, else None."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return None
+    if (parts.hostname or "").removeprefix("www.") not in _REDDIT_HOSTS:
+        return None
+    m = _REDDIT_THREAD.match(parts.path)
+    return f"https://www.reddit.com/r/{m.group(1)}/comments/{m.group(2)}/.rss" if m else None
+
+
+def _reddit_entry(entry) -> tuple[str, str, str, str]:
+    """(title, author, date, html body) of one Atom entry; the feed's link/comments
+    trailer after ``<!-- SC_ON -->`` is dropped."""
+    def text(tag: str) -> str:
+        el = entry.find(_ATOM + tag)
+        return (el.text or "") if el is not None else ""
+    author = entry.find(f"{_ATOM}author/{_ATOM}name")
+    body = text("content").split("<!-- SC_ON -->")[0]
+    return text("title"), (author.text or "") if author is not None else "", \
+        text("updated")[:10], body
+
+
+async def fetch_reddit(url: str, *, client, timeout: float = 30) -> dict | None:
+    """Post + top comments from the thread feed as ``{final_url, status, html,
+    render_path: 'api'}``. Never raises: no match, a cool-down or any failure -> None."""
+    global _reddit_backoff_until
+    feed = reddit_target(url)
+    if feed is None or time.monotonic() < _reddit_backoff_until:
+        return None
+    from xml.etree import ElementTree as ET  # stdlib expat refuses entity expansion bombs
+
+    try:
+        xml = (await fetch_static(feed, client=client, timeout=timeout, api=True))["html"]
+        entries = ET.fromstring(xml).findall(_ATOM + "entry")  # noqa: S314 - see import
+        if not entries:
+            return None
+        title, author, day, post = _reddit_entry(entries[0])
+        e = html.escape
+        parts = [f"<html><head><title>{e(title)}</title></head><body><article>",
+                 f"<h1>{e(title)}</h1><p>{e(author)} {e(day)}</p>", post,
+                 "<h2>Comments</h2>"]
+        for c in entries[1:]:
+            _, c_author, c_day, c_body = _reddit_entry(c)
+            parts += [f"<h3>{e(c_author)} {e(c_day)}</h3>", c_body]
+    except Exception as exc:  # noqa: BLE001 - any failure must degrade to None, never raise
+        if getattr(exc, "status", None) in (403, 429):
+            _reddit_backoff_until = time.monotonic() + _REDDIT_COOLDOWN_S
+        return None
+    parts.append("</article></body></html>")
+    return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api"}

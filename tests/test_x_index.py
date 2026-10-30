@@ -235,11 +235,13 @@ async def test_x_search_partial_enrichment_is_not_cached(app_state, monkeypatch,
     assert search.calls == 2
 
 
-def test_x_search_does_not_advertise_x_operators():
+def test_x_search_ties_x_operators_to_the_account():
+    """The index tier ignores X operators; the description may only offer them together
+    with the condition that makes them work (the server's X account, source='graphql')."""
     import typing
     doc = server.x_search.__doc__ or ""
     query_desc = typing.get_type_hints(
         server.x_search, include_extras=True)["query"].__metadata__[0].description
-    for text in (doc, query_desc):
-        assert "from:" not in text and "X search syntax" not in text
+    assert "from:" not in doc and "X search syntax" not in doc + query_desc
+    assert "from:" in query_desc and "work only when the server has an X account" in query_desc
     assert "keyword" in doc.lower() and "keyword" in query_desc.lower()

@@ -10,6 +10,7 @@ import concurrent.futures
 import ipaddress
 import logging
 import os
+import re
 from urllib.parse import urlsplit
 
 
@@ -113,6 +114,26 @@ DENY_IPS = _parse_deny_ips(os.environ.get("ARGUS_DENY_IPS", ""))
 # self-hosted FxEmbed can replace the public instance.
 X_FXTWITTER_URL = (os.environ.get("ARGUS_X_FXTWITTER_URL", "").strip()
                    or "https://api.fxtwitter.com").rstrip("/")
+
+# X Layer 1 (opt-in): one account's browser cookies make x_search real-time. Both unset =
+# off. Secrets: set in the panel env, never logged or echoed (tests/test_x_graphql.py).
+def _x_cookies(auth: str, ct0: str) -> tuple[str, str]:
+    """Both cookie values, or both empty when either is malformed: a stray newline or quote
+    would end up in a header error message. Off, loudly, once, never echoing the values."""
+    if (auth or ct0) and not all(re.fullmatch(r"[A-Za-z0-9%_.-]{16,512}", v)
+                                 for v in (auth, ct0)):
+        logging.getLogger("argus.config").warning(
+            "ARGUS_X_AUTH_TOKEN/ARGUS_X_CT0 ignored: both must be cookie values (16-512 "
+            "chars of letters, digits, %_.-)")
+        return "", ""
+    return auth, ct0
+
+
+X_AUTH_TOKEN, X_CT0 = _x_cookies(os.environ.get("ARGUS_X_AUTH_TOKEN", "").strip(),
+                                 os.environ.get("ARGUS_X_CT0", "").strip())
+# Pacing for that one account (Scweet's measured values): per 15-minute window and per day.
+X_MAX_PER_WINDOW = max(1, _int("ARGUS_X_MAX_PER_WINDOW", 50))
+X_DAILY_REQUESTS = max(1, _int("ARGUS_X_DAILY_REQUESTS", 300))
 
 EGRESS_PROXY = os.environ.get("ARGUS_EGRESS_PROXY", "").strip()
 if EGRESS_PROXY and not _valid_proxy(EGRESS_PROXY):
