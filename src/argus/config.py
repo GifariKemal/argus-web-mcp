@@ -109,6 +109,11 @@ def _parse_deny_ips(raw: str) -> frozenset[str]:
 
 DENY_IPS = _parse_deny_ips(os.environ.get("ARGUS_DENY_IPS", ""))
 
+# FxTwitter (FxEmbed, MIT) answers post/profile JSON without an X login. Overridable so a
+# self-hosted FxEmbed can replace the public instance.
+X_FXTWITTER_URL = (os.environ.get("ARGUS_X_FXTWITTER_URL", "").strip()
+                   or "https://api.fxtwitter.com").rstrip("/")
+
 EGRESS_PROXY = os.environ.get("ARGUS_EGRESS_PROXY", "").strip()
 if EGRESS_PROXY and not _valid_proxy(EGRESS_PROXY):
     # Off, loudly, once at startup - never a per-request crash, and never echo the value
