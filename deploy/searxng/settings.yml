@@ -159,6 +159,10 @@ engines:
   - name: google scholar   # access denied from this datacenter IP
     disabled: true
     network: proxied
+  # Shipped disabled; Hacker News discussion is a primary source for the `it` category, and
+  # its Algolia API answered from the primary server on 2026-10-31 (keyless).
+  - name: hackernews
+    disabled: false
 
 ui:
   static_use_hash: true

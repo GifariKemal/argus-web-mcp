@@ -1107,3 +1107,39 @@ def test_duckduckgo_style_captcha_page_is_a_wall():
             "the following challenge to confirm this search was made by a human. "
             "Select all squares containing a duck: Submit</body></html>")
     assert _looks_blocked(page, 200)
+
+
+@pytest.mark.parametrize(("url", "full"), [
+    ("http://example.com/paper.pdf", True), ("http://example.com/a/report.DOCX", True),
+    ("http://example.com/book.epub", True), ("http://example.com/page", False),
+])
+async def test_document_urls_get_the_full_static_timeout(monkeypatch, url, full):
+    """A big PDF on a slow link outlived the 5 s static budget and fell to the stealth
+    browser, which cannot read it; document URLs get the caller's whole timeout."""
+    import argus.fetch.core as core
+
+    seen = {}
+
+    async def fake_static(u, *, client, timeout, **kw):
+        seen["timeout"] = timeout
+        return {"final_url": u, "status": 200, "html": "<html><body>" + "x " * 300
+                + "</body></html>", "render_path": "static"}
+
+    monkeypatch.setattr(core, "fetch_static", fake_static)
+    await fetch(url, client=object(), browser=_FakeBrowser(), timeout=40)
+    assert seen["timeout"] == (40 if full else core.STATIC_FALLBACK_TIMEOUT)
+
+
+async def test_document_bytes_are_never_rendered(monkeypatch):
+    """A small PDF with embedded JavaScript decodes to text containing '<script'; the browser
+    cannot read a PDF, and a render would replace the bytes the document path needs."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    pdf = b"%PDF-1.7\n1 0 obj << /JS (<script>app.alert(1)</script>) >> endobj\n%%EOF"
+
+    def h(req):
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/x", client=c, browser=fake)
+    assert fake.calls == 0 and res["body"] == pdf

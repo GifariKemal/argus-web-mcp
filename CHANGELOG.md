@@ -16,17 +16,44 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.40] - 2026-10-31 - read everything: documents, feeds, HN, Polymarket, YouTube
+
 From the second reference study (`docs/qa/2026-10-31-reference-study-2.md`: 14 repos read at
 code level, free sources measured from the production server).
+
+### Added
+
+- **`read` handles documents and feeds.** By content-type, then signature bytes, then the
+  URL extension: PDF (the `read_pdf` extractor), DOCX, PPTX (with picture alt text), XLSX,
+  EPUB, CSV, JSON, XML come back as markdown with `metadata.doc_type`; RSS/Atom/RDF feeds
+  as a dated item list plus `metadata.items`. Zip documents pass a guard first (10,000
+  entries, 200 MB unzipped, compression ratio, 32 MB per part); XML never resolves entities
+  or loads a DTD; conversion runs in the extraction worker pool with its timeout. No new
+  dependency (zipfile, lxml, pymupdf were already locked). Row/item/page caps are flagged
+  with `truncated` and counts. New error codes `doc_too_large`, `unsupported_document`.
+- **Hacker News adapter**: `news.ycombinator.com/item?id=` reads the story and the whole
+  comment tree from the Algolia API in one call (depth 8, 500 comments, cut flagged).
+- **Polymarket adapter**: `polymarket.com/event/<slug>` reads the event from the Gamma API
+  with every market's outcome prices, also as `metadata.structured`.
+- **YouTube adapter**: watch, `youtu.be`, shorts, live and embed URLs return title,
+  channel, description and a timestamped transcript (manual English track first). Measured
+  from the primary server: 5/5 videos direct, 0/5 through WARP (429), so it goes direct.
+- `search` results carry `published` + `date_source: "url"` inferred from the link path when
+  the engine sent no date; the rerank ignores those dates, so ranking is unchanged.
+- SearXNG `hackernews` engine on (category `it`).
 
 ### Changed
 
 - The fetch ladder only renders when a browser can change the answer: a thin page with no
   `<script>` and no meta refresh stays static (a short 404 used to cost a 20-45 s render),
-  and an oversize or undecodable body goes straight to Wayback instead of the stealth browser.
+  document bytes are never rendered, and an oversize or undecodable body goes straight to
+  Wayback instead of the stealth browser. Document URLs (`.pdf`, `.docx`, ...) get the
+  caller's whole static timeout instead of the 5 s render-first budget.
 - `read` no longer caches an error-status page (4xx/5xx); a 404 used to be served for an hour.
+- `research` skips search-result pages (Google/Bing/YouTube results, site `/search?q=`) before
+  fetching; the spare candidates fill the slot.
 - `search` results keep SearXNG's `engines` list, the data for measuring cross-index agreement
-  (no ranking change yet).
+  (no ranking change yet). `news_sentiment_feed` passes `date_source` through.
 
 ### Fixed
 

@@ -53,7 +53,7 @@ async def news_sentiment_feed(query, since=None, *, sentiment=False, client=None
     """Rank news for ``query`` and optionally attach an owned-LLM sentiment score.
 
     Returns ``{query, items, count}`` where each item is
-    ``{title, url, snippet, published?, score?}``. ``score`` is only present when
+    ``{title, url, snippet, published?, date_source?, score?}``. ``score`` is only present when
     ``sentiment=True`` AND the owned LLM is available; otherwise it is omitted.
     """
     kwargs = {"category": "news"}
@@ -73,6 +73,8 @@ async def news_sentiment_feed(query, since=None, *, sentiment=False, client=None
         }
         if r.get("published"):
             item["published"] = r["published"]
+            if r.get("date_source"):  # "url": inferred from the link path, not the engine
+                item["date_source"] = r["date_source"]
         items.append(item)
 
     if sentiment:

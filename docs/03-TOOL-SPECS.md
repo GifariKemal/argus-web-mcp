@@ -36,8 +36,10 @@ Exact contracts for each MCP tool. All tools: async, SSRF-guarded (resolve-then-
 URL -> clean main content.
 - **in:** `url` (str, http/https only), `format`  in  {markdown,text,html}, `clean` (strip boilerplate), `include_links` (keep hyperlinks), `extract_media` (also return the page's links + images lists), `timeout` (s).
 - **out:** `{url, final_url, status, title, content, format, metadata:{author,published,lang,site,word_count,structured?}, render_path:"static|browser|archive|api", from_cache}` (`api` = an official site API, e.g. StackExchange question pages blocked from the server IP, or an x.com/twitter.com post or profile, which also sets `metadata.structured` to the post/profile model: with the X account (Layer 1) a post comes with `thread` and `replies` and a profile with `posts_latest`, else FxTwitter gives the post or profile alone) (+ `links`, `images` when `extract_media`).
-- **backing:** httpx static -> trafilatura -> readability fallback -> Crawl4AI/Playwright if thin/JS. **No truncation.**
-- **errors:** ssrf_blocked, fetch_failed, empty_content.
+- **documents and feeds:** by content-type, then signature bytes, then extension: PDF, DOCX, PPTX, XLSX, EPUB, CSV, JSON, XML come back as markdown with `metadata.doc_type` and `word_count` (JSON pretty-printed in a fenced block, so it can be 2-3x the raw size; `format='html'` returns markdown with `metadata.format_note`; a text body that is not valid JSON/CSV/XML falls back to the page path); RSS/Atom/RDF feeds as a dated item list plus `metadata.items` (`{title, url, published, summary}`). Row/item/page caps (2,000 rows per sheet, 200 feed items) are flagged with `truncated` and counts. Zip documents pass a guard first (10,000 entries, 200 MB unzipped, ratio, 32 MB per part); XML never resolves entities or loads a DTD.
+- **site APIs:** Hacker News items (Algolia, full comment tree), Polymarket events (Gamma, `metadata.structured` with outcome prices), YouTube videos (title, channel, description and a timestamped transcript, `metadata.structured`), alongside reddit, StackExchange, npm and X.
+- **backing:** httpx static -> trafilatura -> readability fallback -> Crawl4AI/Playwright if thin and the page runs script. **No truncation.**
+- **errors:** ssrf_blocked, fetch_failed, empty_content, not_pdf, parse_failed, doc_too_large, unsupported_document.
 
 ## `search(query, count=10, category="general", time_range=null, lang=null, include_domains=null, exclude_domains=null, safesearch=0)`
 Web search via self-hosted SearXNG (unlimited).

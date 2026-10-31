@@ -17,12 +17,18 @@ from ..security.ssrf import SSRFError
 from ..x import graphql as x_graphql
 from ..x.fxtwitter import FX_TIMEOUT_S, fetch_x, x_target
 from .adapters import (
+    fetch_hn,
     fetch_npm,
+    fetch_polymarket,
     fetch_reddit,
     fetch_stackexchange,
+    fetch_youtube,
+    hn_target,
     npm_target,
+    polymarket_target,
     reddit_target,
     stackexchange_target,
+    youtube_target,
 )
 from .fallback import fetch_via_archive
 from .render import BrowserPool
@@ -72,6 +78,9 @@ _RENDER_CAN_ADD = re.compile(r"<script|http-equiv\s*=\s*[\"']?refresh", re.IGNOR
 # Static failures a browser cannot fix: the render would fetch the same oversize or
 # undecodable body, so they go straight to the archive rung.
 _NOT_A_RENDER_PROBLEM = ("response too large", "unsupported content-encoding")
+# Binary documents only come from the static hop (the browser cannot read them), so a big
+# PDF on a slow link gets the caller's whole timeout instead of the 5 s render-first budget.
+_DOC_SUFFIXES = (".pdf", ".docx", ".pptx", ".xlsx", ".epub")
 
 
 async def fetch(url: str, *, throttle=None, **kwargs) -> dict:
@@ -152,14 +161,21 @@ async def _do_fetch(
             record_stage("fetch.x_api_ok")
             return api
         record_stage("fetch.x_api_fail")
-    # Reddit threads answer with a JS shell that loses the comments; the feed has them.
-    if reddit_target(url):
-        api = await fetch_reddit(url, client=client, timeout=min(timeout, 15))
-        if api is not None:
-            record_stage("fetch.adapter_ok")
-            return api
-        record_stage("fetch.adapter_fail")
-    static_timeout = min(timeout, STATIC_FALLBACK_TIMEOUT) if browser is not None else timeout
+    # Reddit threads answer with a JS shell that loses the comments; the feed has them. HN
+    # item pages lose the thread nesting, Polymarket is a JS app and a YouTube watch page
+    # has no transcript; all three have open APIs.
+    for target, adapter in ((reddit_target, fetch_reddit), (hn_target, fetch_hn),
+                            (polymarket_target, fetch_polymarket),
+                            (youtube_target, fetch_youtube)):
+        if target(url):
+            api = await adapter(url, client=client, timeout=min(timeout, 15))
+            if api is not None:
+                record_stage("fetch.adapter_ok")
+                return api
+            record_stage("fetch.adapter_fail")
+    is_doc = urlsplit(url).path.lower().endswith(_DOC_SUFFIXES)
+    static_timeout = (min(timeout, STATIC_FALLBACK_TIMEOUT) if browser is not None and not is_doc
+                      else timeout)
     try:
         res = await fetch_static(url, client=client, timeout=static_timeout)
     except FetchError as exc:
@@ -211,7 +227,8 @@ async def _do_fetch(
             _remember_failure(url, exc)
         raise exc
 
-    if (browser is not None and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS
+    if (browser is not None and "body" not in res  # a document's bytes: no render reads them
+            and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS
             and _RENDER_CAN_ADD.search(res["html"])):
         record_stage("fetch.thin_escalate")
         logger.info("fetch[%s]: thin static content (<%d chars); escalating to browser",

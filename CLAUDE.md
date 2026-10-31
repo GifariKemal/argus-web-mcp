@@ -16,7 +16,7 @@ A FastMCP (Python) server, deployed remote-HTTP on the SURIOTA VPS, that every C
 5. `docs/01-RESEARCH.md` - research findings + sources. `benchmark/testset.yaml` - benchmark set.
 
 ## Status
-Live on the SURIOTA primary server as a Coolify service (`argus` + `searxng` + `warp`), public endpoint `https://argus.gifariksuryo.xyz/mcp` (bearer). Version 0.4.39 (`pyproject.toml`). Easypanel on the old VPS hosted it until 2026-10-30 and no longer runs it. Current snapshot, benchmarks, search-engine notes and open owner inputs: [`docs/STATUS.md`](docs/STATUS.md). History per version: [`CHANGELOG.md`](CHANGELOG.md). Plans in `docs/plans/`, QA reports in `docs/qa/`.
+Live on the SURIOTA primary server as a Coolify service (`argus` + `searxng` + `warp`), public endpoint `https://argus.gifariksuryo.xyz/mcp` (bearer). Version 0.4.40 (`pyproject.toml`). Easypanel on the old VPS hosted it until 2026-10-30 and no longer runs it. Current snapshot, benchmarks, search-engine notes and open owner inputs: [`docs/STATUS.md`](docs/STATUS.md). History per version: [`CHANGELOG.md`](CHANGELOG.md). Plans in `docs/plans/`, QA reports in `docs/qa/`.
 
 ## Quick start
 Full table in [`AGENTS.md`](AGENTS.md#commands). Windows: call the venv binaries explicitly.

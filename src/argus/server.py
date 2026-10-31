@@ -438,8 +438,40 @@ async def read(
             return _timeout_err("read", timeout + _READ_GRACE_S)
         return _fetch_err(e)
 
-    art = await extract_async(res["html"], res["final_url"], fmt=format, clean=clean,
-                              include_links=include_links)
+    # Documents and feeds (static hop only: adapters and renders are always pages).
+    from .extract import docs
+
+    kind = (docs.sniff(res["content_type"], res.get("body"), res["html"], res["final_url"])
+            if "content_type" in res else None)
+    art = None
+    if kind is not None:
+        data = (res.get("body") or b"") if kind in docs.BINARY_KINDS else res["html"]
+        try:
+            if kind == "pdf":
+                # read_pdf's extractor, but on the document pool: a hostile PDF is killed at
+                # `timeout` instead of wedging the single PDF thread read_pdf relies on.
+                try:
+                    raw = await extract_pool.run_document(extract_pdf, data, None, "text",
+                                                          timeout=timeout)
+                except ValueError:  # extract_pdf: not a PDF after all (pickled back intact)
+                    return err("not_pdf", "not a valid PDF", res["final_url"])
+                art = docs.from_pdf(raw, format)
+            else:
+                art = await docs.convert_async(kind, data, res["final_url"], format)
+        except docs.DocError as e:
+            return err(e.reason, "document could not be read", e.detail, retryable=False)
+        except TimeoutError:
+            return err("parse_failed", "document conversion timed out", res["final_url"],
+                       reason="timeout", retryable=False)
+        except Exception as e:  # noqa: BLE001 - corrupt zip/XML/JSON/CSV, a dead worker
+            # A text body that only looked like JSON/CSV/XML (tsconfig with comments, a .json
+            # URL serving prose) is still readable as a page; a broken binary is not.
+            if kind in docs.BINARY_KINDS:
+                return err("parse_failed", "document parse failed", _safe_detail(e))
+            kind = None
+    if art is None:
+        art = await extract_async(res["html"], res["final_url"], fmt=format, clean=clean,
+                                  include_links=include_links)
     if not art["content"]:
         return err("empty_content", "no extractable content", res["final_url"])
     if res.get("structured"):  # an API adapter's typed record (X post / profile)
@@ -456,7 +488,9 @@ async def read(
         "render_path": res["render_path"],
         "from_cache": False,
     }
-    if extract_media:
+    if art.get("truncated"):  # a document's row/item/page cap; counts are in metadata
+        out["truncated"] = True
+    if extract_media and kind is None:  # a document has no page links; feeds carry metadata.items
         media = await asyncio.to_thread(extract_links_images, res["html"], res["final_url"])
         out["links"] = media["links"]
         out["images"] = media["images"]

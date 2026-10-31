@@ -11,6 +11,7 @@ import os
 import re
 import socket
 import time
+from datetime import date
 from urllib.parse import urlsplit
 
 import httpx
@@ -149,6 +150,16 @@ _STOPWORDS = frozenset(
 # Tracking params stripped for URL dedup; every other query param is MEANINGFUL
 # (?v=, ?id=, ?p= key distinct pages and must not collapse into one).
 _TRACKING_PARAMS = frozenset({"fbclid", "gclid", "msclkid", "srsltid", "ref", "ref_src", "spm"})
+# Date from the URL path (D5): SearXNG's general engines rarely send publishedDate, but
+# many article URLs carry one. Path only (never host, query or fragment), digits as whole
+# segments or a segment prefix, so a product number like /2048/ never reads as a year.
+# Month-only paths give "YYYY-MM" (ISO 8601 reduced precision): no invented day.
+_URL_DATE_RES = (
+    re.compile(r"/(\d{4})/(\d{2})(?:/(\d{2}))?(?=/|$)"),  # /YYYY/MM[/DD]
+    re.compile(r"/(\d{4})-(\d{2})-(\d{2})(?!\d)"),  # /YYYY-MM-DD[-slug|.html]
+    re.compile(r"/(\d{4})(\d{2})(\d{2})(?=/|$)"),  # /YYYYMMDD segment
+)
+_URL_DATE_MIN_YEAR = 1995
 
 
 class SearchError(Exception):
@@ -170,9 +181,29 @@ def _map_result(raw: dict) -> dict:
     published = raw.get("publishedDate")
     if published:
         out["published"] = published
+    elif url_date := _url_date(out["url"]):
+        # Metadata only: rerank never treats a URL date as fresh (see is_fresh there).
+        out["published"] = url_date
+        out["date_source"] = "url"
     if raw.get("engines"):  # every engine behind a merged result: agreement signal (T6)
         out["engines"] = list(raw["engines"])
     return out
+
+
+def _url_date(url: str) -> str | None:
+    """Publication date in the URL path (``YYYY-MM-DD`` or ``YYYY-MM``), or None."""
+    path = urlsplit(url).path
+    for rx in _URL_DATE_RES:
+        for m in rx.finditer(path):
+            y, mo, d = m.groups()
+            if not _URL_DATE_MIN_YEAR <= int(y) <= date.today().year + 1:
+                continue
+            try:
+                date(int(y), int(mo), int(d or 1))
+            except ValueError:  # 2026/02/30: skip the match, never guess a coarser date
+                continue
+            return f"{y}-{mo}-{d}" if d else f"{y}-{mo}"
+    return None
 
 
 def _tokens(text: str) -> set[str]:
@@ -310,7 +341,8 @@ def rerank(
     case the backend's original top results are kept (never empty given input).
 
     Recency tiebreak (always on): among results with EQUAL score, one carrying a
-    ``published`` date sorts before one without. This is only a tiebreak.
+    ``published`` date sorts before one without. This is only a tiebreak. A date read from
+    the URL path (``date_source == "url"``) counts as no date here and for the boost below.
 
     Recency boost (v2, ``recency=True``): results carrying a ``published`` date get a
     bounded ADDITIVE score bump of ``+_RECENCY_BOOST``. It is a *boost, not an override*:
@@ -351,7 +383,8 @@ def rerank(
         score = _TITLE_WEIGHT * title_cov + snip_cov
         matched = qtokens & (title_tok | snip_tok)
         has_overlap = bool(matched)
-        is_fresh = bool(r.get("published"))
+        # A URL-path date is metadata only (D5): ranking stays what it was without it.
+        is_fresh = bool(r.get("published")) and r.get("date_source") != "url"
         # Recency boost is additive but applied ONLY to relevant (overlapping) results,
         # so an irrelevant fresh page (dropped below) never benefits - relevance wins.
         if recency and is_fresh and has_overlap:

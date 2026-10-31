@@ -3,6 +3,8 @@
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
 ## Snapshot (updated 2026-10-31)
+**0.4.40 (2026-10-31):** `read` handles PDF, DOCX, PPTX, XLSX, EPUB, CSV, JSON, XML and RSS/Atom feeds (zip guard, entity-free XML, worker pool, no new dependency); Hacker News, Polymarket and YouTube-transcript adapters; the browser only renders where it can help; error pages are not cached; URL-path dates without a ranking change; SERP pages skipped in research; SearXNG `hackernews` on. From the second reference study (`docs/qa/2026-10-31-reference-study-2.md`). Same day: primary server host DNS moved to 1.1.1.1/8.8.8.8.
+
 **0.4.39 (2026-10-31):** `read` caches an X post or profile once across URL spellings (x.com/twitter.com, `?s=20`, handle case); posts X answers as absent skip the account for 10 min. 1221 offline tests.
 
 **0.4.38 (2026-10-30):** `read` on x.com through the account (post + thread + replies, profile + 20 latest posts), ct0 rotation kept on the data volume, read budget share 60%, protected accounts never returned. 1219 offline tests.

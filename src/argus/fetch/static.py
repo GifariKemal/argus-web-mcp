@@ -46,6 +46,7 @@ _CHALLENGE_TEXT_MAX = 3000  # visible chars; challenge pages carry a few hundred
 _VISIBLE_SCAN_CHARS = 200_000
 _TAG_FALLBACK = re.compile(r"<[^<>]*>")  # linear: never scans past the next '<'
 _XML_DECL = re.compile(r"^\s*<\?xml[^>]*\?>")  # lxml refuses str input that declares one
+_TEXT_MEDIA = re.compile(r"^text/|html|xml|json|javascript")  # bodies read as decoded text
 
 
 def visible_text_len(html: str) -> int:
@@ -253,7 +254,9 @@ async def fetch_static(
     url: str, *, client: httpx.AsyncClient, timeout: float = 30, max_redirects: int = 5,
     headers: dict | None = None, api: bool = False,
 ) -> dict:
-    """GET ``url`` (guarded redirects). Returns ``{final_url, status, html, render_path}``.
+    """GET ``url`` (guarded redirects). Returns ``{final_url, status, html, render_path,
+    content_type}`` (media type, lowercased, no params) plus the raw ``body`` bytes for a
+    non-text type or a zip/PDF body; ``html`` is always the decoded str.
     ``headers`` are added to every hop, so a caller sending credentials passes
     ``max_redirects=0``: a redirect then fails instead of carrying them to another host.
     ``api=True`` (a known JSON/feed endpoint) skips the challenge-page body heuristic, which
@@ -299,12 +302,19 @@ async def fetch_static(
             "blocked_by_antibot", f"status {resp.status_code} (challenge page)",
             status=resp.status_code,
         )
+    ctype = resp.headers.get("content-type", "").partition(";")[0].strip().lower()
     res = {
         "final_url": str(resp.url),
         "status": resp.status_code,
         "html": html,
         "render_path": "static",
+        "content_type": ctype,
     }
+    # A document (PDF, Office, EPUB, a bare download) needs its bytes: ``html`` above is
+    # mojibake for it, kept only because the ladder measures visible text on a str.
+    if (not _TEXT_MEDIA.search(ctype) or body.startswith(b"PK\x03\x04")
+            or b"%PDF-" in body[:1024]):
+        res["body"] = body
     if headers:  # a credentialed caller may need its session cookies rotated (X ct0)
         res["set_cookie"] = resp.headers.get_list("set-cookie")
     return res

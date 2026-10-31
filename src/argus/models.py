@@ -20,6 +20,9 @@ ERROR_CODES = frozenset(
         "render_failed",
         "blocked_by_antibot",
         "dns_failed",
+        # read on a document: a zip/size guard refused it, or no supported format matched.
+        "doc_too_large",
+        "unsupported_document",
         # An exception a tool did not map itself (the middleware's last line of defence):
         # the client gets this instead of FastMCP's raw str(exc).
         "internal_error",

@@ -27,7 +27,7 @@ import os
 import re
 import secrets
 from collections.abc import Awaitable, Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from .config import PDF_EXECUTOR
 from .extract.pdf import extract_pdf
@@ -35,6 +35,7 @@ from .extract.pool import extract_async
 from .fetch.core import fetch as _default_fetch
 from .fetch.static import FetchError
 from .fetch.static import fetch_bytes as _default_fetch_bytes
+from .models import record_stage
 from .search import _host
 from .search import search as _default_search
 from .security.ssrf import SSRFError, validate_url
@@ -62,6 +63,12 @@ _PER_HOST = 2
 # how long a better-ranked page may keep loading once enough pages are in hand.
 _SPARE = 2
 _RANK_GRACE = 3.0
+# Search-result pages (D6): a SERP or a site search is a list of links, not a source, and
+# fetching one wastes a slot. A search-ish param with a value AND a search/results path
+# segment or the bare root (google /search?q=, youtube /results?search_query=, ddg /?q=,
+# WordPress /?s=). /2026/10/how-search-works?utm=x and /?p=123 stay sources.
+_SERP_PARAMS = frozenset({"q", "query", "search_query", "s", "keyword", "keywords", "k"})
+_SERP_SEGMENTS = frozenset({"search", "results"})
 
 Progress = Callable[[int, int, str], Awaitable[None]]
 
@@ -106,8 +113,22 @@ def _apply_char_cap(sources: list[dict], max_chars: int | None) -> None:
             s["truncated"] = True
 
 
+def _is_serp(url: str) -> bool:
+    """True for a search-result page (see _SERP_PARAMS)."""
+    parts = urlsplit(url)
+    # parse_qsl drops blank values, so ?q= alone is not a search.
+    if not any(k.lower() in _SERP_PARAMS and v.strip() for k, v in parse_qsl(parts.query)):
+        return False
+    segments = {seg.lower().split(".")[0] for seg in parts.path.split("/") if seg}
+    return not segments or bool(segments & _SERP_SEGMENTS)
+
+
 def _dedup_results(results: list[dict], limit: int) -> list[dict]:
-    """Top `limit` results with distinct URLs, preserving search order (reranked)."""
+    """Top `limit` results with distinct URLs, preserving search order (reranked).
+
+    Search-result pages are skipped here, before the limit, so the spares behind them
+    still fill the candidate pool.
+    """
     out: list[dict] = []
     seen: set[str] = set()
     for r in results:
@@ -115,6 +136,9 @@ def _dedup_results(results: list[dict], limit: int) -> list[dict]:
         if not url or url in seen:
             continue
         seen.add(url)
+        if _is_serp(url):
+            record_stage("research.serp_skipped")
+            continue
         out.append(r)
         if len(out) >= limit:
             break

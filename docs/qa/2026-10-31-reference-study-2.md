@@ -12,7 +12,7 @@
 - [Repo yang dipelajari](#repo-yang-dipelajari)
 - [Gambaran besar](#gambaran-besar)
 - [Dikerjakan hari ini (Batch 1)](#dikerjakan-hari-ini-batch-1)
-- [Adopsi berikutnya (Batch 2)](#adopsi-berikutnya-batch-2)
+- [Batch 2 (selesai di 0.4.40)](#batch-2-selesai-di-0440)
 - [Ukur dulu, baru putuskan](#ukur-dulu-baru-putuskan)
 - [Ditolak](#ditolak)
 - [Klaim README yang tidak terbukti di kode](#klaim-readme-yang-tidak-terbukti-di-kode)
@@ -70,7 +70,10 @@ Semua kecil, terverifikasi di kode, TDD; suite offline 1229 lulus, SSRF 100%, ru
 Ops hari yang sama: DNS host primary server diganti ke 1.1.1.1 dan 8.8.8.8 (resolver provider
 membelokkan domain blokir Komdigi; provider konfirmasi tidak ada blokir IP).
 
-## Adopsi berikutnya (Batch 2)
+## Batch 2 (selesai di 0.4.40)
+
+Semua butir di bawah dikerjakan TDD, direview dua reviewer independen (keamanan dan
+kebenaran), lalu divalidasi dengan fixture markitdown dan stress test live.
 
 | # | Ide | Sumber | Rancangan minimal | Usaha |
 |---|---|---|---|---|
@@ -80,6 +83,7 @@ membelokkan domain blokir Komdigi; provider konfirmasi tidak ada blokir IP).
 | D4 | **Polymarket**: adapter `polymarket.com/event/<slug>` via Gamma `/events?slug=` | last30days `polymarket.py:429-440` | adapter di `fetch/adapters.py`; terjangkau dari server (diukur) | S |
 | D5 | Tanggal dari path URL (`/2026/10/`) sebagai metadata `published` + `date_source` | wigolo `freshness.ts:14-35` | metadata saja; jangan masuk `is_fresh` sebelum diukur | S |
 | D6 | Buang kandidat yang berupa halaman hasil pencarian (SERP) sebelum fetch di `research` | wigolo `source-validation.ts:87-150` | pola URL `/search?q=`, `?s=` dsb; menghemat slot fetch | S |
+| D7 | **Transkrip YouTube** lewat player API Android + timedtext, tanpa dependency | diukur live: langsung 5/5, lewat WARP 0/5 (429) | adapter di `fetch/adapters.py`, selalu direct | M |
 
 ## Ukur dulu, baru putuskan
 
@@ -92,7 +96,7 @@ membelokkan domain blokir Komdigi; provider konfirmasi tidak ada blokir IP).
 | M5 | 429 tanpa body tantangan: lewati browser, hormati `Retry-After` | wigolo `router.ts:1248-1273` | hitung `fallback_stealth_ok` setelah 429 di log 14 hari | tidak ada pemulihan oleh browser |
 | M6 | Captcha manusia di body static (hCaptcha, reCAPTCHA, Arkose): lewati stealth, langsung Wayback | donsetch `walls.rs:585-627` | sama, dari log | idem |
 | M7 | Memori per host "browser menolong atau tidak" (A2) | webclaw `render.rs:2205-2220` | log render per host | hemat render nyata |
-| M8 | Transkrip YouTube via `youtube-transcript-api`, lewat WARP | markitdown, pullmd | 20 video dari server, langsung dan via WARP | >= 70% berhasil |
+| M8 | ~~Transkrip YouTube~~ | diukur 2026-10-31 | langsung 5/5, WARP 0/5 | **diadopsi sebagai D7** |
 | M9 | GDELT sebagai sumber berita (terjangkau) | diukur live | relevansi untuk query bisnis Indonesia | menambah sumber yang tidak ada di SearXNG news |
 | M10 | Reddit search lewat arctic-shift; StockTwits untuk sentimen | last30days `reddit_arctic.py`, `stocktwits.py` | keterjangkauan dari server | jawaban stabil dari IP datacenter |
 | M11 | Recency yang meluruh dengan umur, penalti istilah majemuk dan versi | wigolo `recency-boost.ts`, `rare-terms.ts`; donsetch `coverage.rs` | arm `semantic_ab.py` | nDCG naik pada query bertanggal atau berversi |

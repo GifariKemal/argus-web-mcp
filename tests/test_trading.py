@@ -615,3 +615,14 @@ async def test_news_feed_clean_search_not_degraded(canned_search):
     out = await news.news_sentiment_feed("gold")
     assert out["degraded"] is False
     assert "degraded_reason" not in out
+
+
+async def test_news_feed_keeps_the_date_source_of_an_inferred_date(monkeypatch):
+    """A date read from the link path is weaker than an engine date; callers must see which."""
+    async def fake_search(query, **kwargs):
+        return {"results": [{"title": "t", "url": "https://n.example/2026/10/30/x", "snippet": "",
+                             "published": "2026-10-30", "date_source": "url"}]}
+
+    monkeypatch.setattr(news, "web_search", fake_search)
+    out = await news.news_sentiment_feed("gold")
+    assert out["items"][0]["date_source"] == "url"
