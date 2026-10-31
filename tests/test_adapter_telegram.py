@@ -94,6 +94,30 @@ async def test_fetch_telegram_ignores_other_hosts():
 
 
 @respx.mock
+async def test_read_max_chars_trims_the_posts_with_the_content(app_state, monkeypatch):
+    from argus import server
+
+    respx.get("https://t.me/s/golddesk").mock(return_value=httpx.Response(200, text=PAGE))
+    async with httpx.AsyncClient() as c:
+        res = await fetch_telegram("https://t.me/golddesk", client=c)
+
+    async def fake_fetch(url, **kw):  # app_state's client serves fixtures only
+        return res
+
+    monkeypatch.setattr(server, "fetch", fake_fetch)
+    full = await server.read("https://t.me/golddesk")
+    posts = full["metadata"]["structured"]["posts"]
+    assert len(posts) == 3
+    cut_at = full["content"].index(posts[1]["url"]) + len(posts[1]["url"])
+    capped = await server.read("https://t.me/golddesk", max_chars=cut_at)
+    assert [p["id"] for p in capped["metadata"]["structured"]["posts"]] == [12, 11]
+    assert capped["metadata"]["structured"]["older_url"] == full["metadata"]["structured"][
+        "older_url"]
+    tiny = await server.read("https://t.me/golddesk", max_chars=5)  # no link in the cut
+    assert len(tiny["metadata"]["structured"]["posts"]) == 3
+
+
+@respx.mock
 async def test_ladder_reads_telegram_through_the_adapter():
     respx.get("https://t.me/s/golddesk").mock(return_value=httpx.Response(200, text=PAGE))
     before = STAGE_COUNTS.get("fetch.adapter_ok", 0)

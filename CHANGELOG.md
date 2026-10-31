@@ -16,6 +16,15 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.46] - 2026-10-31 - max_chars trims adapter posts
+
+### Fixed
+
+- `read(max_chars)` cut a Telegram channel's content but returned every post in
+  `metadata.structured.posts` (measured live: `max_chars=700` still carried 20 posts).
+  Only the posts whose link is inside the cut are kept; a cut with no post link in it
+  leaves the record whole, so nothing is dropped silently.
+
 ## [0.4.45] - 2026-10-31 - Telegram channels, feed cap, version fix
 
 ### Added

@@ -519,6 +519,12 @@ def _cap_read(out: dict, max_chars: int | None) -> dict:
         n = sum(line.startswith("- ") for line in cut.split("\n"))
         capped["metadata"] = {**meta, "items": meta["items"][:n],
                               "items_returned": min(n, len(meta["items"]))}
+    posts = (meta.get("structured") or {}).get("posts")
+    if isinstance(posts, list):  # an adapter's posts (Telegram): those whose link is in the cut
+        n = sum(1 for p in posts if isinstance(p, dict) and p.get("url") and p["url"] in cut)
+        if n:  # no link in the cut (or none printed at all): leave the record whole
+            capped["metadata"] = {**meta, "structured": {**meta["structured"],
+                                                         "posts": posts[:n]}}
     return capped
 
 
