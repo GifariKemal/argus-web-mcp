@@ -1641,7 +1641,7 @@ async def test_read_does_not_cache_an_error_status_page(app_state, monkeypatch):
 
 
 async def test_batch_read_max_chars_caps_each_result_flagged(app_state):
-    """One huge reply (a StockTwits JSON answer) flooded the caller: no per-result cap."""
+    """One huge reply (a large JSON API answer) flooded the caller: no per-result cap."""
     full = (await server.read(f"{BASE}/article"))["content"]
     r = await server.batch_read([f"{BASE}/article", f"{BASE}/article"], max_chars=40)
     for x in r["results"]:

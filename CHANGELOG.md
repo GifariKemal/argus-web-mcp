@@ -16,6 +16,21 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.43] - 2026-10-31 - StockTwits adapter removed
+
+### Removed
+
+- The StockTwits adapter (0.4.41). Measured on the server after the 0.4.42 header fix: the
+  stream API answers 403 to Argus's UA, a browser UA, curl and no UA; it only answered 200
+  to two User-Agent headers at once, the bug 0.4.42 fixed. Relying on that would be a WAF
+  parsing quirk, not access. `read` on a StockTwits symbol page still works through the
+  browser render (labels Bullish/Bearish included).
+
+### Verified live
+
+- X account reads unaffected by the header fix: after the first (FxTwitter) read warms the
+  account, profiles come back through it with 20+ latest posts; `/health` `x_account: ok`.
+
 ## [0.4.42] - 2026-10-31 - caller headers really replace the defaults
 
 ### Fixed
