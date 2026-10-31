@@ -170,6 +170,8 @@ def _map_result(raw: dict) -> dict:
     published = raw.get("publishedDate")
     if published:
         out["published"] = published
+    if raw.get("engines"):  # every engine behind a merged result: agreement signal (T6)
+        out["engines"] = list(raw["engines"])
     return out
 
 

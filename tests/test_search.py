@@ -2026,3 +2026,14 @@ def test_authority_prior_matches_on_a_label_boundary(url, expected):
     from argus.search import is_authoritative
 
     assert is_authoritative(url) is expected
+
+
+def test_map_result_keeps_the_engines_that_returned_it():
+    """SearXNG lists every engine behind a merged result; agreement across independent
+    indexes is a ranking signal under measurement, so the list must survive mapping."""
+    from argus.search import _map_result
+
+    out = _map_result({"url": "https://a.example/", "title": "A", "content": "s",
+                       "engine": "google", "engines": ["google", "bing"]})
+    assert out["engines"] == ["google", "bing"]
+    assert "engines" not in _map_result({"url": "https://b.example/", "engine": "bing"})

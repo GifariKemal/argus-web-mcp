@@ -253,7 +253,8 @@ async def test_just_above_threshold_does_not_escalate(monkeypatch):
 async def test_just_below_threshold_escalates(monkeypatch):
     # visible text < ESCALATE_BELOW_CHARS -> escalate to the browser tier.
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
-    body = "<html><body>" + ("a" * (ESCALATE_BELOW_CHARS - 1)) + "</body></html>"
+    body = ("<html><head><script src=/app.js></script></head><body>"
+            + ("a" * (ESCALATE_BELOW_CHARS - 1)) + "</body></html>")
     assert _visible_text_len(body) < ESCALATE_BELOW_CHARS
 
     def h(req):
@@ -1042,3 +1043,67 @@ async def test_forced_render_internal_landing_raises_ssrf(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
     with pytest.raises(SSRFError):
         await fetch("http://example.com/", client=None, browser=_InternalLanding(), render=True)
+
+
+# --- browser gate: render only when a browser could change the answer ---
+@pytest.mark.parametrize("status", [200, 404, 410])
+async def test_thin_page_without_script_is_not_rendered(monkeypatch, status):
+    """No <script> and no meta refresh: the browser would load the same HTML, so a thin
+    page (a short 404, a bare notice) stays static instead of costing a 20-45 s render."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+
+    def h(req):
+        return httpx.Response(status, text="<html><body><h1>Not here</h1></body></html>")
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/gone", client=c, browser=fake)
+    assert fake.calls == 0
+    assert res["render_path"] == "static" and res["status"] == status
+
+
+async def test_thin_page_with_meta_refresh_still_escalates(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    body = ('<html><head><meta http-equiv="Refresh" content="0; url=/app"></head>'
+            "<body></body></html>")
+
+    def h(req):
+        return httpx.Response(200, text=body)
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/", client=c, browser=fake)
+    assert fake.calls == 1 and res["render_path"] == "browser"
+
+
+async def test_oversize_body_skips_the_browser_and_tries_wayback(monkeypatch):
+    """A body over the cap is not something a render fixes: go straight to the archive."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    import argus.fetch.core as core
+
+    archived = {"n": 0}
+
+    async def fake_archive(url, **kw):
+        archived["n"] += 1
+        return {"final_url": url, "status": 200, "html": "<html>snap</html>",
+                "render_path": "archive", "screenshot": None}
+
+    monkeypatch.setattr(core, "fetch_via_archive", fake_archive)
+
+    def h(req):
+        return httpx.Response(200, text="x", headers={"content-length": str(10**10)})
+
+    fake = _FakeBrowser()
+    async with _client(h) as c:
+        res = await fetch("http://example.com/huge", client=c, browser=fake)
+    assert fake.calls == 0 and archived["n"] == 1
+    assert res["render_path"] == "archive"
+
+
+def test_duckduckgo_style_captcha_page_is_a_wall():
+    from argus.fetch.static import _looks_blocked
+
+    page = ("<html><body>DuckDuckGo Unfortunately, bots use DuckDuckGo too. Please complete "
+            "the following challenge to confirm this search was made by a human. "
+            "Select all squares containing a duck: Submit</body></html>")
+    assert _looks_blocked(page, 200)

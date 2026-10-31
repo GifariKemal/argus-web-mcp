@@ -462,7 +462,9 @@ async def read(
         out["images"] = media["images"]
         out["links_truncated"] = media["links_truncated"]
         out["images_truncated"] = media["images_truncated"]
-    if res["render_path"] != "archive":  # a Wayback copy must not outlive the site's blip
+    # A Wayback copy must not outlive the site's blip, and an error page (404/410) must not
+    # outlive the fix: neither is cached.
+    if res["render_path"] != "archive" and (res["status"] or 200) < 400:
         s.cache.put(ck, out, source="general")
     return _cap_read(out, max_chars)
 

@@ -36,6 +36,7 @@ _BLOCK_MARKERS = (
     "access denied",
     "enable javascript and cookies",
     "verify you are human",
+    "complete the following challenge",  # DuckDuckGo lite/html CAPTCHA (seen 2026-10-31)
 )
 _BLOCK_STATUSES = {403, 429, 503}
 # crawl4ai verdicts that mean "thin page", not "wall": a tiny legit page or JS shell is the

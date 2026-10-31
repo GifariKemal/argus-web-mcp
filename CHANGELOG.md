@@ -16,6 +16,22 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+From the second reference study (`docs/qa/2026-10-31-reference-study-2.md`: 14 repos read at
+code level, free sources measured from the production server).
+
+### Changed
+
+- The fetch ladder only renders when a browser can change the answer: a thin page with no
+  `<script>` and no meta refresh stays static (a short 404 used to cost a 20-45 s render),
+  and an oversize or undecodable body goes straight to Wayback instead of the stealth browser.
+- `read` no longer caches an error-status page (4xx/5xx); a 404 used to be served for an hour.
+- `search` results keep SearXNG's `engines` list, the data for measuring cross-index agreement
+  (no ranking change yet).
+
+### Fixed
+
+- The DuckDuckGo CAPTCHA page ("complete the following challenge") was returned as content.
+
 ## [0.4.39] - 2026-10-31 - one cache row per X post, absent posts skip the account
 
 ### Changed

@@ -8,6 +8,7 @@ twice. SSRF is enforced in the static hop guard and the browser pre-check.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -65,6 +66,12 @@ def _remember_failure(url: str, exc: FetchError) -> None:
 
 
 _visible_text_len = visible_text_len  # JS-shell detector; linear lxml form (static.py)
+# A render only changes a page that runs script or redirects in markup; plain HTML loads the
+# same in Chromium, and crw measured ~20 s per rendered 404 (2026-10-31 reference study).
+_RENDER_CAN_ADD = re.compile(r"<script|http-equiv\s*=\s*[\"']?refresh", re.IGNORECASE)
+# Static failures a browser cannot fix: the render would fetch the same oversize or
+# undecodable body, so they go straight to the archive rung.
+_NOT_A_RENDER_PROBLEM = ("response too large", "unsupported content-encoding")
 
 
 async def fetch(url: str, *, throttle=None, **kwargs) -> dict:
@@ -172,7 +179,7 @@ async def _do_fetch(
                     return api
                 record_stage("fetch.adapter_fail")
         # 1) stealth browser tier (may route/behave differently than the httpx hop).
-        if browser is not None:
+        if browser is not None and not str(exc).startswith(_NOT_A_RENDER_PROBLEM):
             try:
                 r = await browser.render(url, stealth=True, timeout=max(timeout, 45))
             except (FetchError, SSRFError) as rexc:
@@ -204,7 +211,8 @@ async def _do_fetch(
             _remember_failure(url, exc)
         raise exc
 
-    if browser is not None and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS:
+    if (browser is not None and _visible_text_len(res["html"]) < ESCALATE_BELOW_CHARS
+            and _RENDER_CAN_ADD.search(res["html"])):
         record_stage("fetch.thin_escalate")
         logger.info("fetch[%s]: thin static content (<%d chars); escalating to browser",
                     url, ESCALATE_BELOW_CHARS)

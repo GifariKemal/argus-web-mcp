@@ -1622,3 +1622,19 @@ async def test_map_urls_clamps_max_urls(app_state, monkeypatch):
     await server.map_urls("https://x.test/", max_urls=-2)
     await server.map_urls("https://x.test/", max_urls=99999)
     assert seen == [1, 5000]  # clamped low + high at the trust boundary
+
+
+async def test_read_does_not_cache_an_error_status_page(app_state, monkeypatch):
+    calls = {"n": 0}
+
+    async def not_found(url, **kw):
+        calls["n"] += 1
+        return {"final_url": url, "status": 404, "render_path": "static",
+                "html": "<html><body><article>" + "missing page text " * 40
+                        + "</article></body></html>"}
+
+    monkeypatch.setattr(server, "fetch", not_found)
+    r1 = await server.read(f"{BASE}/gone")
+    assert r1["status"] == 404
+    r2 = await server.read(f"{BASE}/gone")
+    assert r2["from_cache"] is False and calls["n"] == 2
