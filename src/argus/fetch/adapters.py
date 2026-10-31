@@ -511,3 +511,106 @@ async def fetch_youtube(url: str, *, client, timeout: float = 30) -> dict | None
     parts.append("</article></body></html>")
     return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
             "structured": record}
+
+
+# Telegram public channels: t.me/s/<channel> is a server-rendered preview of the latest ~20
+# posts, no login (measured 2026-10-31 from the primary server). Read as a page it runs
+# reaction counts, view counts and "VIEW IN TELEGRAM" stubs into the text; the markup has
+# one div per post with its link, time and views. Private chats (/c/, invites) have none.
+_TG_HOSTS = frozenset({"t.me", "www.t.me", "telegram.me", "www.telegram.me"})
+_TG_PATH = re.compile(r"/(?:s/)?([A-Za-z][A-Za-z0-9_]{3,31})(?:/(\d{1,12}))?/?")
+_TG_RESERVED = frozenset({"joinchat", "addstickers", "addemoji", "addtheme", "addlist",
+                          "share", "proxy", "socks", "login", "setlanguage", "confirmphone",
+                          "invoice", "boost", "contact"})
+_TG_BEFORE = re.compile(r"(?:^|&)before=(\d{1,12})(?:&|$)")
+_TG_POST = ('//div[contains(concat(" ", normalize-space(@class), " "), '
+            '" tgme_widget_message ")][@data-post]')
+_TG_MEDIA = ('.//*[contains(@class, "message_photo") or contains(@class, "message_video") '
+             'or contains(@class, "message_document") or contains(@class, "message_voice") '
+             'or contains(@class, "message_sticker") or contains(@class, "message_roundvideo")]')
+
+
+def telegram_target(url: str) -> str | None:
+    """The preview URL for a public channel (``t.me/s/<ch>``) or one post (embed), else None."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or (parts.hostname or "") not in _TG_HOSTS:
+        return None
+    m = _TG_PATH.fullmatch(parts.path)
+    if m is None or m.group(1).lower() in _TG_RESERVED:
+        return None
+    channel, post = m.groups()
+    if post:
+        return f"https://t.me/{channel}/{post}?embed=1&mode=tme"
+    before = _TG_BEFORE.search(parts.query)
+    return f"https://t.me/s/{channel}" + (f"?before={before.group(1)}" if before else "")
+
+
+def _tg_first(node, xpath: str):
+    found = node.xpath(xpath)
+    return found[0] if found else None
+
+
+def _tg_post(node) -> dict | None:
+    channel, _, pid = node.get("data-post", "").rpartition("/")
+    if not channel or not pid.isdigit():
+        return None
+    text_el = _tg_first(node, './/div[contains(concat(" ", normalize-space(@class), " "), '
+                              '" js-message_text ")]')
+    text = ""
+    if text_el is not None:
+        for br in text_el.iter("br"):
+            br.tail = "\n" + (br.tail or "")
+        text = text_el.text_content().strip()
+    date = _tg_first(node, './/a[contains(@class, "tgme_widget_message_date")]')
+    when = _tg_first(date, ".//time/@datetime") if date is not None else None
+    href = date.get("href", "") if date is not None else ""
+    views = _tg_first(node, './/span[contains(@class, "tgme_widget_message_views")]')
+    return {"id": int(pid),
+            "url": href if href.startswith("https://t.me/") else f"https://t.me/{channel}/{pid}",
+            "date": str(when or ""), "views": views.text_content().strip() if views is not None
+            else "", "text": text, "media": bool(node.xpath(_TG_MEDIA))}
+
+
+async def fetch_telegram(url: str, *, client, timeout: float = 30) -> dict | None:
+    """A public channel's latest posts (or one post), newest first, as ``{final_url, status,
+    html, render_path: 'api', structured}``. Never raises: no match, no posts or any
+    failure -> None, and the page path reads it as before."""
+    page = telegram_target(url)
+    if page is None:
+        return None
+    from lxml import html as lxml_html
+
+    try:
+        res = await fetch_static(page, client=client, timeout=timeout)
+        if res["status"] != 200:
+            return None
+        doc = lxml_html.fromstring(res["html"])
+        posts = sorted((p for p in map(_tg_post, doc.xpath(_TG_POST)) if p),
+                       key=lambda p: p["id"], reverse=True)
+        if not posts:
+            return None
+        channel = _TG_PATH.fullmatch(urlsplit(url).path).group(1)
+        # og:title is the bare name; the header also holds the verified badge. A single
+        # post (embed) has neither, only the owner name.
+        owner = _tg_first(doc, '//*[contains(@class, "tgme_widget_message_owner_name")]')
+        title = " ".join(str(_tg_first(doc, '//meta[@property="og:title"]/@content')
+                             or (owner.text_content() if owner is not None else "")
+                             or channel).split())
+    except Exception:  # noqa: BLE001 - any failure must degrade to None, never raise
+        return None
+    e = html.escape
+    parts = [f"<html><head><title>{e(title)}</title></head><body><article>",
+             f"<h1>{e(title)}</h1>", f"<p>t.me/{e(channel)}, {len(posts)} posts</p>"]
+    for p in posts:
+        info = " - ".join(x for x in (p["date"][:16].replace("T", " "),
+                                       f"{p['views']} views" if p["views"] else "",
+                                       "media" if p["media"] else "") if x)
+        body = "<br>".join(e(line) for line in p["text"].split("\n")) or "(media, no text)"
+        parts += [f'<h2><a href="{e(p["url"])}">{e(p["url"])}</a></h2>',
+                  f"<p>{e(info)}</p>", f"<p>{body}</p>"]
+    parts.append("</article></body></html>")
+    record = {"channel": channel, "title": title, "posts": posts}
+    if len(posts) > 1:  # the preview pages back with ?before=<oldest id>
+        record["older_url"] = f"https://t.me/s/{channel}?before={posts[-1]['id']}"
+    return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
+            "structured": record}

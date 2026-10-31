@@ -22,12 +22,14 @@ from .adapters import (
     fetch_polymarket,
     fetch_reddit,
     fetch_stackexchange,
+    fetch_telegram,
     fetch_youtube,
     hn_target,
     npm_target,
     polymarket_target,
     reddit_target,
     stackexchange_target,
+    telegram_target,
     youtube_target,
 )
 from .fallback import fetch_via_archive
@@ -163,10 +165,12 @@ async def _do_fetch(
         record_stage("fetch.x_api_fail")
     # Reddit threads answer with a JS shell that loses the comments; the feed has them. HN
     # item pages lose the thread nesting, Polymarket is a JS app and a
-    # YouTube watch page has no transcript; all of them have open APIs.
+    # YouTube watch page has no transcript; all of them have open APIs. A Telegram channel
+    # page runs its posts together; the preview markup splits them.
     for target, adapter in ((reddit_target, fetch_reddit), (hn_target, fetch_hn),
                             (polymarket_target, fetch_polymarket),
-                            (youtube_target, fetch_youtube)):
+                            (youtube_target, fetch_youtube),
+                            (telegram_target, fetch_telegram)):
         if target(url):
             api = await adapter(url, client=client, timeout=min(timeout, 15))
             if api is not None:

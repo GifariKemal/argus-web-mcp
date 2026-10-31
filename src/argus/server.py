@@ -512,7 +512,14 @@ def _cap_read(out: dict, max_chars: int | None) -> dict:
     content = out.get("content") or ""
     if max_chars is None or max_chars < 1 or len(content) <= max_chars:
         return out
-    return {**out, "content": content[:max_chars], "truncated": True, "full_chars": len(content)}
+    cut = content[:max_chars]
+    capped = {**out, "content": cut, "truncated": True, "full_chars": len(content)}
+    meta = out.get("metadata") or {}
+    if isinstance(meta.get("items"), list):  # a feed: keep the items whose line is in the cut
+        n = sum(line.startswith("- ") for line in cut.split("\n"))
+        capped["metadata"] = {**meta, "items": meta["items"][:n],
+                              "items_returned": min(n, len(meta["items"]))}
+    return capped
 
 
 async def search(

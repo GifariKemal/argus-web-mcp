@@ -421,6 +421,12 @@ async def test_read_feed_via_text_xml(app_state, monkeypatch):
     r = await server.read("https://ex.test/feed", max_chars=20)
     assert r["metadata"]["doc_type"] == "feed" and r["truncated"] is True
     assert r["metadata"]["items"][0]["url"] == "https://ex.test/a"
+    # the cap reaches the item list too: only items whose line starts inside the cut
+    # (2026-10-31: a 1200-char read of Google News still carried 100 items)
+    assert len(r["metadata"]["items"]) == 1 and r["metadata"]["items_returned"] == 1
+    assert r["metadata"]["items_total"] == 2
+    full = await server.read("https://ex.test/feed")
+    assert len(full["metadata"]["items"]) == 2 and "truncated" not in full
 
 
 async def test_read_guard_violation_is_structured_error(app_state, monkeypatch):

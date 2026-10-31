@@ -16,6 +16,34 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.45] - 2026-10-31 - Telegram channels, feed cap, version fix
+
+### Added
+
+- `read` on a Telegram public channel or post (`t.me/<channel>`, `t.me/s/<channel>`,
+  `t.me/<channel>/<id>`, `telegram.me`): the server-rendered preview is split into one
+  record per post (link, date, views, text, media flag), newest first, in
+  `metadata.structured` with `older_url` (`?before=<oldest id>`) for the page before. As a
+  plain page it ran reaction counts, view counts and "VIEW IN TELEGRAM" stubs into the
+  text. Invites, `/c/` chats and service paths are left to the page path. Measured
+  2026-10-31 from the primary server: 200 without login.
+
+### Fixed
+
+- `read(max_chars)` cut the content of a feed but returned all of `metadata.items`
+  (a 1200-character read of a Google News feed still carried 100 items). Only the items
+  whose line starts inside the cut are kept; `items_returned` follows.
+- `__version__` in `argus/__init__.py` was left at 0.4.43 by the 0.4.44 bump, so the
+  version test failed in CI. Both sources say 0.4.45.
+
+### Measured, not adopted
+
+- Google News RSS as a `search(category=news)` source: the item links are
+  `news.google.com/rss/articles/...` wrappers that `read` cannot resolve (the page is a
+  JS hand-off, "Google News" only, even in the browser), and `category=news` already
+  returns dated results through `duckduckgo news`. The feed itself stays readable with
+  `read` for a dated headline list.
+
 ## [0.4.44] - 2026-10-31 - x_search flags index hits after an empty live search
 
 ### Fixed
