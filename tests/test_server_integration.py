@@ -982,7 +982,7 @@ async def test_inmemory_client_lists_all_tools():
     assert names == {
         "read", "search", "smart_search", "read_pdf", "scrape", "batch_read",
         "extract_structured", "crawl", "screenshot", "research", "map_urls", "find_similar",
-        "github_search", "scholar_search", "watch", "list_watches", "unwatch",
+        "github_search", "scholar_search", "x_search", "watch", "list_watches", "unwatch",
         "forexfactory_calendar", "cot_report", "news_sentiment_feed",
     }
 
