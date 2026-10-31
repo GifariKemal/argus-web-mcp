@@ -146,3 +146,15 @@ async def test_ladder_falls_back_to_page_when_rate_limited():
         res = await fetch(ST_URL, client=c, browser=None, timeout=10)
     assert res["render_path"] == "static"
     assert STAGE_COUNTS["fetch.adapter_fail"] == before + 1
+
+
+@respx.mock
+async def test_stocktwits_api_is_asked_with_a_browser_user_agent():
+    """The stream API answered 403 to Argus's own UA from the server (2026-10-31) and 200
+    to a browser UA; only this one API call carries it."""
+    route = respx.get(ST_API).mock(return_value=httpx.Response(200, json=ST_DOC))
+    async with httpx.AsyncClient() as c:
+        await fetch_stocktwits("https://stocktwits.com/symbol/aapl", client=c)
+    ua = route.calls[0].request.headers["user-agent"]
+    assert ua.startswith("Mozilla/5.0") and "Chrome/" in ua
+    assert route.calls[0].request.headers["accept"] == "application/json"

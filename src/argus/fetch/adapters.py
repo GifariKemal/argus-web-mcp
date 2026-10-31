@@ -189,9 +189,9 @@ async def fetch_reddit(url: str, *, client, timeout: float = 30) -> dict | None:
     return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api"}
 
 
-async def _api_json(url: str, *, client, timeout: float):
+async def _api_json(url: str, *, client, timeout: float, headers: dict | None = None):
     """GET a known JSON endpoint through the guarded hop; a non-200 answer raises."""
-    res = await fetch_static(url, client=client, timeout=timeout, api=True)
+    res = await fetch_static(url, client=client, timeout=timeout, api=True, headers=headers)
     if res["status"] != 200:
         raise ValueError(f"status {res['status']}")
     return json.loads(res["html"])
@@ -519,6 +519,10 @@ async def fetch_youtube(url: str, *, client, timeout: float = 30) -> dict | None
 # carry HTML entities; they are unescaped to text, then escaped for our page.
 _ST_SYMBOL = re.compile(r"/symbol/([A-Za-z0-9][A-Za-z0-9.-]{0,19})/?")
 _ST_API = "https://api.stocktwits.com/api/2/streams/symbol/"
+# The stream API answered 403 to Argus's own UA from the server and 200 to a browser UA
+# (measured 2026-10-31), so this one call sends one.
+_ST_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "Accept": "application/json"}
 _ST_MAX_MESSAGES = 30
 
 
@@ -542,7 +546,8 @@ async def fetch_stocktwits(url: str, *, client, timeout: float = 30) -> dict | N
         return None
     e = html.escape
     try:
-        data = await _api_json(f"{_ST_API}{sym}.json", client=client, timeout=timeout)
+        data = await _api_json(f"{_ST_API}{sym}.json", client=client, timeout=timeout,
+                               headers=_ST_HEADERS)
         if (data.get("response") or {}).get("status") != 200:
             return None
         info = data["symbol"]

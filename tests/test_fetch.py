@@ -1153,3 +1153,18 @@ def test_cloudflare_performing_security_verification_page_is_a_wall():
             "Performing security verification This website uses a security service to protect "
             "against malicious bots.</body></html>")
     assert _looks_blocked(page.replace("Just a moment...", "Verifying"), 200)
+
+
+async def test_caller_headers_override_defaults_whatever_their_case(monkeypatch):
+    """`User-Agent` from a caller used to ride along with the default `user-agent` instead
+    of replacing it (a case-sensitive dict merge), so APIs saw Argus's own UA."""
+    monkeypatch.setattr(socket, "getaddrinfo", _gai({}))
+    seen = {}
+
+    def h(req):
+        seen["ua"] = req.headers.get_list("user-agent")
+        return httpx.Response(200, text="<html><body>" + "x " * 300 + "</body></html>")
+
+    async with _client(h) as c:
+        await fetch_static("http://example.com/", client=c, headers={"User-Agent": "Custom/1.0"})
+    assert seen["ua"] == ["Custom/1.0"]

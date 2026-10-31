@@ -16,6 +16,16 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.42] - 2026-10-31 - caller headers really replace the defaults
+
+### Fixed
+
+- `fetch_static` merged a caller's `User-Agent` with its own lower-case `user-agent`
+  default, so both went out and APIs saw Argus's UA. Header names are now matched without
+  case. Found live on 0.4.41: the StockTwits stream API answers 403 to Argus's UA and 200 to
+  a browser UA, so `read` on a symbol page fell back to the browser. The StockTwits adapter
+  sends a browser UA on that one call; the X GraphQL calls now send only their own UA too.
+
 ## [0.4.41] - 2026-10-31 - measured: OCR, page-type extraction, StockTwits, B1 baseline
 
 Every "measure first" item of the second reference study, measured the same day (results and

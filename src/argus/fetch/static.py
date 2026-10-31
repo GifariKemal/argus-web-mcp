@@ -224,8 +224,10 @@ async def _get_guarded(
     jar = httpx.Cookies()
 
     async def _hop(c: httpx.AsyncClient, t) -> tuple[httpx.Response, bytes | None]:
-        req = c.build_request("GET", current, timeout=t, headers={**_DEFAULT_HEADERS,
-                                                                    **(headers or {})})
+        # Header names are case-insensitive: lower-case the caller's so its User-Agent replaces
+        # the default instead of being sent alongside it.
+        req = c.build_request("GET", current, timeout=t, headers={
+            **_DEFAULT_HEADERS, **{k.lower(): v for k, v in (headers or {}).items()}})
         jar.set_cookie_header(req)
         resp = await c.send(req, stream=True)
         try:

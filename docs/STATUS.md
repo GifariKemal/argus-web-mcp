@@ -3,6 +3,8 @@
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
 ## Snapshot (updated 2026-10-31)
+**0.4.42 (2026-10-31):** caller headers replace `fetch_static`'s defaults regardless of case (a duplicated User-Agent made StockTwits answer 403); StockTwits adapter sends a browser UA.
+
 **0.4.41 (2026-10-31):** every "measure first" item of the second reference study measured. Adopted: page-type extraction through rs-trafilatura (WCXB F1 dev 0.817 -> 0.846, test 0.858 -> 0.888), OCR with tesseract (word recall 0.988), StockTwits adapter, PPTX charts, CSV charset detection, `batch_read(max_chars)`. Rejected with numbers: index agreement, compound penalty, JSON islands, 429/captcha browser skip, Cloudflare solver, GDELT, arctic-shift, Marginalia. B1 baseline: 1000 URLs, 91.2% read, p50 2.0 s.
 
 **0.4.40 (2026-10-31):** `read` handles PDF, DOCX, PPTX, XLSX, EPUB, CSV, JSON, XML and RSS/Atom feeds (zip guard, entity-free XML, worker pool, no new dependency); Hacker News, Polymarket and YouTube-transcript adapters; the browser only renders where it can help; error pages are not cached; URL-path dates without a ranking change; SERP pages skipped in research; SearXNG `hackernews` on. From the second reference study (`docs/qa/2026-10-31-reference-study-2.md`). Same day: primary server host DNS moved to 1.1.1.1/8.8.8.8.
