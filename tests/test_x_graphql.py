@@ -290,6 +290,24 @@ async def test_x_search_tool_falls_back_to_index_on_account_errors(app_state, mo
     assert (await server.x_search("esp32", limit=3))["source"] == "graphql"
 
 
+async def test_x_search_empty_live_result_flags_the_index_fallback(app_state, monkeypatch,
+                                                                    layer1):
+    # 2026-10-31: `from:traderday` (typo) found nothing live; the index ignores `from:` and
+    # returned other authors' posts as if they matched, with degraded=False.
+    async def live(query, **kw):
+        return {"results": [], "source": "graphql", "degraded": False, "degraded_reason": None}
+
+    async def index(query, **kw):
+        return {"results": [{"id": "1", "text": "t"}], "source": "index", "degraded": False,
+                "degraded_reason": None}
+
+    monkeypatch.setattr(graphql, "search_posts", live)
+    monkeypatch.setattr(server, "_x_search_posts", index)
+    r = await server.x_search("from:traderday quarterly", limit=3)
+    assert r["source"] == "index" and r["degraded"] is True
+    assert r["degraded_reason"] == "x_no_results"
+
+
 # --- review fixes: refresh floor, single flight, backoff, bounded regex --------------
 
 async def test_forced_refresh_of_a_young_manifest_is_refused(layer1, monkeypatch):

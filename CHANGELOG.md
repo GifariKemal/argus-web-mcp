@@ -16,6 +16,15 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.44] - 2026-10-31 - x_search flags index hits after an empty live search
+
+### Fixed
+
+- `x_search`: when live X search (the account) found nothing, the web-index fallback came
+  back with `degraded: false`, although the index ignores X operators. `from:traderday`
+  (a typo for `traderdaye`) returned other authors' posts as if they matched. That fallback
+  is now `degraded: true`, `degraded_reason: "x_no_results"`, and is not cached.
+
 ## [0.4.43] - 2026-10-31 - StockTwits adapter removed
 
 ### Removed

@@ -3,7 +3,7 @@
 Status and release-history paragraphs moved verbatim from `CLAUDE.md` on 2026-10-26 so the agent file stays short. Edits on the move: VPS addresses and the panel hostname removed (public repo), dated model name dropped. Full history per version: [`CHANGELOG.md`](../CHANGELOG.md). Plan: [`02-ROADMAP.md`](02-ROADMAP.md).
 
 ## Snapshot (updated 2026-10-31)
-**0.4.43 (2026-10-31):** StockTwits adapter removed (its API only answered a duplicated User-Agent, the 0.4.42 bug); symbol pages still read through the browser.
+**0.4.44 (2026-10-31):** `x_search` marks index hits after an empty live search as degraded (`x_no_results`); the index ignores `from:`. **0.4.43 (2026-10-31):** StockTwits adapter removed (its API only answered a duplicated User-Agent, the 0.4.42 bug); symbol pages still read through the browser.
 
 **0.4.42 (2026-10-31):** caller headers replace `fetch_static`'s defaults regardless of case (a duplicated User-Agent made StockTwits answer 403); StockTwits adapter sends a browser UA.
 

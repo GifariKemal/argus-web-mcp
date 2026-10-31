@@ -1267,7 +1267,9 @@ async def x_search(
         except Exception:  # noqa: BLE001 - Layer 1 must never break the tool
             x_reason = "x_backend_error"
         if found is not None and not found["results"]:
-            found = None  # live search found nothing; the index may still have posts
+            # live search found nothing; the index may still have posts, but it ignores
+            # X operators (from:, lang:), so its hits must not pass for live matches
+            found, x_reason = None, "x_no_results"
     try:
         if found is None:
             found = await _x_search_posts(query, mode=mode, limit=limit, since=d_since,
