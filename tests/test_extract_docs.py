@@ -843,3 +843,122 @@ async def test_gate_slot_is_released_when_the_pool_cannot_be_built(thread_doc_po
     with pytest.raises(OSError):
         await p.run_document(int, "1")
     assert await _slot_freed(p)
+
+
+# --- PPTX charts and CSV charsets --------------------------------------------------------
+
+C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_CHART_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+
+
+def _chart_slide(before: str, after: str, rid: str = "rId2") -> str:
+    p = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    return (f'<p:sld xmlns:p="{p}" xmlns:a="{A}" xmlns:c="{C}" xmlns:r="{R}"><p:cSld>'
+            f"<p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{before}</a:t></a:r></a:p></p:txBody>"
+            f'</p:sp><p:graphicFrame><a:graphic><a:graphicData uri="{C}"><c:chart r:id="{rid}"/>'
+            "</a:graphicData></a:graphic></p:graphicFrame><p:sp><p:txBody><a:p><a:r>"
+            f"<a:t>{after}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>")
+
+
+def _ser(name: str, cats: list[str], vals: list[str]) -> str:
+    pts = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(cats))
+    nums = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(vals))
+    return (f"<c:ser><c:tx><c:strRef><c:strCache><c:pt idx='0'><c:v>{name}</c:v></c:pt>"
+            f"</c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:strCache>{pts}</c:strCache>"
+            f"</c:strRef></c:cat><c:val><c:numRef><c:numCache>{nums}</c:numCache></c:numRef>"
+            "</c:val></c:ser>")
+
+
+def _chart_xml(title: str, series: str) -> str:
+    head = (f"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title}</a:t></a:r></a:p></c:rich></c:tx>"
+            "</c:title>") if title else ""
+    return (f'<c:chartSpace xmlns:c="{C}" xmlns:a="{A}"><c:chart>{head}<c:plotArea>'
+            f"<c:barChart>{series}</c:barChart></c:plotArea></c:chart></c:chartSpace>")
+
+
+def _chart_pptx(chart: str, slides: int = 1) -> bytes:
+    files = {"ppt/presentation.xml": "<p/>", "ppt/charts/chart1.xml": chart}
+    for n in range(1, slides + 1):
+        files[f"ppt/slides/slide{n}.xml"] = _chart_slide(f"before {n}", f"after {n}")
+        files[f"ppt/slides/_rels/slide{n}.xml.rels"] = (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+            f'relationships"><Relationship Id="rId2" Type="{_CHART_REL}" '
+            'Target="../charts/chart1.xml"/></Relationships>')
+    return _zip(files)
+
+
+def test_pptx_chart_title_and_table_in_slide_order():
+    chart = _chart_xml("Energy by year", _ser("Batam", ["2001", "2002"], ["10", "12.5"])
+                       + _ser("Jakarta", ["2001", "2002"], ["30", "31"]))
+    r = convert("pptx", _chart_pptx(chart), "https://ex.test/d.pptx", "markdown")
+    c = r["content"]
+    assert c.index("before 1") < c.index("### Chart: Energy by year") < c.index("after 1")
+    assert "| Category | Batam | Jakarta |" in c
+    assert "| 2001 | 10 | 30 |" in c and "| 2002 | 12.5 | 31 |" in c
+    assert r["truncated"] is False
+
+
+def test_pptx_chart_rows_capped_and_aliased_chart_printed_once():
+    n = docs.MAX_ROWS + 5
+    chart = _chart_xml("", _ser("S", [str(i) for i in range(n)], ["1"] * n))
+    r = convert("pptx", _chart_pptx(chart, slides=3), "https://ex.test/d.pptx", "markdown")
+    m = r["metadata"]
+    assert (m["rows_total"], m["rows_returned"]) == (n, docs.MAX_ROWS)
+    assert r["truncated"] is True and "### Chart\n" in r["content"]
+    assert r["content"].count("(same chart as slide 1)") == 2  # parsed and printed once
+
+
+def test_pptx_chart_with_missing_part_keeps_the_slide():
+    data = _zip({"ppt/presentation.xml": "<p/>",
+                 "ppt/slides/slide1.xml": _chart_slide("kept", "also kept")})
+    r = convert("pptx", data, "https://ex.test/d.pptx", "markdown")
+    c, m = r["content"], r["metadata"]
+    assert "kept" in c and "also kept" in c and "Chart" not in c
+    # an unresolved chart is counted, so the read says something is missing
+    assert (m["charts_total"], m["charts_returned"]) == (1, 0) and r["truncated"] is True
+
+
+_KANJI = "名前,年齢,住所\n佐藤太郎,30,東京\n三木英子,25,大阪\n髙橋淳,35,名古屋\n"
+
+
+@pytest.mark.parametrize(("path", "ctype"), [("/k.csv", "text/csv"),
+                                             ("/k.csv", "text/plain"),
+                                             ("/k.tsv", "text/plain")])
+async def test_fetch_static_detects_csv_charset_without_header(public_dns, path, ctype):
+    import httpx
+
+    from argus.fetch.static import fetch_static
+
+    body = _KANJI.encode("cp932")  # 髙 exists in cp932 only, not in plain Shift-JIS
+
+    def h(req):
+        return httpx.Response(200, content=body, headers={"content-type": ctype})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+        res = await fetch_static(f"https://ex.test{path}", client=c, api=True)
+    assert "髙橋淳" in res["html"] and "�" not in res["html"]
+    if path.endswith(".csv"):
+        out = convert("csv", res["html"], "https://ex.test/k.csv", "markdown")["content"]
+        assert "| 髙橋淳 | 35 | 名古屋 |" in out
+
+
+async def test_fetch_static_charset_guess_only_for_csv(public_dns):
+    import httpx
+
+    from argus.fetch.static import fetch_static
+
+    utf8 = "名前,年齢\n佐藤,30\n".encode()
+    cp932 = _KANJI.encode("cp932")
+    routes = {"/u.csv": (utf8, "text/csv"), "/p.txt": (cp932, "text/plain"),
+              "/j": (cp932, "application/json")}
+
+    def h(req):
+        body, ctype = routes[req.url.path]
+        return httpx.Response(200, content=body, headers={"content-type": ctype})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+        u = await fetch_static("https://ex.test/u.csv", client=c, api=True)
+        p = await fetch_static("https://ex.test/p.txt", client=c, api=True)
+        j = await fetch_static("https://ex.test/j", client=c, api=True)
+    assert u["html"] == utf8.decode()  # valid utf-8 is never second-guessed
+    assert "�" in p["html"] and "�" in j["html"]  # not a CSV: utf-8 as before

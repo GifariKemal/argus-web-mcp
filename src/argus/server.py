@@ -451,8 +451,11 @@ async def read(
                 # read_pdf's extractor, but on the document pool: a hostile PDF is killed at
                 # `timeout` instead of wedging the single PDF thread read_pdf relies on.
                 try:
-                    raw = await extract_pool.run_document(extract_pdf, data, None, "text",
-                                                          timeout=timeout)
+                    # Scanned pages get OCR within most of the budget (extract_pdf stops
+                    # starting pages past it); the rest is for the text layer.
+                    raw = await extract_pool.run_document(
+                        extract_pdf, data, None, "text", timeout * docs.ocr.BUDGET_SHARE,
+                        timeout=timeout)
                 except ValueError:  # extract_pdf: not a PDF after all (pickled back intact)
                     return err("not_pdf", "not a valid PDF", res["final_url"])
                 art = docs.from_pdf(raw, format)
@@ -612,6 +615,7 @@ async def read_pdf(
 
     if len(data) > MAX_PDF_BYTES:
         return err("parse_failed", "PDF too large", f"{len(data)} bytes")
+    from .extract import ocr
 
     try:
         # The single PDF thread cannot be cancelled, but the caller must not wait on it
@@ -628,8 +632,9 @@ async def read_pdf(
                     result = await _in_pdf_worker(extract_pdf, data, pages, "tables")
                     result["metadata"]["quality_fallback"] = (
                         "docling not installed; used tables")
-            else:
-                result = await _in_pdf_worker(extract_pdf, data, pages, mode)
+            else:  # default text mode also OCRs scanned pages, within most of `timeout`
+                ocr_s = timeout * ocr.BUDGET_SHARE if mode == "text" else 0
+                result = await _in_pdf_worker(extract_pdf, data, pages, mode, ocr_s)
     except TimeoutError:
         return err("parse_failed", "PDF extraction timed out", f"{timeout}s",
                    reason="timeout", retryable=False)
@@ -706,6 +711,9 @@ async def batch_read(
     timeout: Annotated[int, Field(description=(
         "wall clock for the WHOLE batch; URLs still pending at the deadline come back as "
         "retryable errors with the finished ones"))] = TIMEOUTS["batch_read"],
+    max_chars: Annotated[int | None, Field(description=(
+        "opt-in cap on each result's content chars; a cut is FLAGGED (truncated=True, "
+        "full_chars)"))] = None,
 ) -> dict:
     """Parallel `read` over many URLs - partial-failure tolerant."""
     if format not in _VALID_FORMATS:
@@ -719,13 +727,12 @@ async def batch_read(
 
     async def one(u: str) -> dict:
         async with sem:
-            r = await read(u, format=format, clean=clean)
-        if isinstance(r, dict) and r.get("code") in {
-            "ssrf_blocked", "dns_failed", "fetch_failed", "empty_content", "blocked_by_antibot",
-            "schema_invalid",
-        }:
+            r = await read(u, format=format, clean=clean, max_chars=max_chars)
+        if "content" not in r:  # every read error (a document's parse_failed too)
             return {"url": u, "ok": False, "error": r}
-        return {"url": u, "ok": True, "content": r["content"], "title": r.get("title")}
+        # read's flags travel with the result: a max_chars cut or a document's own cap
+        flags = {k: r[k] for k in ("truncated", "full_chars") if k in r}
+        return {"url": u, "ok": True, "content": r["content"], "title": r.get("title"), **flags}
 
     # One deadline for the batch (200 same-host URLs queue a second apart behind the
     # throttle): finished reads are returned, the rest are flagged, nothing is lost.

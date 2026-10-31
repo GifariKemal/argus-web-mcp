@@ -16,6 +16,48 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.41] - 2026-10-31 - measured: OCR, page-type extraction, StockTwits, B1 baseline
+
+Every "measure first" item of the second reference study, measured the same day (results and
+decisions in `docs/qa/2026-10-31-reference-study-2.md`, "Hasil pengukuran").
+
+### Added
+
+- **Page-type extraction (rs-trafilatura, MIT/Apache-2.0).** A 5.6 MB Rust binary built in a
+  Docker builder stage from a pinned commit and a committed `Cargo.lock`
+  (`deploy/rs-trafilatura/`). Pages it classifies as forum, collection, listing, service or
+  product use its text; articles and docs keep the trafilatura path. WCXB F1 dev 0.817 ->
+  0.846, test 0.858 -> 0.888. Every page gets `metadata.page_type`,
+  `metadata.extraction_quality` and `low_extraction_quality` under 0.6. Not used for
+  `format='html'`, `include_links` or `clean=False`; without the binary nothing changes.
+- **OCR (tesseract `eng+ind`).** `read` on PNG/JPEG/GIF/TIFF/BMP/WEBP returns the text
+  (`doc_type='image'`); scanned PDF pages are OCR'd (20 pages max, flagged). Measured on the
+  server: word recall 0.988, 1.5-6 s a page. Guards: Pillow format allowlist, 40 MP cap,
+  12 MP downscale, frame probe without the quadratic TIFF walk, deadline-clamped timeout,
+  minimal env, and on Linux the child dies with its worker and has a 1.5 GB cap.
+- **StockTwits adapter**: `stocktwits.com/symbol/<SYM>` returns the latest messages with
+  Bullish/Bearish counts, also as `metadata.structured`.
+- PPTX charts come back as tables; a CSV served without a charset has its encoding detected.
+- `batch_read(max_chars=...)`, flagged per result like `read`.
+
+### Fixed
+
+- `batch_read` turned any `read` error outside six codes into a generic error.
+- Cloudflare's "Performing security verification" interstitial is recognised as a wall.
+
+### Measured and rejected
+
+- Cross-index agreement in the rerank (+0.015 to +0.019 nDCG@5, noisy, under +0.02),
+  compound-term penalty, JSON data-island mining (2/55 pages), skipping the browser on 429
+  (the browser recovered 7/16), skipping it on captchas, a Cloudflare solver (1/12 even with
+  `cf_clearance`), GDELT (unstable), arctic-shift (no global search), Marginalia.
+
+### Baseline
+
+- B1: 1000 Firecrawl benchmark URLs read from the production IP: 91.2% read, truth found on
+  46.4% (dataset from 2025-10; of 55 low-recall pages 38 had changed since), noise leakage
+  0.065, p50 2.0 s, p90 6.9 s.
+
 ## [0.4.40] - 2026-10-31 - read everything: documents, feeds, HN, Polymarket, YouTube
 
 From the second reference study (`docs/qa/2026-10-31-reference-study-2.md`: 14 repos read at

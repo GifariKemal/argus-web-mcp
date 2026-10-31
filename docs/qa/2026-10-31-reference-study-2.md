@@ -14,6 +14,7 @@
 - [Dikerjakan hari ini (Batch 1)](#dikerjakan-hari-ini-batch-1)
 - [Batch 2 (selesai di 0.4.40)](#batch-2-selesai-di-0440)
 - [Ukur dulu, baru putuskan](#ukur-dulu-baru-putuskan)
+- [Hasil pengukuran (0.4.41)](#hasil-pengukuran-0441)
 - [Ditolak](#ditolak)
 - [Klaim README yang tidak terbukti di kode](#klaim-readme-yang-tidak-terbukti-di-kode)
 
@@ -102,6 +103,30 @@ kebenaran), lalu divalidasi dengan fixture markitdown dan stress test live.
 | M11 | Recency yang meluruh dengan umur, penalti istilah majemuk dan versi | wigolo `recency-boost.ts`, `rare-terms.ts`; donsetch `coverage.rs` | arm `semantic_ab.py` | nDCG naik pada query bertanggal atau berversi |
 | M12 | Tesseract OCR untuk gambar dan PDF hasil scan | anymd `image.rs` (cap piksel, timeout) | 20 sampel nyata | akurasi layak, CPU wajar |
 | M13 | Solve Cloudflare managed challenge lalu pakai ulang `cf_clearance` (T9) | webclaw `render.rs`, benchmark cloudflare 2026-10-15 (bukan dari IP datacenter) | 10 URL managed dari server | ada yang lolos |
+
+## Hasil pengukuran (0.4.41)
+
+Semua item "ukur dulu" diukur pada hari yang sama; keputusan mengikuti kriteria yang ditulis
+sebelum pengukuran.
+
+| # | Item | Cara | Hasil | Keputusan |
+|---|---|---|---|---|
+| M1 | Kesepakatan antar indeks | 40 query compare, pool 20 kandidat mentah dari SearXNG produksi (engine per hasil), 800 kandidat dinilai 4 juri buta (urutan diacak, engine disembunyikan) | rerank produksi nDCG@5 0.816 (urutan mentah 0.751); bonus per keluarga indeks terbaik +0.019 (w=10, menang/kalah 21/14), w=3 +0.015 (19/10); tidak monoton | **Ditolak** (kriteria +0.02 tidak tercapai, pola noise); data `engines` tetap disimpan |
+| M11 | Penalti istilah majemuk/versi | arm yang sama | hanya 5 query relevan, delta 0.000-0.001 | **Ditolak** |
+| M2 | rs-trafilatura (MIT/Apache-2.0, biner Rust 5.6 MB, model tertanam) | WCXB dev 1497 + test 511 halaman, scorer yang sama | teks rs: dev 0.847 vs Argus 0.817 (+0.030, CI 95% +0.020..+0.041), test 0.891 vs 0.858 (+0.033); unggul di service/forum/collection/listing, setara di artikel/dokumentasi; markdown rs lebih buruk (dev 0.780); 48 ms vs 360 ms per halaman; confidence < 0.6 berarti F1 rata-rata 0.33 | **Diadopsi sebagai hybrid**: tipe halaman non-artikel menurut klasifikasi rs sendiri memakai teks rs (dev 0.846, test 0.888), artikel/dokumentasi tetap Argus; confidence rs jadi `metadata.extraction_quality` |
+| M3 | Penambang JSON island | 55 halaman B1 recall rendah, HTML diambil ulang dari server | teks truth hanya ada di JSON island pada 2/55 halaman | **Ditolak** (kriteria >= 30%) |
+| M4 | **B1: 1000 URL Firecrawl** (MIT, ground truth manusia, 2025-10) dari IP produksi | `read` lewat MCP loopback, konkurensi 5, skor recall baris truth (metode crw) + kebocoran baris noise | read berhasil 91.2%; recall truth rata-rata 0.334, halaman ditemukan (recall >= 0.3) 46.4%; kebocoran noise 0.065; p50 2.0 s, p90 6.9 s, p99 27.5 s; static 611, browser 205, Wayback 94 | angka dasar. Diagnosis 55 halaman recall rendah: 38 konten sudah berubah sejak dataset dibuat, 15 ekstraksi kehilangan teks yang ada di HTML, 2 hanya di JSON island |
+| M5 | 429 lewati browser | B1: 16 URL yang probe static-nya 429 | browser memulihkan 7, static (sementara) 5, Wayback 3, gagal 1 | **Ditolak** (browser memang menolong) |
+| M6 | Captcha lewati stealth | B1: 7 URL dinding 2xx | browser 5, Wayback 2 | **Ditolak** |
+| M7 | Memori per host | B1 hampir semua host unik | tidak terukur di data ini; stealth ok 94 / gagal 153 total | **Ditunda** sampai ada log trafik host berulang |
+| M8 | Transkrip YouTube | 5 video dari server | langsung 5/5, WARP 0/5 (429) | **Diadopsi** (D7) |
+| M9 | GDELT | 2 probe dari server | 1 OK, 1 timeout | **Ditolak** (tidak stabil; Google News RSS bertanggal sudah terbaca lewat `read`) |
+| M10 | arctic-shift, StockTwits, Marginalia | probe dari server | arctic-shift wajib author/subreddit (bukan search global); StockTwits OK dengan label Bullish/Bearish; Marginalia perlu header key | **StockTwits diadopsi** (adapter), lainnya ditolak |
+| M12 | OCR tesseract | 7 halaman PDF dirender 150 dpi vs lapisan teksnya, kontainer Ubuntu 24.04 di server | recall kata 0.988 (0.971-1.0), 1.5-6 s per halaman di 2 CPU, paket sekitar 20 MB | **Diadopsi** (gambar dan halaman PDF hasil scan) |
+| M13 | Solve Cloudflare + `cf_clearance` | 12 URL managed/non-interactive dari benchmark webclaw, Chromium sabar + klik checkbox, dari IP produksi | `read` saat ini: 0 live, 5 lewat Wayback; eksperimen solve: 1/12 lolos (tidak konsisten), sisanya tetap "Just a moment" walau cookie didapat | **Ditolak** (blokir di reputasi IP); judul baru "Performing security verification" ditambah ke marker |
+
+Temuan ikutan yang langsung diperbaiki: `batch_read` belum punya `max_chars` (respons API besar
+membanjiri pemanggil) dan error dokumen di `batch_read` jatuh sebagai error generik.
 
 ## Ditolak
 

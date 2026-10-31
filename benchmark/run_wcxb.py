@@ -11,6 +11,10 @@ or point ARGUS_WCXB_DIR / --data at an existing clone. Scoring uses the dataset'
 evaluate.py (word-level F1 over \\w+ tokens, plus with/without snippet rates) imported
 from that clone, and scorer.quality_f1 with `with` as must_contain and `without` as
 must_not_contain. Fully offline: HTML comes from the cached .html.gz files.
+
+extract_article routes non-article pages to rs-trafilatura when its binary is found
+(`rs-trafilatura` on PATH, or ARGUS_RS_TRAFILATURA=<path>); ARGUS_RS_TRAFILATURA=off
+scores the trafilatura tiers alone. The report counts the pages each extractor served.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ import random
 import statistics
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -121,7 +125,9 @@ def main() -> None:
             row = {"id": fid, "type": t, "error": None}
             t0 = time.perf_counter()
             try:
-                pred = extract_article(html, url)["content"]
+                art = extract_article(html, url)
+                pred = art["content"]
+                row["extractor"] = art["metadata"].get("extractor", "tiers")
             except Exception as e:  # noqa: BLE001 - record and keep going
                 pred, row["error"] = "", f"{type(e).__name__}: {e}"[:200]
             row["secs"] = time.perf_counter() - t0
@@ -161,7 +167,9 @@ def main() -> None:
         + (["traf F1 (same pages)"] if a.trafilatura else [])
         + ["pub. trafilatura", "pub. rs-traf"]
     )
-    print(f"WCXB {a.split}, {len(rows)} pages, Argus extract_article (markdown)\n")
+    served = Counter(r.get("extractor", "error") for r in rows)
+    print(f"WCXB {a.split}, {len(rows)} pages, Argus extract_article (markdown), served by "
+          + ", ".join(f"{k} {n}" for k, n in sorted(served.items())) + "\n")
     print("| " + " | ".join(head) + " |\n|" + "---|" * len(head))
     for t in [t for t in TYPES if any(r["type"] == t for r in rows)]:
         print(line(t, [r for r in rows if r["type"] == t]))

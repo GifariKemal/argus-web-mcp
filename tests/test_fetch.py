@@ -1143,3 +1143,13 @@ async def test_document_bytes_are_never_rendered(monkeypatch):
     async with _client(h) as c:
         res = await fetch("http://example.com/x", client=c, browser=fake)
     assert fake.calls == 0 and res["body"] == pdf
+
+
+def test_cloudflare_performing_security_verification_page_is_a_wall():
+    """Cloudflare's 2026 interstitial title, seen on every managed challenge from the server."""
+    from argus.fetch.static import _looks_blocked
+
+    page = ("<html><head><title>Just a moment...</title></head><body>www.example.com "
+            "Performing security verification This website uses a security service to protect "
+            "against malicious bots.</body></html>")
+    assert _looks_blocked(page.replace("Just a moment...", "Verifying"), 200)

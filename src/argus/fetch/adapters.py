@@ -511,3 +511,82 @@ async def fetch_youtube(url: str, *, client, timeout: float = 30) -> dict | None
     parts.append("</article></body></html>")
     return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
             "structured": record}
+
+
+# StockTwits symbol pages are a JS app; the streams API answers keyless with the symbol
+# and its latest 30 messages (measured from the server 2026-10-31). It allows ~200 req/h
+# per IP, so a 429 is not retried: the read takes the normal page path instead. Bodies
+# carry HTML entities; they are unescaped to text, then escaped for our page.
+_ST_SYMBOL = re.compile(r"/symbol/([A-Za-z0-9][A-Za-z0-9.-]{0,19})/?")
+_ST_API = "https://api.stocktwits.com/api/2/streams/symbol/"
+_ST_MAX_MESSAGES = 30
+
+
+def stocktwits_target(url: str) -> str | None:
+    """The upper-cased symbol for a stocktwits.com symbol page, else None."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return None
+    if (parts.hostname or "").removeprefix("www.") != "stocktwits.com":
+        return None
+    m = _ST_SYMBOL.fullmatch(parts.path)
+    return m.group(1).upper() if m else None
+
+
+async def fetch_stocktwits(url: str, *, client, timeout: float = 30) -> dict | None:
+    """Symbol + latest messages (newest first) with a sentiment tally as ``{final_url,
+    status, html, render_path: 'api', structured}``. Never raises: no match, a 429 or any
+    failure -> None."""
+    sym = stocktwits_target(url)
+    if sym is None:
+        return None
+    e = html.escape
+    try:
+        data = await _api_json(f"{_ST_API}{sym}.json", client=client, timeout=timeout)
+        if (data.get("response") or {}).get("status") != 200:
+            return None
+        info = data["symbol"]
+        newest = sorted(data.get("messages") or [], reverse=True,
+                        key=lambda m: str(m.get("created_at") or ""))
+        messages = []
+        for m in newest[:_ST_MAX_MESSAGES]:
+            user = m.get("user") or {}
+            basic = ((m.get("entities") or {}).get("sentiment") or {}).get("basic")
+            messages.append({
+                "id": m.get("id"), "created_at": m.get("created_at"),
+                "user": str(user.get("username") or ""), "official": bool(user.get("official")),
+                "sentiment": basic if basic in ("Bullish", "Bearish") else None,
+                "likes": (m.get("likes") or {}).get("total") or 0,
+                "body": html.unescape(str(m.get("body") or ""))})
+        tally = {k: sum(m["sentiment"] == v for m in messages)
+                 for k, v in (("bullish", "Bullish"), ("bearish", "Bearish"), ("unlabeled", None))}
+        watch = info.get("watchlist_count")
+        record = {"symbol": str(info["symbol"]), "title": str(info.get("title") or ""),
+                  "exchange": str(info.get("exchange") or ""),
+                  "watchlist_count": watch if isinstance(watch, int) else None, **tally,
+                  "sentiment_change": _num(info.get("sentiment_change")),
+                  "volume_change": _num(info.get("volume_change")), "messages": messages}
+        title = e(f"{record['symbol']} ({record['title']})" if record["title"]
+                  else record["symbol"])
+        changes = "".join(f" {label} change {record[k]:g}." for k, label in
+                          (("sentiment_change", "Sentiment"), ("volume_change", "Volume"))
+                          if record[k] is not None)
+        parts = [f"<html><head><title>{title}</title></head><body><article>",
+                 f"<h1>{title}</h1>",
+                 f"<p>Exchange {e(record['exchange'] or 'n/a')}. Watchlists "
+                 f"{f'{watch:,}' if record['watchlist_count'] is not None else 'n/a'}.</p>",
+                 f"<p>Sentiment over the latest {len(messages)} messages: bullish "
+                 f"{tally['bullish']}, bearish {tally['bearish']}, unlabeled "
+                 f"{tally['unlabeled']}.{changes}</p>", "<h2>Messages</h2>"]
+        for m in messages:
+            tag = f" {m['sentiment']}" if m["sentiment"] else ""
+            parts += [f"<h3>{e(str(m['created_at'] or ''))} @{e(m['user'])}"
+                      f"{' (official)' if m['official'] else ''}{tag}, {e(str(m['likes']))} "
+                      f"likes</h3>", _text_paras(m["body"])]
+    except Exception:  # noqa: BLE001 - any failure must degrade to None, never raise
+        return None
+    if len(newest) > _ST_MAX_MESSAGES:
+        parts.append(f"<p>{len(newest) - _ST_MAX_MESSAGES} more messages not shown.</p>")
+    parts.append("</article></body></html>")
+    return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
+            "structured": record}

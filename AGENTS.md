@@ -83,7 +83,7 @@ src/argus/
   security/ssrf.py     # the trust boundary (100% covered)
   security/egress.py   # Chromium's loopback egress proxy (SSRF per connection, WARP routing)
   fetch/               # static.py / render.py / core.py / crawl.py / fallback.py / throttle.py
-  extract/             # article.py / pdf.py / structured.py / llm.py / links.py
+  extract/             # article.py (+ rs.py routing) / pdf.py / docs.py (documents, feeds) / ocr.py / pool.py / structured.py / llm.py / links.py
   search.py / scholar.py / gh_search.py / router.py / semantic.py / cache.py / watch.py
   reachability.py      # daily direct-vs-WARP map of blocked sites (loopback /health, metrics)
   trading/             # forexfactory.py / cot.py / news.py

@@ -37,6 +37,7 @@ _BLOCK_MARKERS = (
     "enable javascript and cookies",
     "verify you are human",
     "complete the following challenge",  # DuckDuckGo lite/html CAPTCHA (seen 2026-10-31)
+    "performing security verification",  # Cloudflare's interstitial text (seen 2026-10-31)
 )
 _BLOCK_STATUSES = {403, 429, 503}
 # crawl4ai verdicts that mean "thin page", not "wall": a tiny legit page or JS shell is the
@@ -119,6 +120,29 @@ def _sniff_meta_charset(body: bytes) -> str | None:
         return None
     enc = (m.group(1) or m.group(2) or b"").decode("ascii", "ignore").strip()
     return enc or None
+
+
+# A CSV carries no meta charset, and spreadsheet exports are often legacy (Excel's Japanese
+# CSV is cp932): decoded as utf-8 every cell turned into replacement characters. JSON is
+# utf-8 by spec and HTML has its meta tag, so only these are guessed.
+_CSV_TYPES = frozenset({"text/csv", "application/csv", "text/tab-separated-values"})
+_GUESS_BYTES = 64 * 1024
+
+
+def _guess_csv_charset(ctype: str, body: bytes, path: str) -> str | None:
+    """Detected charset of a CSV/TSV served without one; None keeps utf-8."""
+    if ctype not in _CSV_TYPES and not (ctype == "text/plain"
+                                         and path.lower().endswith((".csv", ".tsv"))):
+        return None
+    try:
+        body.decode("utf-8")
+        return None  # valid utf-8 is never second-guessed
+    except UnicodeDecodeError:
+        pass
+    from charset_normalizer import from_bytes  # lazy: only a non-utf-8 CSV pays the import
+
+    best = from_bytes(body[:_GUESS_BYTES]).best()
+    return best.encoding if best is not None else None
 
 # DoS guard for the shared box. Two layers: a Content-Length header fast-path
 # (reject before reading a byte) AND a streaming hard-cap that aborts a chunked /
@@ -291,8 +315,11 @@ async def fetch_static(
         )
     # Decode with the HEADER-declared charset when present; otherwise sniff a meta-declared
     # one before falling back to utf-8 (httpx's resp.encoding defaults to utf-8 with no header,
-    # which would corrupt meta-only legacy encodings past any downstream re-decode).
-    enc = resp.charset_encoding or _sniff_meta_charset(body) or "utf-8"
+    # which would corrupt meta-only legacy encodings past any downstream re-decode). A CSV
+    # with neither gets its charset detected.
+    ctype = resp.headers.get("content-type", "").partition(";")[0].strip().lower()
+    enc = (resp.charset_encoding or _sniff_meta_charset(body)
+           or _guess_csv_charset(ctype, body, resp.url.path) or "utf-8")
     try:
         html = body.decode(enc, errors="replace")
     except LookupError:  # bogus/unknown meta-declared encoding name
@@ -302,7 +329,6 @@ async def fetch_static(
             "blocked_by_antibot", f"status {resp.status_code} (challenge page)",
             status=resp.status_code,
         )
-    ctype = resp.headers.get("content-type", "").partition(";")[0].strip().lower()
     res = {
         "final_url": str(resp.url),
         "status": resp.status_code,

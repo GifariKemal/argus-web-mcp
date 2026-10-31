@@ -169,7 +169,9 @@ def test_empty_bytes_raises():
 
 @pytest.mark.slow
 def test_docling_quality_path(two_page_pdf):
-    pytest.importorskip("docling")
+    # the module the quality path imports; a Docling stack that cannot load (no torch, or a
+    # transformers/tokenizers mismatch) raises ImportError, which pytest 9 only skips on request
+    pytest.importorskip("docling.document_converter", exc_type=ImportError)
     from argus.extract.pdf import extract_pdf_quality
 
     res = extract_pdf_quality(two_page_pdf)

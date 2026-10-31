@@ -8,6 +8,7 @@ import pymupdf
 import pymupdf4llm
 
 from .. import config
+from . import ocr
 
 # pymupdf4llm's layout mode prints "=== Document parser messages ===" via pymupdf.message,
 # which defaults to stdout - on the stdio transport that is the MCP JSON-RPC stream.
@@ -77,29 +78,33 @@ def _find_tables(doc: pymupdf.Document, page_indices: list[int]) -> list[dict[st
     return tables
 
 
-def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int]) -> tuple[str, int]:
+def _extract_plain_text(doc: pymupdf.Document, page_indices: list[int],
+                        scanned: dict[int, str] | None = None) -> tuple[str, int]:
     """Fast full-document text path for large PDFs.
 
     pymupdf4llm's markdown pipeline can spend tens of seconds on graphics-heavy
     report PDFs even when the caller only asked for text. This path still returns
     every requested page, but skips expensive layout/table inference. Returns the
-    text and the count of pages that had none.
+    text and the count of pages that had none. ``scanned`` holds OCR text by page index.
     """
     parts: list[str] = []
     for idx in page_indices:
-        text = doc[idx].get_text("text", sort=True).strip()
+        text = (scanned or {}).get(idx) or doc[idx].get_text("text", sort=True).strip()
         if text:
             parts.append(f"## Page {idx + 1}\n\n{text}")
     return "\n\n".join(parts).strip(), len(page_indices) - len(parts)
 
 
-def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> dict[str, Any]:
+def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text",
+                ocr_seconds: float = 0) -> dict[str, Any]:
     """Extract a PDF to markdown using pymupdf4llm.
 
     pages: '1-5' or '3' (1-indexed inclusive) or None for all, up to
     ``config.PDF_MAX_PAGES`` (then ``metadata['pages_capped']`` is True and
     ``pages_total`` still counts the whole document).
     mode='tables' still returns ``content`` but also populates ``tables``.
+    ``ocr_seconds`` > 0 OCRs scanned pages within that budget (``ocr.ocr_pdf_pages``); the
+    default 0 never runs tesseract.
     Raises ``ValueError('not_pdf')`` on invalid input.
     """
     doc = _open(data)
@@ -110,10 +115,13 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
         # Applies to explicit ranges too: pages="1-5000" must not pin the single PDF worker.
         metadata["pages_capped"] = len(page_indices) > config.PDF_MAX_PAGES
         page_indices = page_indices[: config.PDF_MAX_PAGES]
+        scanned = (ocr.ocr_pdf_pages(doc, page_indices, ocr_seconds, metadata)
+                   if ocr_seconds > 0 else {})
 
         # pages_without_text lets a caller tell a scanned (image-only) PDF from an empty one.
         if mode == "text" and len(page_indices) >= _FAST_TEXT_MIN_PAGES:
-            content, metadata["pages_without_text"] = _extract_plain_text(doc, page_indices)
+            content, metadata["pages_without_text"] = _extract_plain_text(doc, page_indices,
+                                                                          scanned)
             metadata["engine"] = "pymupdf-fast-text"
             return {
                 "pages_total": total,
@@ -126,10 +134,13 @@ def extract_pdf(data: bytes, pages: str | None = None, mode: str = "text") -> di
         # pymupdf4llm >= 1.27 routes through the pymupdf.layout engine whenever it is
         # installed, which silently ignores table_strategy / ignore_graphics; tables
         # come from _find_tables below either way.
+        # use_ocr=False: with tesseract installed the layout engine would OCR on its own
+        # (English only, no page cap or budget); scanned pages are ocr.ocr_pdf_pages' job.
         chunks = pymupdf4llm.to_markdown(
-            doc, pages=page_indices, page_chunks=True, show_progress=False
+            doc, pages=page_indices, page_chunks=True, show_progress=False, use_ocr=False
         )
-        texts = [c["text"].strip() for c in chunks]
+        texts = [scanned.get(i) or c["text"].strip()
+                 for i, c in zip(page_indices, chunks, strict=False)]
         content = "\n\n".join(texts).strip()
         metadata["pages_without_text"] = texts.count("")
         layout = getattr(pymupdf4llm, "_use_layout", False)

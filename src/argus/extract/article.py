@@ -25,6 +25,7 @@ from markdownify import markdownify as _md
 from readability import Document
 from trafilatura.settings import DEFAULT_CONFIG
 
+from . import rs
 from .links import pdf_links
 
 # readability log.exception()s a full traceback on every empty page (a blocked fetch)
@@ -94,6 +95,11 @@ _NOT_A_LANG = {"default", "none", "text", "plain", "plaintext"}
 # backticks took 7.7 s, 100k brackets 55 s, holding the GIL). No real code line is this long.
 _MAX_REGEX_LINE = 2000
 _MIN_EXTRACTED = DEFAULT_CONFIG.getint("DEFAULT", "MIN_EXTRACTED_SIZE")  # 250 chars
+# rs-trafilatura page types whose text beat the tier path on WCXB (dev F1 per type,
+# 2026-10-31: service 0.825 vs 0.755, forum 0.760 vs 0.670, collection 0.672 vs 0.566,
+# listing 0.669 vs 0.565, product 0.636 vs 0.623). Articles and docs stay on the tiers.
+RS_PAGE_TYPES = frozenset({"forum", "collection", "listing", "service", "product"})
+LOW_QUALITY = 0.6  # rs confidence below this: WCXB dev pages averaged F1 0.33
 _LINK = re.compile(r"!?\[([^\]\n]{0,500})\]\([^)\s]{0,2000}\)")
 _IMG_IN_LINK = re.compile(r"\[!\[([^\]\n]{0,500})\]\([^)\s]{0,2000}\)\]\([^)\s]{0,2000}\)")
 _FENCE = re.compile(r"^(`{3,})\n(.*?)\n\1$", re.M | re.S)
@@ -271,26 +277,8 @@ def _metadata(html: str, url: str) -> dict[str, Any]:
     return meta
 
 
-def extract_article(
-    html: str,
-    url: str,
-    fmt: str = "markdown",
-    clean: bool = True,
-    include_links: bool = False,
-) -> dict[str, Any]:
-    """Extract the main article from ``html`` into ``fmt`` (markdown|text|html).
-
-    ``clean`` (default) is trafilatura's balanced mode; ``clean=False`` favours recall.
-    ``include_links`` keeps inline
-    links. Returns ``{"content", "format", "title", "metadata"}`` where metadata is
-    ``{"author", "published", "lang", "site", "word_count"}``. Whatever real text
-    the tiers recover is returned verbatim - even a one-word page. ``content`` is
-    ``""`` (``word_count`` 0) only when no tier extracted any text at all.
-    """
-    meta = _metadata(html, url)
-    low = html.lower()
-    if (".pdf" in low or "/download/" in low) and (pdfs := pdf_links(html, url)):
-        meta["pdf_links"] = pdfs
+def _tiers(html: str, url: str, fmt: str, clean: bool, include_links: bool) -> str:
+    """Argus's own extraction: trafilatura, then readability, then markdownify."""
 
     # Tier 1: trafilatura (content only; metadata fetched separately to avoid the
     # YAML front-matter that with_metadata=True injects into the body).
@@ -340,6 +328,49 @@ def extract_article(
     # readability emits ``<body id="readabilityBody"></body>`` for empty input).
     if content and fmt != "markdown":
         content = _to_format(content, fmt, html) or ""
+    return content
+
+
+def extract_article(
+    html: str,
+    url: str,
+    fmt: str = "markdown",
+    clean: bool = True,
+    include_links: bool = False,
+) -> dict[str, Any]:
+    """Extract the main article from ``html`` into ``fmt`` (markdown|text|html).
+
+    ``clean`` (default) is trafilatura's balanced mode; ``clean=False`` favours recall.
+    ``include_links`` keeps inline
+    links. Returns ``{"content", "format", "title", "metadata"}`` where metadata is
+    ``{"author", "published", "lang", "site", "word_count"}``. Whatever real text
+    the tiers recover is returned verbatim - even a one-word page. ``content`` is
+    ``""`` (``word_count`` 0) only when no tier extracted any text at all. When
+    rs-trafilatura ran, metadata adds ``page_type``, ``extraction_quality`` (0-1),
+    ``low_extraction_quality`` (below LOW_QUALITY) and, if it supplied the content,
+    ``extractor``.
+    """
+    meta = _metadata(html, url)
+    low = html.lower()
+    if (".pdf" in low or "/download/" in low) and (pdfs := pdf_links(html, url)):
+        meta["pdf_links"] = pdfs
+
+    # rs-trafilatura first (extract/rs.py): its page type picks the extractor and its
+    # confidence is reported either way. It returns plain text only, so html output and
+    # inline links stay on trafilatura. Without rs this is exactly the tier path.
+    rs_out = rs.extract(html, url) if html else None
+    if rs_out:
+        meta["page_type"] = rs_out["page_type"]
+        meta["extraction_quality"] = round(rs_out["confidence"], 3)
+        if rs_out["confidence"] < LOW_QUALITY:
+            meta["low_extraction_quality"] = True
+    # clean=False asks for the whole page, not the main content rs extracts.
+    if (rs_out and rs_out["page_type"] in RS_PAGE_TYPES and fmt in ("markdown", "text")
+            and clean and not include_links):
+        meta["extractor"] = "rs-trafilatura"
+        content = rs_out["text"].strip()
+    else:
+        content = _tiers(html, url, fmt, clean, include_links)
 
     word_count = len(content.split())
 

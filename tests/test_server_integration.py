@@ -960,7 +960,7 @@ async def test_news_feed_delegates(app_state, monkeypatch):
 async def test_read_pdf_quality_docling(app_state, monkeypatch):
     from conftest import PDF_BYTES
 
-    p = pytest.importorskip("docling")  # noqa: F841
+    p = pytest.importorskip("docling.document_converter", exc_type=ImportError)  # noqa: F841
     import os
     import tempfile
 
@@ -1638,3 +1638,25 @@ async def test_read_does_not_cache_an_error_status_page(app_state, monkeypatch):
     assert r1["status"] == 404
     r2 = await server.read(f"{BASE}/gone")
     assert r2["from_cache"] is False and calls["n"] == 2
+
+
+async def test_batch_read_max_chars_caps_each_result_flagged(app_state):
+    """One huge reply (a StockTwits JSON answer) flooded the caller: no per-result cap."""
+    full = (await server.read(f"{BASE}/article"))["content"]
+    r = await server.batch_read([f"{BASE}/article", f"{BASE}/article"], max_chars=40)
+    for x in r["results"]:
+        assert x["content"] == full[:40]
+        assert (x["truncated"], x["full_chars"]) == (True, len(full))
+    whole = await server.batch_read([f"{BASE}/article"])
+    assert whole["results"][0]["content"] == full and "truncated" not in whole["results"][0]
+
+
+async def test_batch_read_document_error_is_a_result_not_a_crash(app_state, monkeypatch):
+    async def bomb(url, **kw):
+        return {"final_url": url, "status": 200, "html": "", "render_path": "static",
+                "content_type": "application/octet-stream",
+                "body": b"PK\x03\x04" + b"\x00garbage" * 50}
+
+    monkeypatch.setattr(server, "fetch", bomb)
+    r = await server.batch_read(["https://ex.test/broken.docx"])
+    assert r["results"][0]["error"]["code"] == "parse_failed"

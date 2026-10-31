@@ -19,6 +19,7 @@ import functools
 import logging
 import multiprocessing
 import os
+import time
 
 from ..config import PDF_EXECUTOR, _int
 from .article import extract_article
@@ -130,7 +131,8 @@ async def run_document(fn, *args, timeout: float | None = None):
     timeout = timeout or _DOC_TIMEOUT_S
     loop = asyncio.get_running_loop()
     if workers() <= 0:
-        return await asyncio.wait_for(loop.run_in_executor(PDF_EXECUTOR, call), timeout)
+        timed = functools.partial(_timed, call, time.monotonic() + timeout)
+        return await asyncio.wait_for(loop.run_in_executor(PDF_EXECUTOR, timed), timeout)
     for attempt in (1, 2):
         pool, fut = await _submit_doc(call, timeout)
         try:
@@ -154,6 +156,7 @@ async def _submit_doc(call, timeout: float) -> tuple[cf.ProcessPoolExecutor, asy
     loop = asyncio.get_running_loop()
     gate = _gate()
     await gate.acquire()
+    call = functools.partial(_timed, call, time.monotonic() + timeout)  # job_deadline()
     try:
         pool = _get_doc_pool()
         try:
@@ -176,6 +179,26 @@ async def _submit_doc(call, timeout: float) -> tuple[cf.ProcessPoolExecutor, asy
 
     fut.add_done_callback(_done)
     return pool, fut
+
+
+# The running job's kill time, as seen inside its worker. A job that starts a subprocess
+# (tesseract) bounds it by this, so the child ends before the pool kills the worker.
+_job_deadline: float | None = None
+
+
+def job_deadline() -> float | None:
+    """When the pool kills the running document job (``time.monotonic()``), or None outside
+    one. The monotonic clock is system-wide, so the parent's value holds in the worker."""
+    return _job_deadline
+
+
+def _timed(call, deadline: float):
+    global _job_deadline
+    _job_deadline = deadline
+    try:
+        return call()
+    finally:
+        _job_deadline = None
 
 
 def _retire_doc(pool: cf.ProcessPoolExecutor) -> None:

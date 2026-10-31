@@ -17,6 +17,7 @@ import html
 import io
 import itertools
 import json
+import posixpath
 import re
 import zipfile
 from pathlib import PurePosixPath
@@ -27,7 +28,7 @@ import pymupdf
 import pymupdf4llm
 
 from .. import config
-from . import pool
+from . import ocr, pool
 from .article import _demark
 from .pdf import _FAST_TEXT_MIN_PAGES, _extract_plain_text
 
@@ -61,11 +62,20 @@ _CTYPES = {
     "application/rdf+xml": "feed",
     "text/xml": "xml",
     "application/xml": "xml",
+    **dict.fromkeys(("image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif",
+                     "image/tiff", "image/bmp"), "image"),  # not svg: that is XML text
 }
 _EXTS = {".pdf": "pdf", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx", ".epub": "epub",
-         ".csv": "csv", ".json": "json", ".xml": "xml", ".rss": "feed", ".atom": "feed"}
-BINARY_KINDS = frozenset({"pdf", "docx", "pptx", "xlsx", "epub", "zip"})
-_ZIP_KINDS = BINARY_KINDS - {"pdf"}
+         ".csv": "csv", ".json": "json", ".xml": "xml", ".rss": "feed", ".atom": "feed",
+         **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp", ".gif", ".tif", ".tiff", ".bmp"),
+                         "image")}
+BINARY_KINDS = frozenset({"pdf", "docx", "pptx", "xlsx", "epub", "zip", "image"})
+_ZIP_KINDS = BINARY_KINDS - {"pdf", "image"}
+_IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\0",
+                b"MM\0*")
+# "BM" alone matched any text starting with it: a BMP also has zeroed reserved bytes and
+# one of the known DIB header sizes.
+_BMP_DIB_SIZES = frozenset({12, 16, 40, 52, 56, 64, 108, 124})
 _FEED_ROOTS = frozenset({"rss", "feed", "RDF"})
 _ROOT = re.compile(r"<([A-Za-z_][\w.:-]*)")  # first element; skips <?xml and <!DOCTYPE
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
@@ -73,12 +83,15 @@ _XML_DECL = re.compile(r"^\s*<\?xml[^>]*\?>")  # lxml refuses str input that dec
 _TAG = re.compile(r"<[^<>]*>")  # linear: never scans past the next '<'
 _COUNTS = (("rows_total", "rows_returned"), ("items_total", "items_returned"),
            ("pages_total", "pages_returned"), ("cols_total", "cols_returned"),
-           ("sheets_total", "sheets_returned"), ("chars_total", "chars_returned"))
+           ("sheets_total", "sheets_returned"), ("chars_total", "chars_returned"),
+           ("frames_total", "frames_returned"), ("ocr_pages_total", "ocr_pages_returned"),
+           ("charts_total", "charts_returned"))
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+_C = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
 _R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 _HEADING = re.compile(r"Heading([1-6])")
 _ROW_OPEN = re.compile(rb"<(?:[\w.-]+:)?row[\s/>]")  # <row ...>, <x:row/>; not <rowBreaks>
@@ -109,7 +122,9 @@ def sniff(content_type: str, body: bytes | None, text: str, url: str) -> str | N
         else "xml" if content_type.endswith("+xml") else None)
     if kind is None and body:
         kind = ("zip" if body.startswith(b"PK\x03\x04")
-                else "pdf" if b"%PDF-" in body[:1024] else None)  # PDF may sit behind junk
+                else "pdf" if b"%PDF-" in body[:1024]  # PDF may sit behind junk
+                else "image" if body.startswith(_IMAGE_MAGIC) or _is_bmp(body)
+                or (body[:4] == b"RIFF" and body[8:12] == b"WEBP") else None)
     if kind is None:
         kind = _EXTS.get(PurePosixPath(urlsplit(url).path).suffix.lower())
         if kind in BINARY_KINDS and body is None:  # text at a .docx URL is not a docx
@@ -119,6 +134,11 @@ def sniff(content_type: str, body: bytes | None, text: str, url: str) -> str | N
         root = m[1].rpartition(":")[2] if m else ""
         return None if root == "html" else "feed" if root in _FEED_ROOTS else "xml"
     return kind
+
+
+def _is_bmp(body: bytes) -> bool:
+    return (body[:2] == b"BM" and body[6:10] == bytes(4)
+            and int.from_bytes(body[14:18], "little") in _BMP_DIB_SIZES)
 
 
 async def convert_async(kind: str, data: bytes | str, url: str, fmt: str) -> dict:
@@ -312,17 +332,75 @@ def _docx_para(p) -> str:
 
 def _pptx(zf: zipfile.ZipFile, meta: dict) -> tuple[str | None, str]:
     slides = sorted((int(m[1]), n) for n in zf.namelist() if (m := _SLIDE.fullmatch(n)))
-    out = []
+    out, charts = [], {}  # charts: part path -> the slide that printed it
     for num, name in slides:
-        # Text and picture alt text in slide order: authors put captions and facts in `descr`.
-        parts = []
-        for el in _xml(_read(zf, name)).iter(_A + "p", _P + "cNvPr"):
+        # Text, picture alt text and charts in slide order: authors put captions and facts
+        # in `descr`, and a chart's numbers exist nowhere else in the file.
+        parts, rels = [], None
+        for el in _xml(_read(zf, name)).iter(_A + "p", _P + "cNvPr", _C + "chart"):
             if el.tag == _A + "p":
                 parts.append("".join(t.text or "" for t in el.iter(_A + "t")).strip())
+            elif el.tag == _C + "chart":
+                rels = _part_rels(zf, name) if rels is None else rels
+                path = rels.get(el.get(_R_ID))
+                # Counted, so a chart whose rel or part is missing is flagged, not dropped.
+                meta["charts_total"] = meta.get("charts_total", 0) + 1
+                meta.setdefault("charts_returned", 0)
+                if path in charts:  # one chart on many slides: parsed and printed once
+                    parts.append(f"(same chart as slide {charts[path]})")
+                elif path is not None and path in zf.NameToInfo:
+                    charts[path] = num
+                    parts.append(_chart(_xml(_read(zf, path)), meta))
+                else:
+                    continue
+                meta["charts_returned"] += 1
             elif el.getparent().tag == _P + "nvPicPr" and (alt := (el.get("descr") or "").strip()):
                 parts.append("![" + " ".join(alt.split()).replace("]", "\\]") + "](image)")
         out.append("\n\n".join([f"## Slide {num}", *filter(None, parts)]))
     return _core_title(zf), "\n\n".join(out)
+
+
+def _part_rels(zf: zipfile.ZipFile, name: str) -> dict[str, str]:
+    """A part's relationship ids -> zip paths (``a/b.xml`` keeps ``a/_rels/b.xml.rels``)."""
+    folder, base = posixpath.split(name)
+    rels = f"{folder}/_rels/{base}.rels"
+    if rels not in zf.NameToInfo:
+        return {}
+    return {r.get("Id"): posixpath.normpath(posixpath.join(folder, t)) if not t.startswith("/")
+            else t.lstrip("/") for r in _xml(_read(zf, rels)) if (t := r.get("Target", ""))}
+
+
+def _chart(root, meta: dict) -> str:
+    """A chart part: its title, then categories x series as a table (row/column caps flagged
+    like any table). Scatter charts keep their points in xVal/yVal."""
+    title = root.find(f"{_C}chart/{_C}title")
+    title = " ".join("".join(t.text or "" for t in title.iter(_A + "t")).split()) \
+        if title is not None else ""
+    cats: dict[int, str] = {}
+    series = []
+    for n, ser in enumerate(root.iter(_C + "ser"), 1):
+        name = "".join(v.text or "" for v in ser.iterfind(f"{_C}tx//{_C}v")).strip()
+        series.append((name or f"Series {n}", _chart_points(ser, "val", "yVal")))
+        cats = cats or _chart_points(ser, "cat", "xVal")
+    head = f"### Chart: {title}" if title else "### Chart"
+    if not series:
+        return head
+    series = series[:_note_cols(meta, len(series) + 1) - 1]
+    idxs = sorted(set(cats).union(*(pts for _, pts in series)))
+    meta["rows_total"] = meta.get("rows_total", 0) + len(idxs)
+    meta["rows_returned"] = meta.get("rows_returned", 0) + min(len(idxs), MAX_ROWS)
+    rows = [["Category", *(name for name, _ in series)]] + [
+        [cats.get(i, ""), *(pts.get(i, "") for _, pts in series)] for i in idxs[:MAX_ROWS]]
+    return f"{head}\n\n{_table(rows, meta)}"
+
+
+def _chart_points(ser, *kinds: str) -> dict[int, str]:
+    """``{idx: value}`` from the first of ``kinds`` the series has (str/num ref or literal)."""
+    el = next((e for k in kinds if (e := ser.find(_C + k)) is not None), None)
+    if el is None:
+        return {}
+    return {int(i): pt.findtext(_C + "v") or "" for pt in el.iter(_C + "pt")
+            if (i := pt.get("idx", "")).isdigit() and len(i) < 10}  # no 10k-digit int()
 
 
 def _xlsx(zf: zipfile.ZipFile, meta: dict) -> tuple[str | None, str]:
@@ -405,7 +483,7 @@ def _epub(data: bytes, meta: dict) -> tuple[str | None, str]:
         if len(pages) < _FAST_TEXT_MIN_PAGES:  # same budget rule as extract_pdf
             try:
                 chunks = pymupdf4llm.to_markdown(doc, pages=pages, page_chunks=True,
-                                                 show_progress=False)
+                                                 show_progress=False, use_ocr=False)
                 content = "\n\n".join(c["text"].strip() for c in chunks).strip()
             except Exception:  # noqa: BLE001 - layout engine on a reflowable doc: page text
                 content = ""
@@ -413,6 +491,18 @@ def _epub(data: bytes, meta: dict) -> tuple[str | None, str]:
         if not content:
             content, _ = _extract_plain_text(doc, pages)
     return title, content
+
+
+def _image(data: bytes, meta: dict) -> tuple[None, str]:
+    """OCR text of an image URL (first frame, grayscale), never of a page's media list."""
+    if ocr.tesseract() is None:  # local dev and CI have no binary: say so, do not crash
+        raise DocError("unsupported_document", "ocr unavailable")
+    try:
+        png = ocr.image_png(data, meta)
+    except ocr.Refused as exc:  # our own words: a size, or the format allowlist
+        raise DocError(exc.reason, exc.detail) from None
+    meta["ocr"] = ocr.OCR_META
+    return None, ocr.ocr_png(png, ocr.OCR_TIMEOUT_S)
 
 
 def _csv(text: str, meta: dict) -> tuple[None, str]:
@@ -499,4 +589,4 @@ def _link(e) -> str:
 
 
 _CONVERTERS = {"docx": _docx, "pptx": _pptx, "xlsx": _xlsx, "epub": _epub, "csv": _csv,
-               "json": _json, "xml": _xml_fence, "feed": _feed}
+               "json": _json, "xml": _xml_fence, "feed": _feed, "image": _image}

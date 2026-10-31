@@ -16,6 +16,9 @@ import pytest
 
 # Thread path for the suite: a spawned extraction worker would not see monkeypatches.
 os.environ.setdefault("ARGUS_EXTRACT_WORKERS", "0")
+# Deterministic extraction whether or not rs-trafilatura is installed (test_extract_rs
+# fakes it, and runs the real binary when one is on PATH).
+os.environ.setdefault("ARGUS_RS_TRAFILATURA", "off")
 
 ARTICLE_HTML = (
     "<html><head><title>Gold Outlook</title></head><body>"
