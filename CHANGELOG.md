@@ -16,6 +16,22 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.47] - 2026-11-16 - dnspython and soupsieve security pins
+
+### Security
+
+- `dnspython` 2.9.0 -> 2.9.2 (CVE-2026-128089, HIGH) and `soupsieve` 2.10 -> 4.0.1
+  (CVE-2026-126190 and CVE-2026-126191, HIGH; 4.0 is the first release that fixes both).
+  Found by trivy on the 0.4.46 image. `requirements.lock` changes only these two pins and their
+  hashes; every other version stays at the production set.
+- soupsieve 4.0 drops `template` contents and `iframe` documents from selector matching. Argus never
+  selects into either; the offline suite (1561) and the SSRF gate (100%) pass unchanged.
+
+### Changed
+
+- pytest config sets `asyncio_default_fixture_loop_scope = "function"`, silencing the
+  pytest-asyncio deprecation warning on a fresh dev venv.
+
 ## [0.4.46] - 2026-10-31 - max_chars trims adapter posts
 
 ### Fixed

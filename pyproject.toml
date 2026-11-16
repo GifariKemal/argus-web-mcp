@@ -1,6 +1,6 @@
 [project]
 name = "argus"
-version = "0.4.46"
+version = "0.4.47"
 description = "Argus - SURIOTA self-hosted web fetch/scrape/search MCP server"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -62,6 +62,7 @@ ignore = ["S101", "ASYNC109"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "browser: needs a real Chromium (Playwright/Crawl4AI)",
