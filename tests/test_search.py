@@ -1783,6 +1783,67 @@ async def test_low_relevance_general_search_rescues_to_routed_category(monkeypat
     assert "Python" in out["results"][0]["title"]
 
 
+@respx.mock
+async def test_low_relevance_category_search_rescues_to_general(monkeypatch):
+    """Production 2026-11-23: category=it for an ESP-IDF query answered only mdn and docker
+    hub filler ("WebDriver", "Bounce off the walls"); the general web had the answers."""
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
+    seen = []
+    filler = [
+        {"title": "WebDriver capabilities", "url": "https://mdn.example/a",
+         "content": "Capabilities of a WebDriver session.", "engine": "mdn"},
+        {"title": "Bounce off the walls", "url": "https://mdn.example/b",
+         "content": "Breakout game tutorial step.", "engine": "mdn"},
+        {"title": "AWS EBS CSI Driver", "url": "https://hub.example/c",
+         "content": "Container storage interface driver.", "engine": "docker hub"},
+    ]
+    good = [
+        {"title": "ESP-IDF TWAI driver bus-off recovery", "url": "https://docs.example/twai",
+         "content": "twai_initiate_recovery after bus-off.", "engine": "bing"},
+        {"title": "TWAI bus-off recovery on ESP32", "url": "https://forum.example/t",
+         "content": "esp-idf twai recovery example.", "engine": "yandex"},
+        {"title": "ESP-IDF TWAI API reference", "url": "https://docs.example/api",
+         "content": "TWAI driver bus-off state and recovery.", "engine": "google cse"},
+    ]
+
+    def responder(request):
+        params = request.url.params
+        seen.append((params.get("categories"), params.get("engines")))
+        page = filler if params.get("categories") == "it" else good
+        return httpx.Response(200, json={"results": page, "unresponsive_engines": []})
+
+    respx.get(f"{BASE}/search").side_effect = responder
+
+    out = await search("esp-idf twai driver bus-off recovery", category="it", base_url=BASE)
+
+    assert seen[0][0] == "it"
+    general = [e for c, e in seen if c == "general"]
+    assert general and all(general)  # the rescue fans out over the configured engines
+    assert out["rescued_category"] == "general"
+    assert out["degraded"] is False and out["degraded_reason"] is None
+    assert "TWAI" in out["results"][0]["title"]
+
+
+@respx.mock
+async def test_videos_category_reaches_searxng_and_is_never_rescued_to_general(monkeypatch):
+    """YouTube and other video indexes answer the SearXNG `videos` category from the server
+    (measured 2026-11-24); a weak video set stays videos rather than turning into web pages."""
+    monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
+    seen = []
+
+    def responder(request):
+        seen.append(request.url.params.get("categories"))
+        return httpx.Response(200, json={"results": [
+            {"title": f"Unrelated clip {i}", "url": f"https://www.youtube.com/watch?v=abcdefghij{i}",
+             "content": "something else", "engine": "youtube"} for i in range(3)
+        ], "unresponsive_engines": []})
+
+    respx.get(f"{BASE}/search").side_effect = responder
+    out = await search("esp32 modbus rtu tutorial", category="videos", base_url=BASE)
+    assert set(seen) == {"videos"}
+    assert out["rescued_category"] is None and out["results"][0]["engine"] == "youtube"
+
+
 async def test_category_rescue_preserves_backend_failover_degraded(monkeypatch):
     monkeypatch.setattr(argus.search.semantic, "available", lambda: False)
 

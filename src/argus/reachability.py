@@ -122,3 +122,50 @@ def confirmed_dead_engines(previous: dict | None, current: dict | None) -> list[
     if not previous or not current:
         return []
     return sorted(e for e, n in current.items() if n == 0 and previous.get(e) == 0)
+
+
+# One known-good input per API adapter (the 2026-11-23 Agent-Reach audit's live_test idea).
+# A broken adapter returns None and the read silently falls back to the page, so only a
+# canary notices: Reddit's thread feeds 404ing and X's new web build both went unseen for
+# days in 2026-11. X GraphQL is left out on purpose: its state is already `x_account` in
+# /health, and every call spends the account's budget.
+CANARIES: dict[str, str] = {
+    "youtube": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "hn": "https://news.ycombinator.com/item?id=8863",
+    "telegram": "https://t.me/s/telegram",
+    "stackexchange": "https://stackoverflow.com/questions/11227809",
+    "npm": "https://www.npmjs.com/package/express",
+    "polymarket": "https://polymarket.com/event/presidential-election-winner-2024",
+    "github": "https://github.com/astral-sh/uv/issues/1",
+    "fxtwitter": "https://x.com/jack/status/20",
+}
+
+
+def _adapter(name: str):
+    """The adapter function behind a canary, looked up at call time (patchable)."""
+    if name == "fxtwitter":
+        from .x import fxtwitter
+        return fxtwitter.fetch_x
+    from .fetch import adapters
+    return getattr(adapters, f"fetch_{name}")
+
+
+async def measure_adapters(client, only: list[str] | None = None) -> dict[str, bool]:
+    """``{canary: adapter answered}`` through the real adapters and the SSRF-safe client;
+    ``only`` re-measures just those canaries."""
+    out: dict[str, bool] = {}
+    for name, url in CANARIES.items():  # ponytail: sequential, 8 requests once a day
+        if only is not None and name not in only:
+            continue
+        try:
+            out[name] = await _adapter(name)(url, client=client, timeout=20) is not None
+        except Exception:  # noqa: BLE001 - adapters never raise, but a canary must not either
+            out[name] = False
+    return out
+
+
+def confirmed_failing_adapters(previous: dict | None, current: dict | None) -> list[str]:
+    """Adapters whose canary failed in two runs in a row (same two-strike rule)."""
+    if not previous or not current:
+        return []
+    return sorted(n for n, good in current.items() if not good and previous.get(n) is False)

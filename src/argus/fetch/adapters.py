@@ -124,71 +124,6 @@ async def fetch_npm(url: str, *, client, timeout: float = 30) -> dict | None:
     return {"final_url": url, "status": 200, "html": page, "render_path": "api"}
 
 
-# Reddit thread pages come back as a JS shell whose comments the extractor loses, and its
-# JSON API 403s this server, while the thread's Atom feed answers 200 with the post and
-# its top comments as rendered HTML (measured 2026-10-30). The feed 429s a burst, so a 429
-# (or a 403) pauses the adapter and reads take the normal (browser) path meanwhile. A
-# comment permalink reads as its whole thread.
-_REDDIT_HOSTS = frozenset({"reddit.com", "old.reddit.com", "new.reddit.com", "np.reddit.com"})
-_REDDIT_THREAD = re.compile(r"/r/([A-Za-z0-9_]{2,21})/comments/([a-z0-9]{1,12})(?:/|$)")
-_ATOM = "{http://www.w3.org/2005/Atom}"
-_REDDIT_COOLDOWN_S = 60
-_reddit_backoff_until = 0.0
-
-
-def reddit_target(url: str) -> str | None:
-    """The thread's Atom feed URL for a reddit post/comments URL, else None."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        return None
-    if (parts.hostname or "").removeprefix("www.") not in _REDDIT_HOSTS:
-        return None
-    m = _REDDIT_THREAD.match(parts.path)
-    return f"https://www.reddit.com/r/{m.group(1)}/comments/{m.group(2)}/.rss" if m else None
-
-
-def _reddit_entry(entry) -> tuple[str, str, str, str]:
-    """(title, author, date, html body) of one Atom entry; the feed's link/comments
-    trailer after ``<!-- SC_ON -->`` is dropped."""
-    def text(tag: str) -> str:
-        el = entry.find(_ATOM + tag)
-        return (el.text or "") if el is not None else ""
-    author = entry.find(f"{_ATOM}author/{_ATOM}name")
-    body = text("content").split("<!-- SC_ON -->")[0]
-    return text("title"), (author.text or "") if author is not None else "", \
-        text("updated")[:10], body
-
-
-async def fetch_reddit(url: str, *, client, timeout: float = 30) -> dict | None:
-    """Post + top comments from the thread feed as ``{final_url, status, html,
-    render_path: 'api'}``. Never raises: no match, a cool-down or any failure -> None."""
-    global _reddit_backoff_until
-    feed = reddit_target(url)
-    if feed is None or time.monotonic() < _reddit_backoff_until:
-        return None
-    from xml.etree import ElementTree as ET  # stdlib expat refuses entity expansion bombs
-
-    try:
-        xml = (await fetch_static(feed, client=client, timeout=timeout, api=True))["html"]
-        entries = ET.fromstring(xml).findall(_ATOM + "entry")  # noqa: S314 - see import
-        if not entries:
-            return None
-        title, author, day, post = _reddit_entry(entries[0])
-        e = html.escape
-        parts = [f"<html><head><title>{e(title)}</title></head><body><article>",
-                 f"<h1>{e(title)}</h1><p>{e(author)} {e(day)}</p>", post,
-                 "<h2>Comments</h2>"]
-        for c in entries[1:]:
-            _, c_author, c_day, c_body = _reddit_entry(c)
-            parts += [f"<h3>{e(c_author)} {e(c_day)}</h3>", c_body]
-    except Exception as exc:  # noqa: BLE001 - any failure must degrade to None, never raise
-        if getattr(exc, "status", None) in (403, 429):
-            _reddit_backoff_until = time.monotonic() + _REDDIT_COOLDOWN_S
-        return None
-    parts.append("</article></body></html>")
-    return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api"}
-
-
 async def _api_json(url: str, *, client, timeout: float):
     """GET a known JSON endpoint through the guarded hop; a non-200 answer raises."""
     res = await fetch_static(url, client=client, timeout=timeout, api=True)
@@ -614,3 +549,117 @@ async def fetch_telegram(url: str, *, client, timeout: float = 30) -> dict | Non
         record["older_url"] = f"https://t.me/s/{channel}?before={posts[-1]['id']}"
     return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
             "structured": record}
+
+
+# GitHub issue and PR pages are a React view the extractor reads as whitespace plus the
+# sidebar (astral-sh/uv#1, 2026-11-23) and never as the comment thread. The REST API has the
+# body and the comments rendered by GitHub (`body_html`, already sanitised there). The token
+# (ARGUS_GITHUB_TOKEN) rides along when set, so redirects are not followed, and since a
+# token may see its owner's private repos, the repo is checked public first: a private
+# issue must never reach a caller or the shared cache. A 403/429 (rate limit) pauses the
+# adapter. Only the conversation URL matches: /files and /commits are a diff, not this. PR
+# inline review threads live on another endpoint and are left out; `structured.scope` says so.
+_GH_ITEM = re.compile(r"/([\w.-]{1,100})/([\w.-]{1,100})/(issues|pull)/(\d{1,10})/?$")
+_GH_PER_PAGE = 100
+_GH_MAX_COMMENT_PAGES = 5
+_GH_COOLDOWN_S = 300
+_gh_backoff_until = 0.0
+
+
+def github_target(url: str) -> tuple[str, str, str] | None:
+    """``(owner, repo, number)`` for a github.com issue or pull request URL, else None."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return None
+    if (parts.hostname or "").removeprefix("www.") != "github.com":
+        return None
+    m = _GH_ITEM.match(parts.path)
+    if not m or {m.group(1), m.group(2)} & {".", ".."}:  # dot segments leave /repos/
+        return None
+    return m.group(1), m.group(2), m.group(4)
+
+
+async def _gh_json(url: str, *, client, timeout: float, headers: dict):
+    res = await fetch_static(url, client=client, timeout=timeout, headers=headers,
+                             max_redirects=0, api=True)
+    if res["status"] != 200:
+        raise ValueError(f"status {res['status']}")
+    return json.loads(res["html"])
+
+
+async def fetch_github(url: str, *, client, timeout: float = 30) -> dict | None:
+    """Issue or PR body plus its comments from the REST API as ``{final_url, status, html,
+    render_path: 'api', structured}``. Never raises: no match, a private repo, a cool-down
+    or any failure -> None. Comment pages that do not fit the time budget are left out and
+    the page says how many."""
+    global _gh_backoff_until
+    target = github_target(url)
+    if target is None or time.monotonic() < _gh_backoff_until:
+        return None
+    from ..gh_search import GH_API, _headers
+
+    owner, repo, number = target
+    api = f"{GH_API}/repos/{owner}/{repo}/issues/{number}"
+    hdr = {**_headers(), "Accept": "application/vnd.github.html+json"}
+    e = html.escape
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    def left() -> float:
+        return deadline - loop.time()
+
+    try:
+        async with asyncio.timeout(timeout):
+            meta = await _gh_json(f"{GH_API}/repos/{owner}/{repo}", client=client,
+                                  timeout=timeout, headers=hdr)
+            if meta.get("private") is not False:
+                return None
+            item = await _gh_json(api, client=client, timeout=timeout, headers=hdr)
+        total = int(item.get("comments") or 0)
+        comments: list = []
+        for page in range(1, _GH_MAX_COMMENT_PAGES + 1):
+            if len(comments) >= total or left() <= 0:
+                break
+            try:
+                async with asyncio.timeout(left()):
+                    batch = await _gh_json(
+                        f"{api}/comments?per_page={_GH_PER_PAGE}&page={page}",
+                        client=client, timeout=timeout, headers=hdr)
+            except TimeoutError:
+                break  # keep the pages already read; the shortfall is stated below
+            comments += batch
+            if len(batch) < _GH_PER_PAGE:
+                break
+        kind = "pull_request" if item.get("pull_request") else "issue"
+        title = e(f"{item['title']} #{item['number']}")
+        labels = ", ".join(e(str(lb.get("name", ""))) for lb in item.get("labels") or [])
+        meta_line = (f"{'Pull request' if kind == 'pull_request' else 'Issue'} "
+                     f"{e(owner)}/{e(repo)}#{e(number)}, {e(str(item.get('state') or ''))}, "
+                     f"opened by {e((item.get('user') or {}).get('login') or '[ghost]')} on "
+                     f"{e(str(item.get('created_at') or '')[:10])}")
+        parts = [f"<html><head><title>{title}</title></head><body><article>",
+                 f"<h1>{title}</h1>", f"<p>{meta_line}</p>"]
+        if labels:
+            parts.append(f"<p>Labels: {labels}</p>")
+        parts += [item.get("body_html") or "", f"<h2>Comments ({total})</h2>"]
+        for c in comments:
+            who = e((c.get("user") or {}).get("login") or "[ghost]")
+            parts += [f"<h3>{who} {e(str(c.get('created_at') or '')[:10])}</h3>",
+                      c.get("body_html") or ""]
+    except Exception as exc:  # noqa: BLE001 - any failure must degrade to None, never raise
+        if getattr(exc, "status", None) in (403, 429) or str(exc) in ("status 403",
+                                                                      "status 429"):
+            _gh_backoff_until = time.monotonic() + _GH_COOLDOWN_S
+        return None
+    if total > len(comments):  # no silent truncation: the cap is stated in page and record
+        parts.append(f"<p>{total - len(comments)} more comments not shown (limit: "
+                     f"{_GH_MAX_COMMENT_PAGES * _GH_PER_PAGE} comments within the time "
+                     "budget).</p>")
+    parts.append("</article></body></html>")
+    structured = {"repo": f"{owner}/{repo}", "number": int(number), "kind": kind,
+                  "state": item.get("state"), "comments_total": total,
+                  "comments_shown": len(comments)}
+    if kind == "pull_request":
+        structured["scope"] = "conversation comments only; inline review comments not included"
+    return {"final_url": url, "status": 200, "html": "".join(parts), "render_path": "api",
+            "structured": structured}

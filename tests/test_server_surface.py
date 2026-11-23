@@ -154,7 +154,7 @@ async def test_research_ctx_is_not_part_of_the_schema():
     tools = {t.name: t for t in await server.mcp.list_tools()}
     assert "ctx" not in tools["research"].parameters["properties"]
     assert tools["search"].parameters["properties"]["category"]["enum"] == [
-        "general", "news", "science", "it"]
+        "general", "news", "science", "it", "videos"]
 
 
 def test_package_logger_reaches_stderr_at_info():
@@ -261,7 +261,11 @@ async def test_reach_loop_measures_both_paths_and_survives_errors(app_state, mon
         if len(sleeps) > 2:
             raise asyncio.CancelledError
 
+    async def adapters(client, only=None):
+        return {"hn": True}
+
     monkeypatch.setattr(server.reachability, "measure", measure)
+    monkeypatch.setattr(server.reachability, "measure_adapters", adapters)
     monkeypatch.setattr(server.asyncio, "sleep", sleep)
     with pytest.raises(asyncio.CancelledError):
         await server._reach_loop()
@@ -295,6 +299,54 @@ async def test_health_and_metrics_surface_the_reachability_map(app_state, monkey
         client=SimpleNamespace(host="127.0.0.1")))).body)
     assert b'argus_reach_ok{site="reuters.com",via="warp"} 0' in metrics
     assert b'argus_reach_ok{site="example.com",via="direct"} 1' in metrics
+
+
+async def test_a_failing_canary_rechecks_only_that_adapter_once(app_state, monkeypatch):
+    """A broken canary must not turn the whole daily run (every engine, every site) hourly;
+    only the failing adapters are measured again, once, an hour later."""
+    monkeypatch.setattr(server, "_ADAPTERS", None)
+    monkeypatch.setattr(server, "_ADAPTERS_PREV", None)
+    runs, sleeps, full = [], [], []
+
+    async def measure(direct, proxied=None):
+        full.append(1)
+        return _REPORT
+
+    async def engines(url, names):
+        return {}
+
+    async def adapters(client, only=None):
+        runs.append(only)
+        return {"hn": True, "npm": False} if only is None else {"npm": False}
+
+    async def sleep(s):
+        sleeps.append(s)
+        if len(sleeps) > 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.reachability, "measure", measure)
+    monkeypatch.setattr(server.reachability, "measure_engines", engines)
+    monkeypatch.setattr(server.reachability, "measure_adapters", adapters)
+    monkeypatch.setattr(server.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await server._reach_loop()
+    assert runs == [None, ["npm"]] and len(full) == 1
+    assert sleeps == [server.REACH_FIRST_S, server.REACH_RETRY_S, server.REACH_EVERY_S]
+    assert server._ADAPTERS == {"hn": True, "npm": False}
+    assert server._ADAPTERS_PREV == {"hn": True, "npm": False}  # two strikes: alert now
+
+
+async def test_health_surfaces_adapters_failing_twice(app_state, monkeypatch):
+    monkeypatch.setattr(server, "_ADAPTERS_PREV", {"hn": True, "github": False})
+    monkeypatch.setattr(server, "_ADAPTERS", {"hn": False, "github": False})
+    app_state.browser._crawler = object()
+    app_state.browser.active_contexts = 0
+    public = bytes((await server.health(SimpleNamespace(
+        client=SimpleNamespace(host="10.11.0.9")))).body)
+    assert b'"adapters_failing":["github"]' in public and b'"adapters":' not in public
+    local = bytes((await server.health(SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1")))).body)
+    assert b'"adapters":{"hn":false,"github":false}' in local
 
 
 async def test_one_failing_run_does_not_alert(app_state, monkeypatch):

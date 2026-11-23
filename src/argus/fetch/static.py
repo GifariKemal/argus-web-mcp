@@ -44,6 +44,8 @@ _BLOCK_STATUSES = {403, 429, 503}
 # thin-escalation path's business, and calling it blocked would fail a real read.
 _THIN_REASONS = ("Structural:", "Near-empty")
 _CHALLENGE_TEXT_MAX = 3000  # visible chars; challenge pages carry a few hundred at most
+_WAF_HEAD_CHARS = 4096
+_ALIYUN_WAF = re.compile(r"""<meta\s[^>]*name=["']?aliyun_waf_""", re.IGNORECASE)
 _VISIBLE_SCAN_CHARS = 200_000
 _TAG_FALLBACK = re.compile(r"<[^<>]*>")  # linear: never scans past the next '<'
 _XML_DECL = re.compile(r"^\s*<\?xml[^>]*\?>")  # lxml refuses str input that declares one
@@ -75,6 +77,11 @@ def _looks_blocked(html: str, status: int | None) -> bool:
     Cloudflare interstitial text a 200 challenge carries, on short pages only.
     """
     if status in _BLOCK_STATUSES:
+        return True
+    # Aliyun WAF (xueqiu.com, 2026-11-23): a 200 whose <head> carries aliyun_waf_* meta tags
+    # and ~100 KB of obfuscated script, which defeats the thin-page gate below. The meta
+    # names sit in the first bytes of a challenge, never in an article's opening markup.
+    if _ALIYUN_WAF.search((html or "")[:_WAF_HEAD_CHARS]):
         return True
     from crawl4ai.antibot_detector import is_blocked  # lazy: crawl4ai costs ~1 s to import
 

@@ -351,11 +351,13 @@ _REACH: dict | None = None  # last reachability.measure() report
 _REACH_PREV: dict | None = None  # the one before: alerts need two failing runs in a row
 _ENGINES: dict | None = None  # last reachability.measure_engines() counts
 _ENGINES_PREV: dict | None = None
+_ADAPTERS: dict | None = None  # last reachability.measure_adapters() canary results
+_ADAPTERS_PREV: dict | None = None
 
 
 async def _reach_loop() -> None:
     """Measure the reachability map shortly after start, then daily. Never raises."""
-    global _REACH, _REACH_PREV, _ENGINES, _ENGINES_PREV
+    global _REACH, _REACH_PREV, _ENGINES, _ENGINES_PREV, _ADAPTERS, _ADAPTERS_PREV
     await asyncio.sleep(REACH_FIRST_S)
     while True:
         s = _S
@@ -366,6 +368,17 @@ async def _reach_loop() -> None:
                 _REACH_PREV, _REACH = _REACH, await reachability.measure(s.client, proxied)
                 _ENGINES_PREV, _ENGINES = _ENGINES, await reachability.measure_engines(
                     _SEARXNG_URL, _DEFAULT_ENGINES)
+                _ADAPTERS_PREV, _ADAPTERS = _ADAPTERS, await reachability.measure_adapters(
+                    s.client)
+                broken = [a for a, good in _ADAPTERS.items() if not good]
+                if broken:
+                    logger.warning("adapter canaries failing: %s", ",".join(broken))
+                    # Confirm within the hour instead of the next day, re-measuring only the
+                    # failing adapters, once: a broken canary must not make the whole run
+                    # (every engine and site) hourly.
+                    await asyncio.sleep(REACH_RETRY_S)
+                    recheck = await reachability.measure_adapters(s.client, only=broken)
+                    _ADAPTERS_PREV, _ADAPTERS = _ADAPTERS, {**_ADAPTERS, **recheck}
                 dead = [e for e, n in _ENGINES.items() if n == 0]
                 if dead:
                     logger.warning("engines answering nothing: %s", ",".join(dead))
@@ -533,19 +546,22 @@ async def search(
         "one query, or a list of query variants fanned out and rank-fused (RRF) into one "
         "result set"))],
     count: Annotated[int, Field(description="results wanted, 1-100 (clamped)")] = 10,
-    category: Literal["general", "news", "science", "it"] = "general",
+    category: Literal["general", "news", "science", "it", "videos"] = "general",
     time_range: Literal["day", "week", "month", "year"] | None = None,
     lang: str | None = None,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
     safesearch: Literal[0, 1, 2] = 0,
 ) -> dict:
-    """Web search via self-hosted SearXNG (unlimited). Optional domain allow/deny + safesearch."""
+    """Web search via self-hosted SearXNG (unlimited). Optional domain allow/deny + safesearch.
+    category='videos' searches YouTube and other video indexes (`read` on a YouTube URL
+    then gives the transcript)."""
     s = _state()
     # Reject an out-of-enum category up front (consistent with read_pdf / extract_structured)
     # rather than silently coercing to 'general' and caching the wrong-scope result.
     if category not in _VALID_CATEGORIES:
-        return err("schema_invalid", f"unknown category {category!r} (general|news|science|it)")
+        return err("schema_invalid",
+                   f"unknown category {category!r} (general|news|science|it|videos)")
     if time_range is not None and time_range not in _VALID_TIME_RANGES:
         return err("schema_invalid", f"unknown time_range {time_range!r} (day|week|month|year)")
     # Trust-boundary clamp: count only decides when paging stops (5 pages max anyway), but
@@ -926,8 +942,10 @@ async def forexfactory_calendar(date_range: list | None = None) -> dict:
         return err(e.code, "forexfactory calendar failed", _safe_detail(e))
     except Exception as e:  # noqa: BLE001 - never raise to client
         return err("fetch_failed", "forexfactory calendar failed", _safe_detail(e))
-    # Never cache a stale-fallback bundle - it must not be re-served as fresh for 300s.
-    if isinstance(res, dict) and not res.get("stale"):
+    # Never cache a stale-fallback bundle - it must not be re-served as fresh for 300s - nor
+    # a reply the FF module already reused (`cached`): stacked, the two 300 s windows would
+    # serve a feed up to 10 min old. Only a fresh upstream fetch is cached here.
+    if isinstance(res, dict) and not res.get("stale") and not res.get("cached"):
         res["from_cache"] = False
         s.cache.put(ck, res, source="trading")
     return res
@@ -1612,12 +1630,16 @@ async def health(request):
     dead = reachability.confirmed_dead_engines(_ENGINES_PREV, _ENGINES)
     if dead:  # a configured search engine answered nothing two days running
         body["engines_dead"] = dead
+    broken = reachability.confirmed_failing_adapters(_ADAPTERS_PREV, _ADAPTERS)
+    if broken:  # an API adapter's canary failed twice in a row (upstream changed)
+        body["adapters_failing"] = broken
     if not _is_loopback(request):
         return JSONResponse(body, status_code=200 if ok else 503)
     body["version"] = __version__
     if _x_gql.enabled():  # loopback only: the account's state is nobody else's business
         body.update(_x_gql.status())
     body["reachability"] = _REACH
+    body["adapters"] = _ADAPTERS
     body["uptime_seconds"] = (
         round(time.monotonic() - _STARTUP_TIME, 1) if _STARTUP_TIME else None
     )

@@ -109,11 +109,24 @@ _MAPPERS = {
 
 
 def _build_query(query: str, mode: str, language: str | None) -> str:
-    """Compose the GitHub ``q`` string: raw query + ``language:<x>`` qualifier when apt."""
+    """Compose the GitHub ``q`` string: raw query + ``language:<x>`` qualifier when apt, and
+    ``is:public`` for repositories and issues.
+
+    Public only: a token can see its owner's private repos, and every Argus caller would
+    see them too (production 2026-11-24: 48 repos and 196 issues for a user query, of which
+    18 and 67 were public). Code search ignores ``is:public`` (0 hits, measured), so its
+    private hits are dropped after the request instead.
+    """
     q = query
     if language and mode in _LANGUAGE_MODES:
         q = f"{q} language:{language}"
+    if mode in ("repositories", "issues"):
+        q = f"{q} is:public"
     return q
+
+
+def _private(item: dict) -> bool:
+    return bool(item.get("private") or (item.get("repository") or {}).get("private"))
 
 
 async def github_search(
@@ -200,6 +213,9 @@ async def github_search(
             await client.aclose()
 
     items = data.get("items", []) or []
+    public = [it for it in items if not _private(it)]
+    total = data.get("total_count", len(public)) if len(public) == len(items) else None
+    items = public  # None above: GitHub's total also counted the private hits
     if not items:
         raise GitHubSearchError("no_results", f"no GitHub {mode} for query: {query!r}")
 
@@ -212,7 +228,7 @@ async def github_search(
     return {
         "query": query,
         "mode": mode,
-        "total_count": data.get("total_count", len(results)),
+        "total_count": total,
         "results": results,
         "count": len(results),
         "degraded": incomplete,

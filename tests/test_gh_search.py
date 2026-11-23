@@ -447,3 +447,50 @@ async def test_complete_results_not_degraded():
         out = await github_search("fastmcp", mode="repositories", client=client)
     assert out["degraded"] is False
     assert out["degraded_reason"] is None
+
+
+# --------------------------------------------------------------------------- #
+# public-only (2026-11-24: the production token could read private repos, and repository /
+# issue / code search returned private results to every Argus caller)
+# --------------------------------------------------------------------------- #
+@respx.mock
+@pytest.mark.parametrize("mode", ["repositories", "issues"])
+async def test_repository_and_issue_search_ask_for_public_only(mode):
+    item = _repo_item(1) if mode == "repositories" else {
+        "title": "t", "html_url": "https://github.com/o/r/issues/1", "number": 1,
+        "repository_url": "https://api.github.com/repos/o/r"}
+    route = respx.get(f"{GH_API}/search/{mode}").mock(
+        return_value=httpx.Response(200, json={"total_count": 1, "items": [item]}))
+    async with _client() as client:
+        await github_search("user:someone", mode=mode, client=client)
+    assert _query_of(route.calls.last.request)["q"][0].endswith(" is:public")
+
+
+@respx.mock
+async def test_code_search_drops_private_repository_hits(monkeypatch):
+    """`is:public` matches nothing in code search (measured), so private hits are dropped."""
+    monkeypatch.setenv("ARGUS_GITHUB_TOKEN", "tok")
+    hit = {"name": "a.py", "path": "a.py", "html_url": "https://github.com/o/{}/blob/main/a.py"}
+    respx.get(f"{GH_API}/search/code").mock(return_value=httpx.Response(200, json={
+        "total_count": 2460, "items": [
+            {**hit, "html_url": hit["html_url"].format("secret"),
+             "repository": {"full_name": "o/secret", "private": True}},
+            {**hit, "html_url": hit["html_url"].format("open"),
+             "repository": {"full_name": "o/open", "private": False}}]}))
+    async with _client() as client:
+        out = await github_search("import", mode="code", client=client)
+    assert [r["repo"] for r in out["results"]] == ["o/open"]
+    assert out["total_count"] is None  # GitHub's total counted the private hits too
+    assert "secret" not in str(out)
+
+
+@respx.mock
+async def test_code_search_with_only_private_hits_is_no_results(monkeypatch):
+    monkeypatch.setenv("ARGUS_GITHUB_TOKEN", "tok")
+    respx.get(f"{GH_API}/search/code").mock(return_value=httpx.Response(200, json={
+        "total_count": 1, "items": [{"name": "a", "path": "a", "html_url": "u",
+                                     "repository": {"full_name": "o/s", "private": True}}]}))
+    async with _client() as client:
+        with pytest.raises(GitHubSearchError) as ei:
+            await github_search("import", mode="code", client=client)
+    assert ei.value.code == "no_results"

@@ -16,6 +16,62 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.49] - 2026-11-24 - Agent-Reach P1 items, search rescue both ways
+
+### Security
+
+- `github_search` returned private repositories, issues and code to every Argus caller: the
+  production token is a classic PAT that can read its owner's private repos (measured: a user
+  query listed 48 repos and 196 issues, of which 18 and 67 public; code hits included private
+  repos). Repository and issue searches now carry `is:public`; code search ignores that qualifier
+  (0 hits, measured), so private hits are dropped after the request and `total_count` is `null`
+  when any were. The GitHub `read` adapter checks the repository is public before reading an
+  issue. Owner action: replace `ARGUS_GITHUB_TOKEN` with a token that has no private access.
+
+From the Agent-Reach gap audit (`docs/qa/2026-11-23-agent-reach-audit.md`), each measured from
+the primary server first.
+
+### Added
+
+- GitHub issue and pull request adapter in `read`: the REST API gives the body and the
+  conversation comments rendered by GitHub (`body_html`), where the page read as whitespace plus
+  the sidebar (astral-sh/uv#1). Comments page 100 at a time up to 500, the cap is stated in the
+  page and in `metadata.structured`; a PR's inline review comments are not included (`scope`).
+  `ARGUS_GITHUB_TOKEN` rides along when set, so redirects are not followed. Only the conversation
+  URL matches (`/files` and `/commits` read as pages), a 403/429 pauses the adapter for 5 minutes,
+  and comment pages that miss the time budget are left out and counted.
+- `search(category="videos")`: YouTube, Bing and DuckDuckGo videos, Dailymotion and SepiaSearch
+  answer from the server (measured); `google videos` (access denied) and `vimeo` (HTTP error) are
+  disabled. A weak video set is never rescued into web pages.
+- Adapter canaries: one known-good input per API adapter (YouTube, HN, Telegram, StackExchange,
+  npm, Polymarket, GitHub, FxTwitter) in the daily reachability run. Two failures in a row show
+  as `adapters_failing` in `/health` (per-adapter results on loopback under `adapters`) and turn
+  the `uptime` workflow red; failing canaries alone are re-measured once an hour later, so a
+  broken canary never makes the whole run (every engine and site) hourly. X GraphQL is not
+  probed (its state is `x_account`, and calls spend the account's budget).
+
+### Fixed
+
+- An Aliyun WAF challenge (xueqiu.com) was read and cached as content: a 200 with ~100 KB of
+  obfuscated script passed the thin-page gate. Its `aliyun_waf_*` meta tags in the first 4 KB now
+  make it `blocked_by_antibot` (not cached, browser and Wayback rungs tried); the match ignores
+  case, quote style and attribute order.
+- `search(category="it")` answered ESP-IDF questions with mdn and docker hub filler ("WebDriver",
+  "Bounce off the walls"). A low-relevance `it`/`science`/`news` set is now rerun through the
+  general fan-out (`rescued_category: "general"`), the mirror of the existing general -> category
+  rescue; a rescued `news` search keeps its recency boost.
+- `forexfactory_calendar` could serve a feed up to 10 minutes old: the server's 300 s result cache
+  also stored replies the FF module had already reused (0.4.48, up to 300 s old). Only a fresh
+  upstream fetch is cached now, so the bound is 5 minutes again, as before 0.4.48, and a reused
+  reply always carries `cached`, `age_seconds` and `fetched_at`. (The FairEconomy feed carries no
+  `actual` field, so release values were never in it.)
+
+### Removed
+
+- The Reddit thread-feed adapter: every thread's `.rss` answers 404 from the server and 403 from
+  a laptop (2026-11-24), so it only cost a request per read. Threads read through the browser
+  path with their comments.
+
 ## [0.4.48] - 2026-11-23 - X Vite build, FairEconomy rate limit
 
 ### Fixed

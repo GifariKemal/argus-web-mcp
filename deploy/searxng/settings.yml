@@ -139,6 +139,13 @@ engines:
   # index, so nothing is lost by keeping it out of the fan-out.
   - name: wikidata
     disabled: true
+  # videos category, measured 2026-11-24 from the primary server (3 queries): youtube 2/3,
+  # bing videos 3/3, duckduckgo videos 3/3, sepiasearch 3/3, dailymotion 3/3,
+  # wikicommons.videos 2/3; google videos 0/3 access denied, vimeo 0/3 HTTP error.
+  - name: google videos
+    disabled: true
+  - name: vimeo
+    disabled: true
 
   # Category engines, measured from this host on 2026-09-18 with two on-topic queries
   # each (an off-topic zero proves nothing for a narrow index). Every engine below either

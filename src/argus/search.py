@@ -23,7 +23,7 @@ from argus.security.ssrf import SSRFError, build_safe_async_client, validate_url
 
 logger = logging.getLogger("argus.search")
 
-_VALID_CATEGORIES = frozenset({"general", "news", "science", "it"})
+_VALID_CATEGORIES = frozenset({"general", "news", "science", "it", "videos"})
 _VALID_TIME_RANGES = frozenset({"day", "week", "month", "year"})  # SearXNG-accepted values
 _MAX_PAGES = 5
 # SearXNG backend. Loopback by default (systemd/VPS); overridden to the compose service
@@ -896,18 +896,22 @@ async def search(
         if degraded_reason is None:
             degraded_reason = "low_relevance"
 
-    # If the broad general pool is garbage, try one deterministic category rescue. This
+    # If the result set is garbage, try one deterministic rescue: a general pool goes to the
+    # routed category, and a category pool goes to the general fan-out (category indexes
+    # such as mdn and docker hub answer any query with filler; production 2026-11-23). This
     # only applies when the caller did not explicitly choose engines/domains; manual
     # constraints are respected exactly.
     if (
         low_relevance
-        and categories == "general"
         and engines is None
         and not include_domains
         and not exclude_domains
     ):
-        routed = classify(q)["route"]
-        if routed in {"science", "it", "news"}:
+        # videos is never rescued to web pages: a weak video set is still the right kind.
+        routed = (classify(q)["route"] if categories == "general"
+                  else "general" if categories in {"science", "it", "news"} else None)
+        if routed != categories and routed in {"science", "it", "news", "general"}:
+            to_general = routed == "general"
             rescue_params = dict(params)
             rescue_params["categories"] = routed
             rescue_params.pop("engines", None)
@@ -924,14 +928,16 @@ async def search(
                             timeout=httpx.Timeout(_TIMEOUT, connect=_CONNECT_TIMEOUT)
                         )
                     rescue_results = await _search_backend(
-                        q, count, rescue_params, backend, rescue_client, retries
+                        q, count, rescue_params, backend, rescue_client, retries,
+                        auto_engines=to_general,
                     )
                 else:
                     rescue_results = await _search_backend(
-                        q, count, rescue_params, backend, client, retries
+                        q, count, rescue_params, backend, client, retries,
+                        auto_engines=to_general,
                     )
                 rescue_ranked = (await asyncio.to_thread(
-                    rerank, q, rescue_results, recency=routed == "news" or bool(time_range),
+                    rerank, q, rescue_results, recency=recency or routed == "news",
                     semantic_rerank=_sr,
                 ))[:count]
                 if not _is_low_relevance(q, rescue_ranked):

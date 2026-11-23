@@ -37,3 +37,10 @@ jobs:
             echo "::error::a search engine is dead from this IP (see /health engines_dead)"
             exit 1
           fi
+          # An API adapter's daily canary (src/argus/reachability.py CANARIES) failed twice
+          # in a row: the upstream API changed and reads fall back to the page. Loopback
+          # /health has the per-adapter results under "adapters".
+          if echo "$body" | grep -q '"adapters_failing"'; then
+            echo "::error::an API adapter stopped working (see /health adapters_failing)"
+            exit 1
+          fi

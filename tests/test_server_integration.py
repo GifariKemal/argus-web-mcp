@@ -1280,6 +1280,22 @@ async def test_forexfactory_cached_and_stale_not_cached(app_state, monkeypatch):
     assert calls["n"] == 2  # no cache hit for stale results
 
 
+async def test_forexfactory_reused_feed_is_not_cached_again(app_state, monkeypatch):
+    """The FF module reuses a feed up to 300 s old (`cached`, `age_seconds`); caching that
+    reply for another 300 s here would serve a feed up to 10 min old. The bound stays 5 min."""
+    calls = {"n": 0}
+
+    async def reused_ff(date_range, client=None):
+        calls["n"] += 1
+        return {"events": [], "count": 0, "source": "s", "stale": False, "cached": True,
+                "age_seconds": 290, "fetched_at": "2026-11-24T00:00:00+00:00"}
+
+    monkeypatch.setattr(server, "_ff_calendar", reused_ff)
+    await server.forexfactory_calendar(date_range=["2026-02-01", "2026-02-02"])
+    await server.forexfactory_calendar(date_range=["2026-02-01", "2026-02-02"])
+    assert calls["n"] == 2
+
+
 async def test_cot_cached_and_error_code_passthrough(app_state, monkeypatch):
     calls = {"n": 0}
 

@@ -125,3 +125,47 @@ async def test_measure_engines_counts_only_attributed_results():
 def test_confirmed_dead_engines_needs_two_runs():
     assert confirmed_dead_engines(None, {"bing": 0}) == []
     assert confirmed_dead_engines({"bing": 3, "brave": 0}, {"bing": 0, "brave": 0}) == ["brave"]
+
+
+# --- adapter canaries ------------------------------------------------------------------
+
+async def test_measure_adapters_runs_each_canary_through_its_adapter(monkeypatch):
+    """An adapter that breaks upstream returns None and the read silently falls back to the
+    page (Reddit's feed 404s and X's new web build both went unseen for days in 2026-11)."""
+    from argus.fetch import adapters
+    from argus.x import fxtwitter
+
+    monkeypatch.setattr(reachability, "CANARIES", {
+        "hn": "https://news.ycombinator.com/item?id=1", "npm": "https://www.npmjs.com/package/x",
+        "github": "https://github.com/o/r/issues/1", "fxtwitter": "https://x.com/a/status/1"})
+    seen = []
+
+    def adapter(result):
+        async def f(url, *, client, timeout):
+            seen.append(url)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return f
+
+    monkeypatch.setattr(adapters, "fetch_hn", adapter({"html": "ok"}))
+    monkeypatch.setattr(adapters, "fetch_npm", adapter(None))
+    monkeypatch.setattr(adapters, "fetch_github", adapter(RuntimeError("boom")))
+    monkeypatch.setattr(fxtwitter, "fetch_x", adapter({"html": "ok"}))
+    out = await reachability.measure_adapters(object())
+    assert out == {"hn": True, "npm": False, "github": False, "fxtwitter": True}
+    assert len(seen) == 4
+    seen.clear()
+    assert await reachability.measure_adapters(object(), only=["npm"]) == {"npm": False}
+    assert seen == ["https://www.npmjs.com/package/x"]
+
+
+def test_every_canary_has_an_adapter():
+    for name in reachability.CANARIES:
+        assert callable(reachability._adapter(name))
+
+
+def test_confirmed_failing_adapters_needs_two_runs():
+    f = reachability.confirmed_failing_adapters
+    assert f(None, {"hn": False}) == []
+    assert f({"hn": True, "npm": False}, {"hn": False, "npm": False}) == ["npm"]

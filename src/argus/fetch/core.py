@@ -17,17 +17,17 @@ from ..security.ssrf import SSRFError
 from ..x import graphql as x_graphql
 from ..x.fxtwitter import FX_TIMEOUT_S, fetch_x, x_target
 from .adapters import (
+    fetch_github,
     fetch_hn,
     fetch_npm,
     fetch_polymarket,
-    fetch_reddit,
     fetch_stackexchange,
     fetch_telegram,
     fetch_youtube,
+    github_target,
     hn_target,
     npm_target,
     polymarket_target,
-    reddit_target,
     stackexchange_target,
     telegram_target,
     youtube_target,
@@ -163,14 +163,17 @@ async def _do_fetch(
             record_stage("fetch.x_api_ok")
             return api
         record_stage("fetch.x_api_fail")
-    # Reddit threads answer with a JS shell that loses the comments; the feed has them. HN
+    # Reddit has no adapter: its thread feeds answer 404 for every thread since 2026-11 and
+    # the browser path reads the thread with its comments. HN
     # item pages lose the thread nesting, Polymarket is a JS app and a
     # YouTube watch page has no transcript; all of them have open APIs. A Telegram channel
-    # page runs its posts together; the preview markup splits them.
-    for target, adapter in ((reddit_target, fetch_reddit), (hn_target, fetch_hn),
+    # page runs its posts together; the preview markup splits them. A GitHub issue/PR page
+    # loses its body and comments; the REST API has both.
+    for target, adapter in ((hn_target, fetch_hn),
                             (polymarket_target, fetch_polymarket),
                             (youtube_target, fetch_youtube),
-                            (telegram_target, fetch_telegram)):
+                            (telegram_target, fetch_telegram),
+                            (github_target, fetch_github)):
         if target(url):
             api = await adapter(url, client=client, timeout=min(timeout, 15))
             if api is not None:

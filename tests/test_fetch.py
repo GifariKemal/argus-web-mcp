@@ -1155,6 +1155,23 @@ def test_cloudflare_performing_security_verification_page_is_a_wall():
     assert _looks_blocked(page.replace("Just a moment...", "Verifying"), 200)
 
 
+def test_aliyun_waf_challenge_is_a_wall_even_with_a_big_obfuscated_body():
+    """xueqiu.com from the primary server, 2026-11-23: 200, 110 KB, 34k "visible" chars of
+    obfuscated challenge script, read and cached as content with extraction_quality 0.9."""
+    from argus.fetch.static import _looks_blocked
+
+    page = ('<textarea id="renderData" style="display:none">{"_waf_bd8ce2ce37":"lt8E"}'
+            '</textarea><!doctype html><html><head><meta charset="utf-8">'
+            '<meta name="aliyun_waf_aa" content="371ac51a"><meta name="aliyun_waf_oo" '
+            'content="var _0x2576"></head><body>' + "_0x2576 " * 5000 + "</body></html>")
+    assert _looks_blocked(page, 200)
+    variant = page.replace('<meta name="aliyun_waf_aa"', "<META content='x' NAME='aliyun_waf_aa'")
+    assert _looks_blocked(variant.replace('name="aliyun_waf_oo"', "name='x'"), 200)
+    article = ("<html><head><title>Beating WAFs</title></head><body>"
+               + "Aliyun WAF pages carry a meta named aliyun_waf_aa. " * 200 + "</body></html>")
+    assert not _looks_blocked(article, 200)  # an article about it, past the head, is content
+
+
 async def test_caller_headers_override_defaults_whatever_their_case(monkeypatch):
     """`User-Agent` from a caller used to ride along with the default `user-agent` instead
     of replacing it (a case-sensitive dict merge), so APIs saw Argus's own UA."""
