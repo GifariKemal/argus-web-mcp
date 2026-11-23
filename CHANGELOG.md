@@ -68,6 +68,10 @@ the primary server first.
 
 ### Removed
 
+- `brave` left production `ARGUS_SEARCH_ENGINES` (now `bing,google cse,yandex`): 0/5 queries
+  through WARP ("Suspended: too many requests") and 429 direct, measured after the 0.4.49 deploy,
+  where the daily probe already counted it dead once. Put it back when `check_engines.py` shows
+  it answering again.
 - The Reddit thread-feed adapter: every thread's `.rss` answers 404 from the server and 403 from
   a laptop (2026-11-24), so it only cost a request per read. Threads read through the browser
   path with their comments.
