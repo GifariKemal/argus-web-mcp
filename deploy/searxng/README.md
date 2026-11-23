@@ -98,7 +98,7 @@ Measured from this VPS on 2026-09-18:
 | Category | Answering | Disabled, and why |
 |---|---|---|
 | `general` | `bing`, `brave`, `google`, `google cse`, `duckduckgo web`, `yandex` | `mojeek`, `duckduckgo`, `qwant` (IP-blocked, pointed at the dormant `proxied` network); `startpage`, `marginalia` (not shipped upstream); `wikidata` (times out) |
-| `news` | `brave.news`, `duckduckgo news`, `google news`, `bing news`, `wikinews` | `reuters` (HTTP error) |
+| `news` | `brave.news`, `duckduckgo news`, `bing news`, `wikinews` | `reuters` (HTTP error), `google news` (access denied, 2026-11-23) |
 | `science` | `arxiv`, `europepmc`, `semantic scholar`, `pdbe` | `google scholar` (access denied, on the `proxied` network), `pubmed` (engine crashes), `openairepublications`, `openairedatasets` (5 s timeout each) |
 | `it` | `github`, `stackoverflow`, `docker hub`, `mdn`, `askubuntu`, `superuser`, `hoogle`, `mankier` | `gentoo` (connection error), `pypi`, `arch linux wiki` (silently empty) |
 

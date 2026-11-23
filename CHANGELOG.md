@@ -36,6 +36,15 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
   1..3600 s, default 300) has passed; a last good feed up to 6 h old is still served flagged
   `stale`.
 
+### Changed
+
+- Search engines re-measured from the primary server: `duckduckgo web` 0/3 since 2026-11-21
+  (DDG answers HTTP 202 to SearXNG's first-page request without a User-Agent, searxng#6977,
+  fixed upstream 2026-11-23), `google` and `google news` 0/3 access denied. All three are
+  disabled in `deploy/searxng/settings.yml` and `duckduckgo web` left `ARGUS_SEARCH_ENGINES`
+  (production env, now `bing,brave,google cse,yandex`), which also clears the failing `uptime`
+  workflow (`engines_dead`). Re-enable `duckduckgo web` around 2026-12-07.
+
 ## [0.4.47] - 2026-11-16 - dnspython and soupsieve security pins
 
 ### Security

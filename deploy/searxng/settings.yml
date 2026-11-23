@@ -115,10 +115,18 @@ engines:
   # and brave, which matters because a three-engine fan-out has no slack when one
   # throttles. Note `duckduckgo web` answers while plain `duckduckgo` is CAPTCHA-blocked,
   # the same split as `duckduckgo news`.
+  # 2026-11-23 re-measured from the primary server (scripts/check_engines.py, 3 queries):
+  # google and google news 0/3 "access denied" (google has answered /sorry since 0.4.18),
+  # duckduckgo web 0/3 since 2026-11-21: DDG answers HTTP 202 to the engine's first-page
+  # request, which goes out without a User-Agent (searxng/searxng#6977, fixed upstream
+  # 2026-11-23). Re-enable duckduckgo web once an upstream image with that fix is about two
+  # weeks old (around 2026-12-07) and put it back in ARGUS_SEARCH_ENGINES.
   - name: google
-    disabled: false
+    disabled: true
+  - name: google news
+    disabled: true
   - name: duckduckgo web
-    disabled: false
+    disabled: true
   - name: yandex
     disabled: false
   # Also measured usable and deliberately left off: zapmeta (9/query), resulthunter (20),
