@@ -35,7 +35,7 @@ from .. import config
 from ..fetch.static import FetchError, fetch_static
 from ..models import record_stage
 from .fxtwitter import post_block, x_target
-from .xclid import INDICES_FILE_RE, XClIdError, XClIdGen, get_scripts_list
+from .xclid import INDICES_FILE_RE, INDICES_REGEX, XClIdError, XClIdGen, get_scripts_list
 
 # Pinned fallbacks; the live manifest from main.js wins (on 2026-10-30 the pinned
 # SearchTimeline id was already stale).
@@ -95,7 +95,7 @@ BOOT_TTL_S = 6 * 3600
 _REQ_TIMEOUT_S = 20
 _MAX_PAGES = 3  # 20 posts per page; limit is at most 50
 _BUNDLE_CONCURRENCY = 8
-_MAX_BUNDLES = 300
+_MAX_BUNDLES = 1500  # the Vite build had ~1250 chunks on 2026-11-23
 
 # X error code -> (Argus code, cooldown seconds). 88 rate limit; 32/89/215/353 bad or
 # stale cookies; 64/141/326 locked or suspended account.
@@ -335,10 +335,37 @@ def query_id_for(bundle: str, op: str) -> str | None:
     marker = f'",operationName:"{op}"'
     i = bundle.find(marker)
     if i < 0:
+        # The Relay build's params:{id,name} ids are other documents: with these variables
+        # X answers 422 (live 2026-11-23), so they are not read; the pinned ids still work.
         return None
     j = bundle.rfind('queryId:"', max(0, i - 80), i)
     qid = bundle[j + 9:i] if j >= 0 else ""
     return qid if re.fullmatch(r"[\w-]{10,40}", qid) else None
+
+
+# Chunk references inside a Vite bundle: `assets/x.js` (relative to the entry's folder,
+# also when written inside a chunk) and `./x.js` (relative to the chunk itself).
+_CHUNK_REF_RE = re.compile(r"[\"'`]((?:\.{1,2}/|assets/)[\w./-]+?\.js)[\"'`]")
+
+
+def chunk_refs(body: str, url: str, base: str) -> list[str]:
+    return [urljoin(base if r.startswith("assets/") else url, r)
+            for r in _CHUNK_REF_RE.findall(body)]
+
+
+_SIGNER_WINDOW = 2000
+
+
+def is_signer(body: str) -> bool:
+    """The signing script by content: its name is a bare hash since 2026-11. The live one
+    holds 4 obfuscated ``N[..](e[41],16)`` calls within a few hundred chars; hex parsers
+    (``parseInt(m[1],16)``) and stray matches spread over a big bundle do not count.
+    ponytail: heuristic, switch to a structural match if a bundle ever trips it."""
+    if ",16)" not in body:
+        return False
+    starts = [m.start() for m in INDICES_REGEX.finditer(body)
+              if not body.endswith("parseInt", 0, m.start())]
+    return any(starts[i + 3] - starts[i] <= _SIGNER_WINDOW for i in range(len(starts) - 3))
 
 
 async def _bootstrap(client) -> dict:
@@ -350,49 +377,72 @@ async def _bootstrap(client) -> dict:
         every = get_scripts_list(page)
     except XClIdError as e:
         raise _classify_page(e) from e
-    # The logged-in build lists ~900 chunks (measured 2026-10-30): the signing script is
-    # matched by URL over all of them; bodies are fetched main.js first, so the scan
-    # usually stops after the first concurrent batch.
+    # The legacy build lists ~900 chunks in the page (2026-10-30); the Vite/Relay build
+    # (2026-11-23) links only entry-client and hangs ~1250 chunks off __vite__mapDeps, so
+    # chunks are followed wave by wave. main.js / entry first; the sweep stops once the
+    # core is found plus _EXTRA_BUNDLES more, or once every op is found too. Core = the
+    # signing script, and in the legacy build also SearchTimeline and TweetDetail (its
+    # pinned SearchTimeline id was stale once); the Vite build carries no usable ids.
     qids: dict = {}
     feats: dict = {}
-    found: dict = {"indices": next((s for s in every if INDICES_FILE_RE.search(s)), None)}
+    found: dict = {"indices": next((s for s in every if INDICES_FILE_RE.search(s)), None),
+                   "js": None}
 
-    scanned = {"after_core": 0}
+    scanned = {"after_core": 0, "total": 0}
+    base = every[0]
+    core_ops = () if "/x-web/" in base else ("SearchTimeline", "TweetDetail")
+
+    def core_found() -> bool:
+        return bool(found["indices"]) and all(op in qids and op in feats for op in core_ops)
 
     def done() -> bool:
-        if not found["indices"] or not all(
-                op in qids and op in feats for op in ("SearchTimeline", "TweetDetail")):
-            return False
-        return (all(op in qids and op in feats for op in OPS)
-                or scanned["after_core"] >= _EXTRA_BUNDLES)
+        return core_found() and (all(op in qids and op in feats for op in OPS)
+                                 or scanned["after_core"] >= _EXTRA_BUNDLES)
 
-    scripts = sorted(every, key=lambda u: "/main." not in u)[:_MAX_BUNDLES]
     sem = asyncio.Semaphore(_BUNDLE_CONCURRENCY)
 
-    async def scan(url: str) -> None:
+    async def scan(url: str) -> list[str]:
+        """Scan one chunk; returns the chunks it references (the body is dropped here so
+        a wave of ~1250 chunks is never held in memory at once)."""
         async with sem:
-            if done():
-                return
-            if found["indices"] and "SearchTimeline" in qids and "TweetDetail" in qids:
+            if done() or scanned["total"] >= _MAX_BUNDLES:
+                return []
+            scanned["total"] += 1
+            if core_found():
                 scanned["after_core"] += 1
             try:
                 body = (await fetch_static(url, client=client, timeout=_REQ_TIMEOUT_S))["html"]
             except Exception:  # noqa: BLE001 - one missing chunk is not fatal
-                return
+                return []
         for op in OPS:
             if op not in qids and (q := query_id_for(body, op)):
                 qids[op] = q
             if op not in feats and (f := features_for(body, op)):
                 feats[op] = f
-        if not found["indices"] and (ref := indices_ref(body)):
-            found["indices"] = urljoin(url, ref)
+        if not found["indices"]:
+            if ref := indices_ref(body):
+                found["indices"] = urljoin(url, ref)
+            elif is_signer(body):
+                found["indices"], found["js"] = url, body
+        return [] if done() else chunk_refs(body, url, base)
 
-    await asyncio.gather(*(scan(u) for u in scripts))
+    seen = set(every)
+    wave = sorted(every, key=lambda u: "/main." not in u)
+    while wave and not done() and scanned["total"] < _MAX_BUNDLES:
+        nxt = []
+        for refs in await asyncio.gather(*(scan(u) for u in wave)):
+            for ref in refs:
+                if ref not in seen:
+                    seen.add(ref)
+                    nxt.append(ref)
+        wave = nxt
+    if scanned["total"] >= _MAX_BUNDLES:
+        record_stage("x.bundle_cap")  # the sweep hit _MAX_BUNDLES: X's build grew
     if not found["indices"]:
         raise XError("x_schema_changed", "X signing script not found")
     try:
-        indices_js = (await fetch_static(found["indices"], client=client,
-                                         timeout=_REQ_TIMEOUT_S))["html"]
+        indices_js = found["js"] or (await fetch_static(found["indices"], client=client,
+                                                        timeout=_REQ_TIMEOUT_S))["html"]
         gen = XClIdGen.from_page(page, indices_js)
     except (XClIdError, FetchError) as e:
         raise XError("x_schema_changed", f"transaction id: {type(e).__name__}") from e

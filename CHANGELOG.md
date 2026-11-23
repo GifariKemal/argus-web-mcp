@@ -16,6 +16,26 @@ All notable changes, in [Keep a Changelog](https://keepachangelog.com/) style. D
 
 ## [Unreleased]
 
+## [0.4.48] - 2026-11-23 - X Vite build, FairEconomy rate limit
+
+### Fixed
+
+- `x_search` and `read` on x.com ran on the index fallback (`x_schema_changed`) since X shipped a
+  Vite/Relay web build: the page links only `entry-client-*.js`, about 1250 chunks hang off
+  `__vite__mapDeps` (`assets/<hash>.js`) and the signing script has a hashed name. The bootstrap now
+  follows chunk references wave by wave (cap 1500, `x.bundle_cap` stage when hit; it stops 30 chunks
+  after the signing script, and on the legacy build only once SearchTimeline and TweetDetail are
+  found too) and recognises the signing script by four obfuscated `(x[N],16)` indices within 2000
+  chars (hex parsers such as `parseInt(m[1],16)` do not count). The build's Relay query ids are other
+  documents (HTTP 422 with Argus's variables, measured live), so the pinned ids stay in use; live
+  search, thread and profile verified from the primary server (bootstrap about 12 s).
+- `forexfactory_calendar` failed with `ff_fetch_failed`: FairEconomy answers 429 to the primary
+  server's IP, which other services on the host share. A success younger than 5 minutes is reused
+  (marked `cached` with `age_seconds` and `fetched_at`, one upstream fetch at a time), a 429 is not
+  retried and upstream is left alone until `Retry-After` (clamped
+  1..3600 s, default 300) has passed; a last good feed up to 6 h old is still served flagged
+  `stale`.
+
 ## [0.4.47] - 2026-11-16 - dnspython and soupsieve security pins
 
 ### Security

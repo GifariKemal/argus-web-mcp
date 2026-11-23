@@ -425,6 +425,88 @@ async def test_bootstrap_finds_signing_script_past_the_bundle_cap(monkeypatch):
     assert len(fetched) < 50  # stopped scanning once everything was found
 
 
+def test_relay_query_ids_are_not_taken():
+    """2026-11 X web build: its Relay ids are other documents (HTTP 422 with the variables
+    Argus sends, live 2026-11-23), so the pinned ids must win over them."""
+    relay = ('params:{id:`jDx_tQv5xsIMaPMG_2Tb6A`,metadata:{},name:`TweetDetail`,'
+             'operationKind:`query`,text:null}')
+    assert graphql.query_id_for(relay, "TweetDetail") is None
+
+
+def test_signer_by_content_ignores_hex_parsers():
+    signer = "N[a](e[41],16),N[b](e[14],16),N[c](e[28],16),N[d](e[37],16)"
+    color = ("function p(m){return{r:parseInt(m[1],16),g:parseInt(m[2],16),"
+             "b:parseInt(m[3],16),a:parseInt(m[4],16)/255}}")
+    spread = ";".join(f"N[x](e[{i}],16)" + "x" * 3000 for i in (41, 14, 28, 37))
+    assert graphql.is_signer(signer)
+    assert not graphql.is_signer(color)
+    assert not graphql.is_signer(spread)  # four stray matches across a big bundle
+
+
+async def test_legacy_sweep_keeps_going_until_core_ops_are_found(monkeypatch):
+    """Legacy build: the signing script is known from the URL list up front; the extra
+    budget must not start before SearchTimeline and TweetDetail are found."""
+    chunks = "".join(f'{i}:"chunk{i}",' for i in range(80)) + '80:"ondemand.s",'
+    hashes = "".join(f'{i}:"{i:016x}",' for i in range(81))
+    page = ('<script src="https://abs.twimg.com/responsive-web/client-web/main.abc1234a.js">'
+            f"</script><script>{{{chunks}}}{{{hashes}}}</script>")
+
+    async def fake_page(url, client):
+        return page
+
+    async def fake_fetch(url, *, client, timeout=30, **kw):
+        body = ALL_OPS if "chunk70." in url else "(a[1], 16)" if "ondemand" in url else "x"
+        return {"final_url": url, "status": 200, "html": body, "render_path": "static"}
+
+    monkeypatch.setattr(graphql, "_page", fake_page)
+    monkeypatch.setattr(graphql, "fetch_static", fake_fetch)
+    monkeypatch.setattr(graphql.XClIdGen, "from_page",
+                        classmethod(lambda cls, p, js: cls([1] * 48, "k")))
+    boot = await graphql._bootstrap(None)
+    assert boot["ops"]["SearchTimeline"][0] == "AbCdEfGhIjKlMnOpQrStUv"
+
+
+async def test_bootstrap_follows_vite_chunks_and_finds_signer_by_content(monkeypatch):
+    """Live 2026-11-23: the page links only entry-client; chunks hang off __vite__mapDeps
+    (``assets/`` paths resolve against the entry's folder, also inside a chunk) and the
+    signing script has a hashed name, so it is recognised by its indices."""
+    base = "https://abs.twimg.com/x-web/x-web/"
+    page = f'<script src="{base}entry-client-AbC12.js"></script>'
+    signer = "N[a](e[41],16),N[b](e[14],16),N[c](e[28],16),N[d](e[37],16)"
+    bodies = {
+        f"{base}entry-client-AbC12.js": ('const __vite__mapDeps=(m.f=["assets/A1.js",'
+                                         '"assets/B2.js"])'),
+        f"{base}assets/A1.js": ('d=["assets/C3.js"];params:{id:`TwEeTdEtAiLqUeRyId1234`,'
+                                'metadata:{},name:`TweetDetail`,operationKind:`query`}'),
+        f"{base}assets/B2.js": ("{id:`UsErByScReEnNaMeId1234`,name:`UserByScreenName`};"
+                                "parseInt(t[1],16)"),
+        f"{base}assets/C3.js": signer + ";import(`./D4.js`)",
+        f"{base}assets/D4.js": ('params:{id:`UsErTwEeTsQuErYiD12345`,metadata:{},'
+                                'name:`UserTweets`,operationKind:`query`}'),
+    }
+    fetched, seen_js = [], []
+
+    async def fake_page(url, client):
+        return page
+
+    async def fake_fetch(url, *, client, timeout=30, **kw):
+        fetched.append(url)
+        return {"final_url": url, "status": 200, "html": bodies.get(url, ""),
+                "render_path": "static"}
+
+    def fake_from_page(cls, p, js):
+        seen_js.append(js)
+        return cls([1] * 48, "k")
+
+    monkeypatch.setattr(graphql, "_page", fake_page)
+    monkeypatch.setattr(graphql, "fetch_static", fake_fetch)
+    monkeypatch.setattr(graphql.XClIdGen, "from_page", classmethod(fake_from_page))
+    boot = await graphql._bootstrap(None)
+    assert {op: v[0] for op, v in boot["ops"].items()} == graphql._FALLBACK_QIDS
+    assert seen_js == [bodies[f"{base}assets/C3.js"]]
+    assert sorted(fetched) == sorted(bodies)  # each chunk once, signer not refetched
+
+
 def test_post_text_is_unescaped():
     t = {"rest_id": "1", "legacy": {"full_text": "HRV &amp; cycling &lt;3",
                                     "created_at": "Wed Oct 10 20:19:24 +0000 2018"}}

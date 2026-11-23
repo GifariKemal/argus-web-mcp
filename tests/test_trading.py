@@ -8,6 +8,7 @@ live network.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -29,8 +30,10 @@ def _reset_ff_last_good():
     forexfactory tests are order-independent (a prior success must not leak stale
     data into a later failure test)."""
     forexfactory._last_good = None
+    forexfactory._blocked_until = 0.0
     yield
     forexfactory._last_good = None
+    forexfactory._blocked_until = 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -175,7 +178,8 @@ async def test_forexfactory_fresh_marks_stale_false():
 
 async def test_forexfactory_serves_stale_flagged_on_failure():
     # A recent last-good IS served when the live fetch fails - but FLAGGED, never silent.
-    forexfactory._last_good = {"events": FF_GOLDEN, "ts": time.time() - 120}
+    forexfactory._last_good = {"events": FF_GOLDEN,
+                               "ts": time.time() - forexfactory._FRESH_TTL - 120}
     async with _mock_client(b"err", status=503) as client:
         out = await forexfactory.forexfactory_calendar(client=client)
     assert out["stale"] is True
@@ -210,6 +214,77 @@ async def test_forexfactory_retries_then_succeeds():
     assert calls["n"] == 2
     assert out["stale"] is False
     assert out["count"] == 12
+
+
+def _counting_client(status: int, content: bytes, headers: dict | None = None):
+    calls = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(status, content=content, headers=headers)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), calls
+
+
+async def test_forexfactory_recent_success_is_reused_without_refetch():
+    # Live 2026-11-23: FairEconomy 429s a shared IP; one fetch per few minutes is plenty.
+    client, calls = _counting_client(200, FF_FIXTURE.read_bytes())
+    async with client:
+        first = await forexfactory.forexfactory_calendar(client=client)
+        second = await forexfactory.forexfactory_calendar(
+            date_range=("2026-06-22", "2026-06-22"), client=client)
+    assert calls["n"] == 1
+    assert first["stale"] is False and second["stale"] is False
+    assert second["count"] == 9  # the filter still applies to the reused feed
+    # a reused feed says so and how old it is (an `actual` may have printed since)
+    assert "cached" not in first
+    assert second["cached"] is True and 0 <= second["age_seconds"] <= 5
+    assert "fetched_at" in second
+
+
+async def test_forexfactory_concurrent_calls_fetch_once():
+    gate = asyncio.Event()
+    calls = {"n": 0}
+    body = FF_FIXTURE.read_bytes()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        await gate.wait()
+        return httpx.Response(200, content=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        tasks = [asyncio.create_task(forexfactory.forexfactory_calendar(client=client))
+                 for _ in range(5)]
+        await asyncio.sleep(0.05)
+        gate.set()
+        outs = await asyncio.gather(*tasks)
+    assert calls["n"] == 1
+    assert all(o["count"] == 12 for o in outs)
+
+
+async def test_forexfactory_429_honors_retry_after_and_does_not_retry():
+    client, calls = _counting_client(429, b"slow down", {"retry-after": "262"})
+    async with client:
+        with pytest.raises(forexfactory.ForexFactoryError) as ei:
+            await forexfactory.forexfactory_calendar(client=client)
+        assert calls["n"] == 1  # a 429 is not retried
+        with pytest.raises(forexfactory.ForexFactoryError) as again:
+            await forexfactory.forexfactory_calendar(client=client)
+    assert calls["n"] == 1  # inside Retry-After: upstream not touched
+    assert ei.value.code == again.value.code == "ff_fetch_failed"
+    assert "retry in" in str(again.value)
+    assert 250 < forexfactory._blocked_until - time.time() <= 262
+
+
+async def test_forexfactory_429_serves_recent_last_good_flagged():
+    forexfactory._last_good = {"events": FF_GOLDEN,
+                               "ts": time.time() - forexfactory._FRESH_TTL - 60}
+    client, calls = _counting_client(429, b"", {"retry-after": "not-a-number"})
+    async with client:
+        out = await forexfactory.forexfactory_calendar(client=client)
+        out2 = await forexfactory.forexfactory_calendar(client=client)
+    assert calls["n"] == 1
+    assert out["stale"] is True and out2["stale"] is True and out["count"] == 12
 
 
 # --------------------------------------------------------------------------- #
